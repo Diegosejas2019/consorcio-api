@@ -1,0 +1,102 @@
+const Notice          = require('../models/Notice');
+const User            = require('../models/User');
+const firebaseService = require('../services/firebaseService');
+const logger          = require('../config/logger');
+
+// ── GET /api/notices ──────────────────────────────────────────
+exports.getNotices = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20, tag } = req.query;
+    const filter = tag ? { tag } : {};
+
+    const [notices, total] = await Promise.all([
+      Notice.find(filter)
+        .populate('author', 'name')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(Number(limit))
+        .select('-__v'),
+      Notice.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: { notices },
+      pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/notices/:id ──────────────────────────────────────
+exports.getNotice = async (req, res, next) => {
+  try {
+    const notice = await Notice.findById(req.params.id).populate('author', 'name');
+    if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
+    res.json({ success: true, data: { notice } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/notices — crear aviso (admin) ───────────────────
+exports.createNotice = async (req, res, next) => {
+  try {
+    const { title, body, tag, sendPush = true } = req.body;
+
+    const notice = await Notice.create({ title, body, tag, author: req.user._id });
+
+    // Enviar push notification a todos los propietarios activos
+    if (sendPush) {
+      const owners = await User.find({ role: 'owner', isActive: true }).select('+fcmToken');
+      const tokens = owners.map(o => o.fcmToken).filter(Boolean);
+
+      if (tokens.length > 0) {
+        try {
+          await firebaseService.sendMulticast(tokens, {
+            title: `📢 ${title}`,
+            body:  body.slice(0, 100) + (body.length > 100 ? '...' : ''),
+            data:  { type: 'new_notice', noticeId: notice._id.toString() },
+          });
+          await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: new Date() });
+          logger.info(`Push enviado a ${tokens.length} propietarios para aviso: ${notice._id}`);
+        } catch (pushErr) {
+          logger.warn(`Error enviando push para aviso ${notice._id}: ${pushErr.message}`);
+        }
+      }
+    }
+
+    await notice.populate('author', 'name');
+    logger.info(`Aviso creado: "${notice.title}" por ${req.user.name}`);
+    res.status(201).json({ success: true, data: { notice } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/notices/:id — editar aviso (admin) ─────────────
+exports.updateNotice = async (req, res, next) => {
+  try {
+    const { title, body, tag } = req.body;
+    const notice = await Notice.findByIdAndUpdate(
+      req.params.id, { title, body, tag }, { new: true, runValidators: true }
+    ).populate('author', 'name');
+
+    if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
+    res.json({ success: true, data: { notice } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── DELETE /api/notices/:id — eliminar aviso (admin) ──────────
+exports.deleteNotice = async (req, res, next) => {
+  try {
+    const notice = await Notice.findByIdAndDelete(req.params.id);
+    if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
+    res.json({ success: true, message: 'Aviso eliminado.' });
+  } catch (err) {
+    next(err);
+  }
+};
