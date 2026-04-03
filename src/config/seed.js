@@ -33,12 +33,12 @@ const seed = async () => {
     });
 
     // ── Propietarios ─────────────────────────────────────────
-    const owners = await User.insertMany([
-      { name: 'María García',    email: 'maria@mail.com',  password: 'Prop2025!', role: 'owner', unit: 'Lote 12', phone: '1122334455', balance: -15000, isDebtor: true  },
-      { name: 'Carlos López',    email: 'carlos@mail.com', password: 'Prop2025!', role: 'owner', unit: 'Lote 07', phone: '1133445566', balance: 0,      isDebtor: false },
-      { name: 'Ana Rodríguez',   email: 'ana@mail.com',    password: 'Prop2025!', role: 'owner', unit: 'Lote 23', phone: '1144556677', balance: 0,      isDebtor: false },
-      { name: 'Diego Martínez',  email: 'diego@mail.com',  password: 'Prop2025!', role: 'owner', unit: 'Lote 05', phone: '1155667788', balance: -28500, isDebtor: true  },
-      { name: 'Laura Fernández', email: 'laura@mail.com',  password: 'Prop2025!', role: 'owner', unit: 'Lote 18', phone: '1166778899', balance: 0,      isDebtor: false },
+    const owners = await Promise.all([
+      User.create({ name: 'María García',    email: 'maria@mail.com',  password: 'Prop2025!', role: 'owner', unit: 'Lote 12', phone: '1122334455', balance: -15000, isDebtor: true  }),
+      User.create({ name: 'Carlos López',    email: 'carlos@mail.com', password: 'Prop2025!', role: 'owner', unit: 'Lote 07', phone: '1133445566', balance: 0,      isDebtor: false }),
+      User.create({ name: 'Ana Rodríguez',   email: 'ana@mail.com',    password: 'Prop2025!', role: 'owner', unit: 'Lote 23', phone: '1144556677', balance: 0,      isDebtor: false }),
+      User.create({ name: 'Diego Martínez',  email: 'diego@mail.com',  password: 'Prop2025!', role: 'owner', unit: 'Lote 05', phone: '1155667788', balance: -28500, isDebtor: true  }),
+      User.create({ name: 'Laura Fernández', email: 'laura@mail.com',  password: 'Prop2025!', role: 'owner', unit: 'Lote 18', phone: '1166778899', balance: 0,      isDebtor: false }),
     ]);
 
     // ── Pagos ─────────────────────────────────────────────────
