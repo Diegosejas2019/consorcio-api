@@ -13,13 +13,7 @@ exports.login = async (req, res, next) => {
 
     // Buscar usuario con password (normalmente excluido)
     const user = await User.findOne({ email: email.toLowerCase() }).select('+password +fcmToken');
-    if (!user) {
-      logger.warn(`Login fallido: usuario no encontrado para email=${email}`);
-      return res.status(401).json({ success: false, message: 'Credenciales incorrectas.' });
-    }
-    const passwordMatch = await user.comparePassword(password);
-    logger.info(`Login intento: email=${email}, userFound=true, passwordMatch=${passwordMatch}`);
-    if (!passwordMatch) {
+    if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ success: false, message: 'Credenciales incorrectas.' });
     }
 
