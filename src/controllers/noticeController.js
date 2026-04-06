@@ -53,13 +53,17 @@ exports.createNotice = async (req, res, next) => {
       const tokens = owners.map(o => o.fcmToken).filter(Boolean);
 
       if (tokens.length > 0) {
+        const tagEmoji = { info: '📢', warning: '⚠️', urgent: '🚨' };
         try {
-          await firebaseService.sendMulticast(tokens, {
-            title: `📢 ${title}`,
+          const results = await firebaseService.sendMulticast(tokens, {
+            title: `${tagEmoji[tag] ?? '📢'} ${title}`,
             body:  body.slice(0, 100) + (body.length > 100 ? '...' : ''),
-            data:  { type: 'new_notice', noticeId: notice._id.toString() },
+            data:  { type: 'new_notice', noticeId: notice._id.toString(), tag },
           });
-          await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: new Date() });
+          const anySuccess = results?.some(r => r.successCount > 0);
+          if (anySuccess) {
+            await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: new Date() });
+          }
           logger.info(`Push enviado a ${tokens.length} propietarios para aviso: ${notice._id}`);
         } catch (pushErr) {
           logger.warn(`Error enviando push para aviso ${notice._id}: ${pushErr.message}`);
