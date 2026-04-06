@@ -23,8 +23,8 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Cuenta desactivada. Contactá al administrador.' });
     }
 
-    // Guardar FCM token si se proveyó y no hay uno almacenado
-    if (fcmToken && !user.fcmToken) {
+    // Guardar FCM token si se proveyó (para push notifications)
+    if (fcmToken && fcmToken !== user.fcmToken) {
       await User.findByIdAndUpdate(user._id, { fcmToken, lastLogin: new Date() });
     } else {
       await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
