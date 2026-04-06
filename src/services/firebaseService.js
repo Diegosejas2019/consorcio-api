@@ -8,23 +8,32 @@ let firebaseInitialized = false;
 const initFirebase = () => {
   if (firebaseInitialized || admin.apps.length > 0) return;
 
-  if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY) {
-    logger.warn('Firebase: credenciales no configuradas. Push notifications deshabilitadas.');
+  const projectId   = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey  = process.env.FIREBASE_PRIVATE_KEY;
+
+  if (!projectId || !privateKey) {
+    logger.warn('[Firebase] Credenciales no configuradas (FIREBASE_PROJECT_ID o FIREBASE_PRIVATE_KEY faltantes). Push notifications deshabilitadas.');
     return;
   }
+  if (!clientEmail) {
+    logger.warn('[Firebase] FIREBASE_CLIENT_EMAIL no configurado.');
+  }
+
+  logger.info(`[Firebase] Inicializando con projectId: ${projectId}, clientEmail: ${clientEmail}`);
 
   try {
     admin.initializeApp({
       credential: admin.credential.cert({
-        projectId:   process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey:  process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        projectId,
+        clientEmail,
+        privateKey: privateKey.replace(/\\n/g, '\n'),
       }),
     });
     firebaseInitialized = true;
-    logger.info('Firebase Admin SDK inicializado correctamente.');
+    logger.info('[Firebase] Admin SDK inicializado correctamente.');
   } catch (err) {
-    logger.error(`Error inicializando Firebase: ${err.message}`);
+    logger.error(`[Firebase] Error al inicializar: ${err.message}`, { stack: err.stack });
   }
 };
 
@@ -66,7 +75,14 @@ exports.sendToUser = async (userId, { title, body, data = {} }) => {
 
 // ── Enviar notificación a múltiples tokens ────────────────────
 exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
-  if (!firebaseInitialized || tokens.length === 0) return null;
+  if (!firebaseInitialized) {
+    logger.warn('[Firebase] sendMulticast llamado pero Firebase no está inicializado.');
+    return null;
+  }
+  if (tokens.length === 0) {
+    logger.warn('[Firebase] sendMulticast llamado con lista de tokens vacía.');
+    return null;
+  }
 
   // Firebase permite hasta 500 tokens por llamada
   const chunks = [];
@@ -74,8 +90,11 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
     chunks.push(tokens.slice(i, i + 500));
   }
 
+  logger.info(`[Firebase] sendMulticast: ${tokens.length} token(s), ${chunks.length} chunk(s)`);
+
   const results = [];
-  for (const chunk of chunks) {
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
     const message = {
       tokens: chunk,
       notification: { title, body },
@@ -84,8 +103,16 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
       apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
     };
 
+    logger.debug(`[Firebase] Chunk ${ci + 1}/${chunks.length}: enviando a ${chunk.length} tokens`);
     const response = await admin.messaging().sendEachForMulticast(message);
-    logger.info(`Push multicast: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
+    logger.info(`[Firebase] Chunk ${ci + 1}: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
+
+    // Log de errores individuales
+    response.responses.forEach((r, idx) => {
+      if (!r.success) {
+        logger.warn(`[Firebase] Token[${idx}] falló — code: ${r.error?.code}, message: ${r.error?.message}`);
+      }
+    });
 
     // Limpiar tokens inválidos
     const invalidTokens = chunk.filter((_, idx) =>
@@ -96,7 +123,7 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
       await Promise.all(
         invalidTokens.map(token => User.findOneAndUpdate({ fcmToken: token }, { fcmToken: null }))
       );
-      logger.info(`Push: ${invalidTokens.length} tokens inválidos removidos`);
+      logger.info(`[Firebase] ${invalidTokens.length} token(s) inválido(s) removidos`);
     }
 
     results.push(response);

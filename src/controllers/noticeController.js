@@ -49,24 +49,39 @@ exports.createNotice = async (req, res, next) => {
 
     // Enviar push notification a todos los propietarios activos
     if (sendPush) {
+      logger.info(`[Push] Iniciando envío para aviso ${notice._id} (tag: ${tag})`);
       const owners = await User.find({ role: 'owner', isActive: true }).select('+fcmToken');
-      const tokens = owners.map(o => o.fcmToken).filter(Boolean);
+      const withToken    = owners.filter(o => o.fcmToken);
+      const withoutToken = owners.filter(o => !o.fcmToken);
+      const tokens       = withToken.map(o => o.fcmToken);
 
-      if (tokens.length > 0) {
+      logger.info(`[Push] Owners activos: ${owners.length} — con token: ${withToken.length}, sin token: ${withoutToken.length}`);
+      if (withoutToken.length > 0) {
+        logger.debug(`[Push] Owners sin FCM token: ${withoutToken.map(o => o.email).join(', ')}`);
+      }
+
+      if (tokens.length === 0) {
+        logger.warn(`[Push] Ningún owner tiene FCM token registrado. No se envía push.`);
+      } else {
         const tagEmoji = { info: '📢', warning: '⚠️', urgent: '🚨' };
         try {
+          logger.info(`[Push] Llamando sendMulticast con ${tokens.length} token(s)...`);
           const results = await firebaseService.sendMulticast(tokens, {
             title: `${tagEmoji[tag] ?? '📢'} ${title}`,
             body:  body.slice(0, 100) + (body.length > 100 ? '...' : ''),
             data:  { type: 'new_notice', noticeId: notice._id.toString(), tag },
           });
-          const anySuccess = results?.some(r => r.successCount > 0);
-          if (anySuccess) {
+          const totalSuccess = results?.reduce((acc, r) => acc + r.successCount, 0) ?? 0;
+          const totalFailure = results?.reduce((acc, r) => acc + r.failureCount, 0) ?? 0;
+          logger.info(`[Push] Resultado: ${totalSuccess} exitosos, ${totalFailure} fallidos`);
+          if (totalSuccess > 0) {
             await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: new Date() });
+            logger.info(`[Push] Aviso ${notice._id} marcado como pushSent`);
+          } else {
+            logger.warn(`[Push] Ningún push llegó a destino para aviso ${notice._id}`);
           }
-          logger.info(`Push enviado a ${tokens.length} propietarios para aviso: ${notice._id}`);
         } catch (pushErr) {
-          logger.warn(`Error enviando push para aviso ${notice._id}: ${pushErr.message}`);
+          logger.error(`[Push] Error enviando push para aviso ${notice._id}: ${pushErr.message}`, { stack: pushErr.stack });
         }
       }
     }

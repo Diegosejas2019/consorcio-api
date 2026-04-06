@@ -111,6 +111,10 @@ SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS
 ALLOWED_ORIGINS
 ```
 
+## Flujo de trabajo
+
+- Después de cada cambio terminado, hacer commit y push al repositorio (`git add`, `git commit`, `git push`).
+
 ## Convenciones
 
 - Respuestas siempre con `{ success: true/false, data/message }`
