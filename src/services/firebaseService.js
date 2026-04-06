@@ -79,7 +79,7 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
     const message = {
       tokens: chunk,
       notification: { title, body },
-      data,
+      data: { ...data, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
       android: { priority: 'high', notification: { sound: 'default', channelId: 'consorcio' } },
       apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
     };
@@ -88,11 +88,16 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
     logger.info(`Push multicast: ${response.successCount} exitosos, ${response.failureCount} fallidos`);
 
     // Limpiar tokens inválidos
-    response.responses.forEach(async (r, idx) => {
-      if (!r.success && r.error?.code === 'messaging/registration-token-not-registered') {
-        await User.findOneAndUpdate({ fcmToken: chunk[idx] }, { fcmToken: null });
-      }
-    });
+    const invalidTokens = chunk.filter((_, idx) =>
+      !response.responses[idx].success &&
+      response.responses[idx].error?.code === 'messaging/registration-token-not-registered'
+    );
+    if (invalidTokens.length > 0) {
+      await Promise.all(
+        invalidTokens.map(token => User.findOneAndUpdate({ fcmToken: token }, { fcmToken: null }))
+      );
+      logger.info(`Push: ${invalidTokens.length} tokens inválidos removidos`);
+    }
 
     results.push(response);
   }
