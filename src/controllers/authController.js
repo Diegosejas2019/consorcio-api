@@ -7,6 +7,8 @@ exports.login = async (req, res, next) => {
   try {
     const { email, password, fcmToken } = req.body;
 
+    logger.info(`[Login] body recibido: email=${email}, fcmToken=${fcmToken || 'NO ENVIADO'}`);
+
     if (!email || !password) {
       return res.status(400).json({ success: false, message: 'Email y contraseña son requeridos.' });
     }
