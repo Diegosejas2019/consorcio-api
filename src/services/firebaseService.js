@@ -52,10 +52,10 @@ exports.sendToUser = async (userId, { title, body, data = {} }) => {
 
     const message = {
       token: user.fcmToken,
-      notification: { title, body },
-      data: { ...data, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
-      android: { priority: 'high', notification: { sound: 'default', channelId: 'consorcio' } },
-      apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
+      data: { ...data, title, body, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
+      android: { priority: 'high' },
+      apns:    { payload: { aps: { contentAvailable: true } } },
+      webpush: { headers: { Urgency: 'high' } },
     };
 
     const response = await admin.messaging().send(message);
@@ -97,10 +97,10 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
     const chunk = chunks[ci];
     const message = {
       tokens: chunk,
-      notification: { title, body },
-      data: { ...data, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
-      android: { priority: 'high', notification: { sound: 'default', channelId: 'consorcio' } },
-      apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
+      data: { ...data, title, body, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
+      android: { priority: 'high' },
+      apns:    { payload: { aps: { contentAvailable: true } } },
+      webpush: { headers: { Urgency: 'high' } },
     };
 
     logger.debug(`[Firebase] Chunk ${ci + 1}/${chunks.length}: enviando a ${chunk.length} tokens`);
