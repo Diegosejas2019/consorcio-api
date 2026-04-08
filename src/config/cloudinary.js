@@ -12,27 +12,20 @@ cloudinary.config({
 // Storage de Cloudinary para multer
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: async (req, file) => {
-    const isImage = file.mimetype.startsWith('image/');
-    return {
-      folder:         'consorcio/comprobantes',
-      resource_type:  isImage ? 'image' : 'raw',   // raw para PDFs
-      allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
-      transformation: isImage
-        ? [{ quality: 'auto', fetch_format: 'auto', width: 1200, crop: 'limit' }]
-        : undefined,
-      public_id: `pago_${req.user?.id}_${Date.now()}`,
-    };
-  },
+  params: async (req) => ({
+    folder:          'consorcio/comprobantes',
+    resource_type:   'raw',
+    allowed_formats: ['pdf'],
+    public_id:       `pago_${req.user?.id}_${Date.now()}`,
+  }),
 });
 
 // Filtro de tipos de archivo
 const fileFilter = (req, file, cb) => {
-  const allowed = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
-  if (allowed.includes(file.mimetype)) {
+  if (file.mimetype === 'application/pdf') {
     cb(null, true);
   } else {
-    cb(new Error('Tipo de archivo no permitido. Solo JPG, PNG, WEBP o PDF.'), false);
+    cb(new Error('Solo se permiten archivos PDF.'), false);
   }
 };
 
