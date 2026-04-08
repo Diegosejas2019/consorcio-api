@@ -186,37 +186,6 @@ exports.rejectPayment = async (req, res, next) => {
   }
 };
 
-// ── GET /api/payments/:id/receipt — descargar comprobante ─────
-exports.getReceipt = async (req, res, next) => {
-  try {
-    const payment = await Payment.findById(req.params.id);
-    if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
-
-    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Acceso denegado.' });
-    }
-
-    if (!payment.receipt?.url) {
-      return res.status(404).json({ success: false, message: 'Este pago no tiene comprobante.' });
-    }
-
-    const upstream = await fetch(payment.receipt.url);
-    if (!upstream.ok) {
-      return res.status(502).json({ success: false, message: 'No se pudo obtener el comprobante desde el servidor de archivos.' });
-    }
-
-    const filename = `comprobante_${payment.month}.pdf`;
-    res.set('Content-Type', 'application/pdf');
-    res.set('Content-Disposition', `attachment; filename="${filename}"`);
-    res.set('Cache-Control', 'private, no-store');
-
-    const { Readable } = require('stream');
-    Readable.fromWeb(upstream.body).pipe(res);
-  } catch (err) {
-    next(err);
-  }
-};
-
 // ── DELETE /api/payments/:id — eliminar comprobante ───────────
 exports.deletePayment = async (req, res, next) => {
   try {

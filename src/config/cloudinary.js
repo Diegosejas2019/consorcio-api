@@ -17,6 +17,7 @@ const storage = new CloudinaryStorage({
     resource_type:   'raw',
     allowed_formats: ['pdf'],
     public_id:       `pago_${req.user?.id}_${Date.now()}.pdf`,
+    type:            'upload',
   }),
 });
 
