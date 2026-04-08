@@ -16,7 +16,7 @@ const storage = new CloudinaryStorage({
     folder:          'consorcio/comprobantes',
     resource_type:   'raw',
     allowed_formats: ['pdf'],
-    public_id:       `pago_${req.user?.id}_${Date.now()}`,
+    public_id:       `pago_${req.user?.id}_${Date.now()}.pdf`,
   }),
 });
 
