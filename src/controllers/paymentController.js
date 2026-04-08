@@ -186,6 +186,38 @@ exports.rejectPayment = async (req, res, next) => {
   }
 };
 
+// ── GET /api/payments/:id/receipt — descargar comprobante ─────
+exports.getReceipt = async (req, res, next) => {
+  try {
+    const payment = await Payment.findById(req.params.id);
+    if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
+
+    // Propietario solo puede ver sus propios comprobantes
+    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Acceso denegado.' });
+    }
+
+    if (!payment.receipt?.url) {
+      return res.status(404).json({ success: false, message: 'Este pago no tiene comprobante adjunto.' });
+    }
+
+    // Generar URL firmada de Cloudinary con expiración de 5 minutos
+    const signedUrl = cloudinary.utils.private_download_url(
+      payment.receipt.publicId,
+      'pdf',
+      {
+        resource_type: 'raw',
+        expires_at:    Math.floor(Date.now() / 1000) + 300,
+        attachment:    payment.receipt.filename || true,
+      }
+    );
+
+    res.redirect(signedUrl);
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── DELETE /api/payments/:id — eliminar comprobante ───────────
 exports.deletePayment = async (req, res, next) => {
   try {
