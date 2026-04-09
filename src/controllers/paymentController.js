@@ -201,18 +201,37 @@ exports.getReceipt = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Este pago no tiene comprobante adjunto.' });
     }
 
-    // Generar URL firmada de Cloudinary con expiración de 5 minutos
+    // Detectar el tipo de entrega según la URL almacenada
+    const deliveryType = payment.receipt.url.includes('/authenticated/') ? 'authenticated' : 'upload';
+
+    // Generar URL firmada con el tipo correcto (evita 401 por mismatch de tipo)
     const signedUrl = cloudinary.utils.private_download_url(
       payment.receipt.publicId,
       'pdf',
       {
         resource_type: 'raw',
-        expires_at:    Math.floor(Date.now() / 1000) + 300,
-        attachment:    payment.receipt.filename || true,
+        type:          deliveryType,
+        expires_at:    Math.floor(Date.now() / 1000) + 120,
       }
     );
 
-    res.redirect(signedUrl);
+    // Proxy: el servidor descarga de Cloudinary y reenvía al cliente
+    // (evita errores CORS/redirect en el cliente mobile)
+    const cloudRes = await fetch(signedUrl);
+    if (!cloudRes.ok) {
+      logger.error(`Cloudinary proxy error: ${cloudRes.status} — publicId: ${payment.receipt.publicId}`);
+      return res.status(502).json({ success: false, message: 'No se pudo obtener el comprobante desde Cloudinary.' });
+    }
+
+    const filename = (payment.receipt.filename || 'comprobante.pdf').replace(/"/g, '');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    const contentLength = cloudRes.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    const { Readable } = require('stream');
+    Readable.fromWeb(cloudRes.body).pipe(res);
   } catch (err) {
     next(err);
   }
