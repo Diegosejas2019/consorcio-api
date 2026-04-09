@@ -111,6 +111,15 @@ SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS
 ALLOWED_ORIGINS
 ```
 
+## MCPs disponibles
+
+| Servidor | Uso |
+|----------|-----|
+| **Railway** | Gestión del deploy, variables de entorno, logs de producción |
+| **MongoDB** | Acceso directo a la DB Atlas (`clustereden` / `consorcio`) |
+| **Vercel** | (disponible, no usado actualmente) |
+| ~~Cloudinary~~ | *(falla al conectar — no usar)* |
+
 ## Flujo de trabajo
 
 - Después de cada cambio terminado, hacer commit y push al repositorio (`git add`, `git commit`, `git push`).
