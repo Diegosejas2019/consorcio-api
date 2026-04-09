@@ -13,6 +13,12 @@ const receiptSchema = new mongoose.Schema(
 
 const paymentSchema = new mongoose.Schema(
   {
+    organization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: [true, 'La organización es obligatoria'],
+      index: true,
+    },
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -84,9 +90,9 @@ const paymentSchema = new mongoose.Schema(
 );
 
 // ── Índices compuestos ───────────────────────────────────────
-paymentSchema.index({ owner: 1, month: 1 });
-paymentSchema.index({ status: 1, createdAt: -1 });
-paymentSchema.index({ month: 1, status: 1 });
+paymentSchema.index({ organization: 1, owner: 1, month: 1 });
+paymentSchema.index({ organization: 1, status: 1, createdAt: -1 });
+paymentSchema.index({ organization: 1, month: 1, status: 1 });
 
 // ── Virtual: mes formateado ──────────────────────────────────
 paymentSchema.virtual('monthFormatted').get(function () {

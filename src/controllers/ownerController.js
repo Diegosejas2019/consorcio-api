@@ -7,7 +7,7 @@ exports.getAllOwners = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, search, isDebtor } = req.query;
 
-    const filter = { role: 'owner', isActive: true };
+    const filter = { role: 'owner', isActive: true, organization: req.orgId };
     if (search) filter.$or = [
       { name: { $regex: search, $options: 'i' } },
       { unit: { $regex: search, $options: 'i' } },
@@ -47,10 +47,10 @@ exports.getAllOwners = async (req, res, next) => {
 // ── GET /api/owners/:id — detalle de un propietario ───────────
 exports.getOwner = async (req, res, next) => {
   try {
-    const owner = await User.findOne({ _id: req.params.id, role: 'owner' });
+    const owner = await User.findOne({ _id: req.params.id, role: 'owner', organization: req.orgId });
     if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
 
-    const payments = await Payment.find({ owner: owner._id })
+    const payments = await Payment.find({ owner: owner._id, organization: req.orgId })
       .sort({ createdAt: -1 })
       .select('-__v');
 
@@ -64,8 +64,12 @@ exports.getOwner = async (req, res, next) => {
 exports.createOwner = async (req, res, next) => {
   try {
     const { name, email, password, unit, phone } = req.body;
-    const owner = await User.create({ name, email, password, unit, phone, role: 'owner' });
-    logger.info(`Propietario creado: ${owner.email} — ${owner.unit}`);
+    const owner = await User.create({
+      name, email, password, unit, phone,
+      role: 'owner',
+      organization: req.orgId,
+    });
+    logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
     owner.password = undefined;
     res.status(201).json({ success: true, data: { owner } });
   } catch (err) {
@@ -76,14 +80,15 @@ exports.createOwner = async (req, res, next) => {
 // ── PATCH /api/owners/:id — actualizar datos ──────────────────
 exports.updateOwner = async (req, res, next) => {
   try {
-    // Campos actualizables (no password ni role desde aquí)
     const allowed = ['name', 'unit', 'phone', 'isActive', 'isDebtor', 'balance'];
     const update  = {};
     allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
 
-    const owner = await User.findByIdAndUpdate(req.params.id, update, {
-      new: true, runValidators: true,
-    });
+    const owner = await User.findOneAndUpdate(
+      { _id: req.params.id, organization: req.orgId },
+      update,
+      { new: true, runValidators: true }
+    );
     if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
 
     res.json({ success: true, data: { owner } });
@@ -95,8 +100,10 @@ exports.updateOwner = async (req, res, next) => {
 // ── DELETE /api/owners/:id — desactivar (soft delete) ─────────
 exports.deleteOwner = async (req, res, next) => {
   try {
-    const owner = await User.findByIdAndUpdate(
-      req.params.id, { isActive: false }, { new: true }
+    const owner = await User.findOneAndUpdate(
+      { _id: req.params.id, organization: req.orgId },
+      { isActive: false },
+      { new: true }
     );
     if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
     logger.info(`Propietario desactivado: ${owner.email}`);
@@ -109,17 +116,18 @@ exports.deleteOwner = async (req, res, next) => {
 // ── GET /api/owners/stats — estadísticas generales (admin) ────
 exports.getStats = async (req, res, next) => {
   try {
+    const orgFilter = { organization: req.orgId };
+
     const [totalOwners, debtors, payments] = await Promise.all([
-      User.countDocuments({ role: 'owner', isActive: true }),
-      User.countDocuments({ role: 'owner', isActive: true, isDebtor: true }),
-      Payment.find({ status: 'approved' }).select('amount month'),
+      User.countDocuments({ ...orgFilter, role: 'owner', isActive: true }),
+      User.countDocuments({ ...orgFilter, role: 'owner', isActive: true, isDebtor: true }),
+      Payment.find({ ...orgFilter, status: 'approved' }).select('amount month'),
     ]);
 
     const totalCollected = payments.reduce((sum, p) => sum + p.amount, 0);
 
-    // Agrupar recaudación por mes (últimos 6 meses)
     const monthlyAgg = await Payment.aggregate([
-      { $match: { status: 'approved' } },
+      { $match: { ...orgFilter, status: 'approved' } },
       { $group: { _id: '$month', total: { $sum: '$amount' }, count: { $sum: 1 } } },
       { $sort: { _id: -1 } },
       { $limit: 6 },
@@ -133,7 +141,7 @@ exports.getStats = async (req, res, next) => {
         upToDate: totalOwners - debtors,
         complianceRate: totalOwners > 0 ? Math.round(((totalOwners - debtors) / totalOwners) * 100) : 0,
         totalCollected,
-        pendingPayments: await Payment.countDocuments({ status: 'pending' }),
+        pendingPayments: await Payment.countDocuments({ ...orgFilter, status: 'pending' }),
         monthlyStats: monthlyAgg,
       },
     });

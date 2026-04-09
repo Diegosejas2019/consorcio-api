@@ -25,8 +25,15 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['owner', 'admin'],
+      enum: ['owner', 'admin', 'superadmin'],
       default: 'owner',
+    },
+
+    // — Organización a la que pertenece el usuario —
+    organization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      index: true,
     },
 
     // — Datos del propietario —
@@ -72,8 +79,8 @@ const userSchema = new mongoose.Schema(
 
 // ── Índices ──────────────────────────────────────────────────
 userSchema.index({ email: 1 });
-userSchema.index({ role: 1, isActive: 1 });
-userSchema.index({ isDebtor: 1 });
+userSchema.index({ organization: 1, role: 1, isActive: 1 });
+userSchema.index({ organization: 1, isDebtor: 1 });
 
 // ── Virtual: initials ────────────────────────────────────────
 userSchema.virtual('initials').get(function () {

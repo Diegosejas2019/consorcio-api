@@ -29,8 +29,11 @@ exports.protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message });
     }
 
-    // 3. Verificar que el usuario siga existiendo
-    const user = await User.findById(decoded.id).select('+passwordChangedAt');
+    // 3. Verificar que el usuario siga existiendo (popular organización)
+    const user = await User.findById(decoded.id)
+      .select('+passwordChangedAt')
+      .populate('organization', '-mpPublicKey -mpAccessToken -mpWebhookSecret');
+
     if (!user) {
       return res.status(401).json({ success: false, message: 'El usuario ya no existe.' });
     }
@@ -48,7 +51,11 @@ exports.protect = async (req, res, next) => {
     // 6. Actualizar lastLogin
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
-    req.user = user;
+    req.user  = user;
+    // Contexto de organización: superadmin puede operar sin org
+    req.orgId = user.organization?._id ?? null;
+    req.org   = user.organization ?? null;
+
     next();
   } catch (err) {
     logger.error('Error en middleware auth.protect:', err);
@@ -69,10 +76,23 @@ exports.restrictTo = (...roles) => {
   };
 };
 
+// ── Requerir contexto de organización ────────────────────────
+// Bloquea requests de superadmin o usuarios sin org asignada
+// cuando el endpoint necesita un tenant específico.
+exports.requireOrg = (req, res, next) => {
+  if (!req.orgId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Esta operación requiere contexto de organización.',
+    });
+  }
+  next();
+};
+
 // ── Propietario solo accede a sus propios datos ───────────────
 exports.ownDataOnly = (paramField = 'id') => {
   return (req, res, next) => {
-    if (req.user.role === 'admin') return next(); // admin puede todo
+    if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
     const targetId = req.params[paramField];
     if (targetId && targetId !== req.user.id) {
       return res.status(403).json({
@@ -95,7 +115,7 @@ exports.signToken = (userId) => {
 exports.sendTokenResponse = (user, statusCode, res) => {
   const token = exports.signToken(user._id);
 
-  // Remover password de la respuesta
+  // Remover campos sensibles de la respuesta
   user.password = undefined;
   user.fcmToken = undefined;
 

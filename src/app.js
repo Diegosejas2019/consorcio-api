@@ -76,13 +76,14 @@ app.get('/health', (req, res) => {
 });
 
 // ── Rutas principales ─────────────────────────────────────────
-app.use('/api/auth',        require('./routes/auth'));
-app.use('/api/owners',      require('./routes/owners'));
-app.use('/api/payments',    require('./routes/payments'));
-app.use('/api/notices',     require('./routes/notices'));
-app.use('/api/claims',      require('./routes/claims'));
-app.use('/api/config',      require('./routes/config'));
-app.use('/api/mercadopago', require('./routes/mercadopago'));
+app.use('/api/auth',          require('./routes/auth'));
+app.use('/api/organizations', require('./routes/organizations'));
+app.use('/api/owners',        require('./routes/owners'));
+app.use('/api/payments',      require('./routes/payments'));
+app.use('/api/notices',       require('./routes/notices'));
+app.use('/api/claims',        require('./routes/claims'));
+app.use('/api/config',        require('./routes/config'));
+app.use('/api/mercadopago',   require('./routes/mercadopago'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
@@ -92,12 +93,14 @@ app.get('/api', (req, res) => {
     status:  'online',
     docs:    '/api/docs',
     endpoints: {
-      auth:        '/api/auth',
-      owners:      '/api/owners',
-      payments:    '/api/payments',
-      notices:     '/api/notices',
-      config:      '/api/config',
-      mercadopago: '/api/mercadopago',
+      auth:          '/api/auth',
+      organizations: '/api/organizations',
+      owners:        '/api/owners',
+      payments:      '/api/payments',
+      notices:       '/api/notices',
+      claims:        '/api/claims',
+      config:        '/api/config',
+      mercadopago:   '/api/mercadopago',
     },
   });
 });

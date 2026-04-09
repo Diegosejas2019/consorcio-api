@@ -1,49 +1,95 @@
-const Config = require('../models/Config');
+const Organization = require('../models/Organization');
 
-// ── GET /api/config — obtener configuración pública ───────────
+/**
+ * Mapea los campos de Organization a los nombres que espera el frontend,
+ * manteniendo compatibilidad con la API existente.
+ */
+function orgToConfigView(org, includePublicKey = false) {
+  const data = {
+    _id: org._id,
+    // ── Aliases de compatibilidad ──
+    expenseAmount:    org.feeAmount,
+    expenseMonth:     org.feePeriodLabel,
+    expenseMonthCode: org.feePeriodCode,
+    lateFeePercent:   org.lateFeePercent,
+    dueDayOfMonth:    org.dueDayOfMonth,
+    consortiumName:   org.name,
+    consortiumAddress: org.address,
+    adminEmail:       org.adminEmail,
+    adminPhone:       org.adminPhone,
+    // ── Nuevos campos ──
+    feeLabel:     org.feeLabel,
+    memberLabel:  org.memberLabel,
+    unitLabel:    org.unitLabel,
+    businessType: org.businessType,
+    slug:         org.slug,
+    orgId:        org._id,
+  };
+  if (includePublicKey) data.mpPublicKey = org.mpPublicKey;
+  return data;
+}
+
+// Mapea los nombres legacy del frontend a los campos reales del modelo
+const FIELD_MAP = {
+  expenseAmount:     'feeAmount',
+  expenseMonth:      'feePeriodLabel',
+  expenseMonthCode:  'feePeriodCode',
+  lateFeePercent:    'lateFeePercent',
+  dueDayOfMonth:     'dueDayOfMonth',
+  consortiumName:    'name',
+  consortiumAddress: 'address',
+  adminEmail:        'adminEmail',
+  adminPhone:        'adminPhone',
+  mpPublicKey:       'mpPublicKey',
+  mpAccessToken:     'mpAccessToken',
+  mpWebhookSecret:   'mpWebhookSecret',
+  // Nuevos campos (nombre directo)
+  feeLabel:    'feeLabel',
+  memberLabel: 'memberLabel',
+  unitLabel:   'unitLabel',
+  businessType: 'businessType',
+};
+
+// ── GET /api/config ───────────────────────────────────────────
 exports.getConfig = async (req, res, next) => {
   try {
-    // select: false excluye automáticamente mpAccessToken y mpWebhookSecret
-    const config = await Config.getConfig();
-    // Incluir mpPublicKey solo si el usuario es admin
-    const data = config.toObject();
-    if (req.user?.role !== 'admin') {
-      delete data.mpPublicKey;
-    }
-    delete data.mpAccessToken;
-    delete data.mpWebhookSecret;
+    // Admin con org poblada en req.org (lo pone protect)
+    const org = req.org
+      ? await Organization.findById(req.org._id).select('+mpPublicKey')
+      : null;
 
-    res.json({ success: true, data: { config: data } });
+    if (!org) {
+      return res.status(404).json({ success: false, message: 'Organización no configurada.' });
+    }
+
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'superadmin';
+    res.json({ success: true, data: { config: orgToConfigView(org, isAdmin) } });
   } catch (err) {
     next(err);
   }
 };
 
-// ── PATCH /api/config — actualizar configuración (admin) ──────
+// ── PATCH /api/config ─────────────────────────────────────────
 exports.updateConfig = async (req, res, next) => {
   try {
-    const allowed = [
-      'expenseAmount', 'expenseMonth', 'expenseMonthCode',
-      'lateFeePercent', 'dueDayOfMonth',
-      'consortiumName', 'consortiumAddress', 'adminEmail', 'adminPhone',
-      'mpPublicKey', 'mpAccessToken', 'mpWebhookSecret',
-    ];
+    if (!req.orgId) {
+      return res.status(400).json({ success: false, message: 'Organización requerida.' });
+    }
 
     const update = {};
-    allowed.forEach(f => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+    Object.entries(FIELD_MAP).forEach(([legacyKey, orgKey]) => {
+      if (req.body[legacyKey] !== undefined) update[orgKey] = req.body[legacyKey];
+    });
 
-    const config = await Config.findOneAndUpdate(
-      { _singleton: 'global' },
+    const org = await Organization.findByIdAndUpdate(
+      req.orgId,
       update,
-      { new: true, runValidators: true, upsert: true }
-    );
+      { new: true, runValidators: true }
+    ).select('+mpPublicKey');
 
-    // No devolver credenciales sensibles
-    const data = config.toObject();
-    delete data.mpAccessToken;
-    delete data.mpWebhookSecret;
+    if (!org) return res.status(404).json({ success: false, message: 'Organización no encontrada.' });
 
-    res.json({ success: true, data: { config: data } });
+    res.json({ success: true, data: { config: orgToConfigView(org, true) } });
   } catch (err) {
     next(err);
   }

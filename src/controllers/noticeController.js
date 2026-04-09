@@ -7,7 +7,8 @@ const logger          = require('../config/logger');
 exports.getNotices = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, tag } = req.query;
-    const filter = tag ? { tag } : {};
+    const filter = { organization: req.orgId };
+    if (tag) filter.tag = tag;
 
     const [notices, total] = await Promise.all([
       Notice.find(filter)
@@ -32,7 +33,8 @@ exports.getNotices = async (req, res, next) => {
 // ── GET /api/notices/:id ──────────────────────────────────────
 exports.getNotice = async (req, res, next) => {
   try {
-    const notice = await Notice.findById(req.params.id).populate('author', 'name');
+    const notice = await Notice.findOne({ _id: req.params.id, organization: req.orgId })
+      .populate('author', 'name');
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
     res.json({ success: true, data: { notice } });
   } catch (err) {
@@ -45,12 +47,17 @@ exports.createNotice = async (req, res, next) => {
   try {
     const { title, body, tag, sendPush = true } = req.body;
 
-    const notice = await Notice.create({ title, body, tag, author: req.user._id });
+    const notice = await Notice.create({
+      organization: req.orgId,
+      title, body, tag,
+      author: req.user._id,
+    });
 
-    // Enviar push notification a todos los propietarios activos
+    // Enviar push notification solo a los propietarios de esta organización
     if (sendPush) {
       logger.info(`[Push] Iniciando envío para aviso ${notice._id} (tag: ${tag})`);
-      const owners = await User.find({ role: 'owner', isActive: true }).select('+fcmToken');
+      const owners = await User.find({ organization: req.orgId, role: 'owner', isActive: true })
+        .select('+fcmToken');
       const withToken    = owners.filter(o => o.fcmToken);
       const withoutToken = owners.filter(o => !o.fcmToken);
       const tokens       = withToken.map(o => o.fcmToken);
@@ -76,7 +83,6 @@ exports.createNotice = async (req, res, next) => {
           logger.info(`[Push] Resultado: ${totalSuccess} exitosos, ${totalFailure} fallidos`);
           if (totalSuccess > 0) {
             await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: new Date() });
-            logger.info(`[Push] Aviso ${notice._id} marcado como pushSent`);
           } else {
             logger.warn(`[Push] Ningún push llegó a destino para aviso ${notice._id}`);
           }
@@ -98,8 +104,10 @@ exports.createNotice = async (req, res, next) => {
 exports.updateNotice = async (req, res, next) => {
   try {
     const { title, body, tag } = req.body;
-    const notice = await Notice.findByIdAndUpdate(
-      req.params.id, { title, body, tag }, { new: true, runValidators: true }
+    const notice = await Notice.findOneAndUpdate(
+      { _id: req.params.id, organization: req.orgId },
+      { title, body, tag },
+      { new: true, runValidators: true }
     ).populate('author', 'name');
 
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
@@ -112,7 +120,7 @@ exports.updateNotice = async (req, res, next) => {
 // ── DELETE /api/notices/:id — eliminar aviso (admin) ──────────
 exports.deleteNotice = async (req, res, next) => {
   try {
-    const notice = await Notice.findByIdAndDelete(req.params.id);
+    const notice = await Notice.findOneAndDelete({ _id: req.params.id, organization: req.orgId });
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
     res.json({ success: true, message: 'Aviso eliminado.' });
   } catch (err) {

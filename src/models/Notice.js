@@ -19,6 +19,12 @@ const noticeSchema = new mongoose.Schema(
       enum: ['info', 'warning', 'urgent'],
       default: 'info',
     },
+    organization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,
+    },
     author: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

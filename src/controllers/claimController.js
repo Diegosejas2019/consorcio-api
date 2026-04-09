@@ -8,7 +8,7 @@ exports.getClaims = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, status } = req.query;
 
-    const filter = {};
+    const filter = { organization: req.orgId };
     if (req.user.role === 'owner') filter.owner = req.user._id;
     if (status) filter.status = status;
 
@@ -39,6 +39,7 @@ exports.createClaim = async (req, res, next) => {
     const { category, title, body } = req.body;
 
     const claim = await Claim.create({
+      organization: req.orgId,
       owner: req.user._id,
       category,
       title,
@@ -47,8 +48,9 @@ exports.createClaim = async (req, res, next) => {
 
     await claim.populate('owner', 'name unit email');
 
-    // Notificar al admin por push
-    const admins = await User.find({ role: 'admin', isActive: true }).select('+fcmToken');
+    // Notificar al admin de la misma organización
+    const admins = await User.find({ organization: req.orgId, role: 'admin', isActive: true })
+      .select('+fcmToken');
     const tokens = admins.filter(a => a.fcmToken).map(a => a.fcmToken);
     if (tokens.length > 0) {
       firebaseService.sendMulticast(tokens, {
@@ -70,7 +72,7 @@ exports.updateStatus = async (req, res, next) => {
   try {
     const { status, adminNote } = req.body;
 
-    const claim = await Claim.findById(req.params.id)
+    const claim = await Claim.findOne({ _id: req.params.id, organization: req.orgId })
       .populate('owner', 'name unit email fcmToken');
     if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });
 
@@ -83,7 +85,6 @@ exports.updateStatus = async (req, res, next) => {
     }
     await claim.save();
 
-    // Notificar al propietario si se resolvió
     if (status === 'resolved' && prev !== 'resolved') {
       firebaseService.sendToUser(claim.owner._id, {
         title: '✅ Reclamo resuelto',
@@ -102,7 +103,7 @@ exports.updateStatus = async (req, res, next) => {
 // ── DELETE /api/claims/:id — eliminar (owner pendiente / admin) ─
 exports.deleteClaim = async (req, res, next) => {
   try {
-    const claim = await Claim.findById(req.params.id);
+    const claim = await Claim.findOne({ _id: req.params.id, organization: req.orgId });
     if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });
 
     if (req.user.role === 'owner') {
