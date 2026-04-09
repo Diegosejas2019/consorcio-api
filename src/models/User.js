@@ -78,7 +78,6 @@ const userSchema = new mongoose.Schema(
 );
 
 // ── Índices ──────────────────────────────────────────────────
-userSchema.index({ email: 1 });
 userSchema.index({ organization: 1, role: 1, isActive: 1 });
 userSchema.index({ organization: 1, isDebtor: 1 });
 

@@ -184,7 +184,7 @@ const organizationSchema = new mongoose.Schema(
 );
 
 // ── Índices ──────────────────────────────────────────────────────
-organizationSchema.index({ slug: 1 }, { unique: true });
+// slug ya tiene unique:true en el campo, no se necesita schema.index adicional
 organizationSchema.index({ businessType: 1, isActive: 1 });
 
 // ── Static: labels por defecto para un tipo de negocio ──────────
