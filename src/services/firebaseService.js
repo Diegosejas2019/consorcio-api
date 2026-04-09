@@ -132,10 +132,10 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
 };
 
 // ── Enviar recordatorio mensual a todos los deudores ──────────
-exports.sendMonthlyReminders = async (expenseMonth, amount) => {
+exports.sendMonthlyReminders = async (orgId, expenseMonth, amount) => {
   if (!firebaseInitialized) return;
 
-  const debtors = await User.find({ role: 'owner', isActive: true, isDebtor: true }).select('+fcmToken');
+  const debtors = await User.find({ organization: orgId, role: 'owner', isActive: true, isDebtor: true }).select('+fcmToken');
   const tokens  = debtors.map(o => o.fcmToken).filter(Boolean);
 
   if (tokens.length === 0) return;
