@@ -44,9 +44,17 @@ exports.getTemplates = (req, res) => {
   res.json({ success: true, data: { templates: Organization.listTemplates() } });
 };
 
-// ── POST /api/organizations — crear (superadmin) ──────────────
+// ── POST /api/organizations — crear (admin o superadmin) ─────
 exports.createOrganization = async (req, res, next) => {
   try {
+    // Admin solo puede crear una organización si aún no tiene ninguna asignada
+    if (req.user.role === 'admin' && req.orgId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Ya tenés una organización asignada. Contactá a un superadmin para crear una nueva.',
+      });
+    }
+
     const {
       template,
       name, slug, businessType,
@@ -82,6 +90,12 @@ exports.createOrganization = async (req, res, next) => {
       mpAccessToken,
       mpWebhookSecret,
     });
+
+    // Si el creador es admin, vincularlo a la nueva org automáticamente
+    if (req.user.role === 'admin') {
+      await User.findByIdAndUpdate(req.user._id, { organization: org._id });
+      logger.info(`Admin ${req.user.email} vinculado a la nueva org "${org.name}" (${org._id})`);
+    }
 
     logger.info(`Organización creada: "${org.name}" [${org.businessType}] (template: ${resolvedType}) por ${req.user.email}`);
     res.status(201).json({ success: true, data: { organization: org } });
