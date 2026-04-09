@@ -6,7 +6,7 @@ const validate = require('../middleware/validate');
 
 router.post('/login',
   [
-    body('email').isEmail().withMessage('Email inválido').normalizeEmail(),
+    body('email').isEmail().withMessage('Email inválido').toLowerCase(),
     body('password').notEmpty().withMessage('Contraseña requerida'),
   ],
   validate,
@@ -18,7 +18,7 @@ router.post('/register',
   protect, restrictTo('admin'),
   [
     body('name').trim().notEmpty().withMessage('Nombre requerido'),
-    body('email').isEmail().normalizeEmail(),
+    body('email').isEmail().toLowerCase(),
     body('password').isLength({ min: 6 }).withMessage('Mínimo 6 caracteres'),
   ],
   validate,
@@ -30,7 +30,7 @@ router.patch('/update-password', protect, ctrl.updatePassword);
 router.patch('/fcm-token',   protect, ctrl.updateFcmToken);
 
 router.post('/forgot-password',
-  [body('email').isEmail().withMessage('Email inválido').normalizeEmail()],
+  [body('email').isEmail().withMessage('Email inválido').toLowerCase()],
   validate,
   ctrl.forgotPassword
 );
