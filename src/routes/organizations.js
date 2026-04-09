@@ -4,6 +4,9 @@ const { protect, restrictTo } = require('../middleware/auth');
 
 router.use(protect);
 
+// Templates disponibles — cualquier usuario autenticado puede consultarlos
+router.get('/templates', ctrl.getTemplates);
+
 // Listar — superadmin ve todas; admin ve solo la propia
 router.get('/',    restrictTo('admin', 'superadmin'), ctrl.getOrganizations);
 // Detalle

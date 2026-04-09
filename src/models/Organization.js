@@ -1,15 +1,66 @@
 const mongoose = require('mongoose');
 
 /**
- * Labels por tipo de negocio — usados como defaults al crear la org.
- * El admin puede sobreescribirlos en cualquier momento.
+ * Templates de configuración por tipo de negocio.
+ * Incluyen terminología, reglas de cobro y metadatos para el frontend.
+ * El admin puede sobreescribir cualquier campo después de la creación.
  */
-const LABELS_BY_TYPE = {
-  consorcio: { feeLabel: 'Expensa',     memberLabel: 'Propietario', unitLabel: 'Lote / Casa'   },
-  gimnasio:  { feeLabel: 'Cuota',       memberLabel: 'Socio',       unitLabel: 'Membresía'     },
-  colegio:   { feeLabel: 'Arancel',     memberLabel: 'Alumno',      unitLabel: 'Legajo'        },
-  club:      { feeLabel: 'Cuota',       memberLabel: 'Socio',       unitLabel: 'Nº de Socio'   },
-  other:     { feeLabel: 'Cuota',       memberLabel: 'Cliente',     unitLabel: 'Identificador' },
+const TEMPLATES = {
+  consorcio: {
+    businessType:    'consorcio',
+    displayName:     'Consorcio / Barrio Privado',
+    description:     'Gestión de expensas, propietarios y unidades funcionales.',
+    feeLabel:        'Expensa',
+    memberLabel:     'Propietario',
+    unitLabel:       'Lote / Casa',
+    lateFeePercent:  5,
+    dueDayOfMonth:   10,
+    feeAmount:       0,
+  },
+  gimnasio: {
+    businessType:    'gimnasio',
+    displayName:     'Gimnasio / Centro Deportivo',
+    description:     'Cuotas mensuales de socios y membresías.',
+    feeLabel:        'Cuota mensual',
+    memberLabel:     'Socio',
+    unitLabel:       'Membresía',
+    lateFeePercent:  0,
+    dueDayOfMonth:   1,
+    feeAmount:       0,
+  },
+  colegio: {
+    businessType:    'colegio',
+    displayName:     'Colegio / Instituto',
+    description:     'Aranceles de alumnos y gestión de legajos.',
+    feeLabel:        'Arancel',
+    memberLabel:     'Alumno',
+    unitLabel:       'Legajo',
+    lateFeePercent:  0,
+    dueDayOfMonth:   5,
+    feeAmount:       0,
+  },
+  club: {
+    businessType:    'club',
+    displayName:     'Club Social / Deportivo',
+    description:     'Cuotas sociales y gestión de socios.',
+    feeLabel:        'Cuota social',
+    memberLabel:     'Socio',
+    unitLabel:       'Nº de Socio',
+    lateFeePercent:  0,
+    dueDayOfMonth:   1,
+    feeAmount:       0,
+  },
+  other: {
+    businessType:    'other',
+    displayName:     'Otra organización',
+    description:     'Configuración genérica completamente personalizable.',
+    feeLabel:        'Cuota',
+    memberLabel:     'Cliente',
+    unitLabel:       'Identificador',
+    lateFeePercent:  0,
+    dueDayOfMonth:   10,
+    feeAmount:       0,
+  },
 };
 
 const organizationSchema = new mongoose.Schema(
@@ -138,7 +189,23 @@ organizationSchema.index({ businessType: 1, isActive: 1 });
 
 // ── Static: labels por defecto para un tipo de negocio ──────────
 organizationSchema.statics.defaultLabels = function (businessType) {
-  return { ...(LABELS_BY_TYPE[businessType] || LABELS_BY_TYPE.other) };
+  const t = TEMPLATES[businessType] || TEMPLATES.other;
+  return { feeLabel: t.feeLabel, memberLabel: t.memberLabel, unitLabel: t.unitLabel };
+};
+
+// ── Static: preset completo de un template ───────────────────────
+organizationSchema.statics.getTemplate = function (businessType) {
+  return { ...(TEMPLATES[businessType] || TEMPLATES.other) };
+};
+
+// ── Static: lista todos los templates disponibles ────────────────
+organizationSchema.statics.listTemplates = function () {
+  return Object.values(TEMPLATES).map(({ businessType, displayName, description, feeLabel, memberLabel, unitLabel, lateFeePercent, dueDayOfMonth }) => ({
+    businessType,
+    displayName,
+    description,
+    defaults: { feeLabel, memberLabel, unitLabel, lateFeePercent, dueDayOfMonth },
+  }));
 };
 
 // ── Static: crear slug a partir del nombre ───────────────────────

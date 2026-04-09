@@ -39,10 +39,16 @@ exports.getOrganization = async (req, res, next) => {
   }
 };
 
+// ── GET /api/organizations/templates — listar templates disponibles ─
+exports.getTemplates = (req, res) => {
+  res.json({ success: true, data: { templates: Organization.listTemplates() } });
+};
+
 // ── POST /api/organizations — crear (superadmin) ──────────────
 exports.createOrganization = async (req, res, next) => {
   try {
     const {
+      template,
       name, slug, businessType,
       feeAmount, feePeriodCode, feePeriodLabel,
       lateFeePercent, dueDayOfMonth,
@@ -51,24 +57,24 @@ exports.createOrganization = async (req, res, next) => {
       mpPublicKey, mpAccessToken, mpWebhookSecret,
     } = req.body;
 
-    // Auto-generar slug si no se proveyó
-    const resolvedSlug = slug || Organization.generateSlug(name);
+    // Resolver el tipo de negocio: si se pasó template úsalo, luego businessType, default consorcio
+    const resolvedType = businessType || template || 'consorcio';
 
-    // Aplicar defaults de terminología según tipo de negocio
-    const typeLabels = Organization.defaultLabels(businessType || 'consorcio');
+    // Cargar preset del template; los campos del body tienen prioridad
+    const preset = Organization.getTemplate(resolvedType);
 
     const org = await Organization.create({
       name,
-      slug: resolvedSlug,
-      businessType,
-      feeAmount,
-      feePeriodCode,
-      feePeriodLabel,
-      lateFeePercent,
-      dueDayOfMonth,
-      feeLabel:    feeLabel    || typeLabels.feeLabel,
-      memberLabel: memberLabel || typeLabels.memberLabel,
-      unitLabel:   unitLabel   || typeLabels.unitLabel,
+      slug:           slug || Organization.generateSlug(name),
+      businessType:   resolvedType,
+      feeAmount:      feeAmount      ?? preset.feeAmount,
+      feePeriodCode:  feePeriodCode  ?? '',
+      feePeriodLabel: feePeriodLabel ?? '',
+      lateFeePercent: lateFeePercent ?? preset.lateFeePercent,
+      dueDayOfMonth:  dueDayOfMonth  ?? preset.dueDayOfMonth,
+      feeLabel:       feeLabel       || preset.feeLabel,
+      memberLabel:    memberLabel    || preset.memberLabel,
+      unitLabel:      unitLabel      || preset.unitLabel,
       address,
       adminEmail,
       adminPhone,
@@ -77,7 +83,7 @@ exports.createOrganization = async (req, res, next) => {
       mpWebhookSecret,
     });
 
-    logger.info(`Organización creada: "${org.name}" [${org.businessType}] por ${req.user.email}`);
+    logger.info(`Organización creada: "${org.name}" [${org.businessType}] (template: ${resolvedType}) por ${req.user.email}`);
     res.status(201).json({ success: true, data: { organization: org } });
   } catch (err) {
     next(err);
