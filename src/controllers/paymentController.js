@@ -269,17 +269,30 @@ exports.deletePayment = async (req, res, next) => {
 // ── GET /api/payments/dashboard — stats para admin ────────────
 exports.getDashboard = async (req, res, next) => {
   try {
+    const year       = req.query.year ? parseInt(req.query.year, 10) : new Date().getFullYear();
+    const startMonth = `${year}-01`;
+    const endMonth   = `${year}-12`;
+
     const [monthly, byStatus] = await Promise.all([
       Payment.aggregate([
-        { $match: { status: 'approved' } },
-        { $group: { _id: '$month', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-        { $sort: { _id: -1 } },
-        { $limit: 6 },
+        { $match: { month: { $gte: startMonth, $lte: endMonth } } },
+        { $group: { _id: { month: '$month', status: '$status' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        { $sort: { '_id.month': 1 } },
       ]),
       Payment.aggregate([
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
     ]);
+
+    // Pivot: agrupar por mes con counts por estado
+    const monthMap = {};
+    monthly.forEach(({ _id: { month, status }, total, count }) => {
+      if (!monthMap[month]) monthMap[month] = { _id: month, total: 0, count: 0, pending: 0, rejected: 0 };
+      if (status === 'approved') { monthMap[month].total = total; monthMap[month].count = count; }
+      else if (status === 'pending')  monthMap[month].pending  = count;
+      else if (status === 'rejected') monthMap[month].rejected = count;
+    });
+    const monthlyArr = Object.values(monthMap).sort((a, b) => a._id.localeCompare(b._id));
 
     const statusMap = {};
     byStatus.forEach(s => { statusMap[s._id] = s.count; });
@@ -287,10 +300,11 @@ exports.getDashboard = async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        monthly: monthly.reverse(),
+        monthly:  monthlyArr,
         pending:  statusMap.pending  || 0,
         approved: statusMap.approved || 0,
         rejected: statusMap.rejected || 0,
+        year,
       },
     });
   } catch (err) {
