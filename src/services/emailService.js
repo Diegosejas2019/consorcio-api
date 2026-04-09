@@ -131,6 +131,23 @@ exports.sendWelcome = async (owner, tempPassword) => {
   });
 };
 
+// Reset de contraseña
+exports.sendPasswordReset = async (user, resetUrl) => {
+  const html = baseTemplate(`
+    <p>Hola <strong>${user.name}</strong>,</p>
+    <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta.</p>
+    <p>Hacé clic en el botón para crear una nueva contraseña. Este enlace es válido por <strong>10 minutos</strong>.</p>
+    <a href="${resetUrl}" class="btn">Restablecer contraseña</a>
+    <p style="margin-top:20px; font-size:13px; color:#6b7280;">Si no solicitaste este cambio, podés ignorar este email. Tu contraseña no será modificada.</p>
+    <p style="font-size:12px; color:#9ca3af; word-break:break-all;">Si el botón no funciona, copiá este enlace en tu navegador:<br>${resetUrl}</p>
+  `);
+  return sendEmail({
+    to:      user.email,
+    subject: 'Restablecé tu contraseña — ConsorcioPro',
+    html,
+  });
+};
+
 // Recordatorio de vencimiento mensual
 exports.sendMonthlyReminder = async (owner, expenseMonth, amount, dueDay) => {
   const html = baseTemplate(`

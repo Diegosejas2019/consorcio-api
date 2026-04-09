@@ -29,4 +29,16 @@ router.get('/me',            protect, ctrl.getMe);
 router.patch('/update-password', protect, ctrl.updatePassword);
 router.patch('/fcm-token',   protect, ctrl.updateFcmToken);
 
+router.post('/forgot-password',
+  [body('email').isEmail().withMessage('Email inválido').normalizeEmail()],
+  validate,
+  ctrl.forgotPassword
+);
+
+router.post('/reset-password/:token',
+  [body('newPassword').isLength({ min: 6 }).withMessage('La contraseña debe tener al menos 6 caracteres')],
+  validate,
+  ctrl.resetPassword
+);
+
 module.exports = router;

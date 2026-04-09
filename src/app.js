@@ -62,8 +62,16 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 5, // máx 5 solicitudes de reset por IP por hora
+  message: { success: false, message: 'Demasiadas solicitudes de restablecimiento. Intentá de nuevo en 1 hora.' },
+  skipSuccessfulRequests: false,
+});
+
 app.use('/api', globalLimiter);
 app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/forgot-password', forgotPasswordLimiter);
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/health', (req, res) => {

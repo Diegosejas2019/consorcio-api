@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt   = require('bcryptjs');
+const crypto   = require('crypto');
 
 const userSchema = new mongoose.Schema(
   {
@@ -69,6 +70,16 @@ const userSchema = new mongoose.Schema(
     },
     lastLogin: Date,
     passwordChangedAt: Date,
+
+    // — Reset de contraseña —
+    passwordResetToken: {
+      type: String,
+      select: false,
+    },
+    passwordResetExpires: {
+      type: Date,
+      select: false,
+    },
   },
   {
     timestamps: true, // createdAt, updatedAt
@@ -110,6 +121,17 @@ userSchema.methods.changedPasswordAfter = function (jwtIssuedAt) {
     return jwtIssuedAt < changedTimestamp;
   }
   return false;
+};
+
+// ── Método: generar token de reset (devuelve el token en texto plano) ──
+userSchema.methods.createPasswordResetToken = function () {
+  const resetToken = crypto.randomBytes(32).toString('hex');
+
+  // Solo se guarda el hash en la DB — el token en texto plano viaja por email
+  this.passwordResetToken   = crypto.createHash('sha256').update(resetToken).digest('hex');
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutos
+
+  return resetToken;
 };
 
 module.exports = mongoose.model('User', userSchema);

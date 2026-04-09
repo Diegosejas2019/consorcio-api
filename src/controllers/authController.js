@@ -1,5 +1,7 @@
+const crypto = require('crypto');
 const User   = require('../models/User');
 const { signToken, sendTokenResponse } = require('../middleware/auth');
+const { sendPasswordReset } = require('../services/emailService');
 const logger = require('../config/logger');
 
 // ── POST /api/auth/login ──────────────────────────────────────
@@ -77,6 +79,84 @@ exports.updatePassword = async (req, res, next) => {
     user.password = newPassword;
     await user.save();
 
+    sendTokenResponse(user, 200, res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/auth/forgot-password ───────────────────────────
+exports.forgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    // Respuesta genérica siempre para no revelar si el email existe
+    const genericResponse = res.json.bind(res, {
+      success: true,
+      message: 'Si ese email está registrado recibirás un enlace en los próximos minutos.',
+    });
+
+    const user = await User.findOne({ email: email?.toLowerCase(), isActive: true });
+    if (!user) {
+      logger.info(`[ForgotPassword] Email no encontrado o inactivo: ${email}`);
+      return genericResponse();
+    }
+
+    const resetToken = user.createPasswordResetToken();
+    await user.save({ validateBeforeSave: false });
+
+    const resetUrl = `${process.env.APP_BASE_URL}/reset-password?token=${resetToken}`;
+
+    try {
+      await sendPasswordReset(user, resetUrl);
+      logger.info(`[ForgotPassword] Email de reset enviado a ${user.email}`);
+    } catch (emailErr) {
+      // Revertir token si el email falla — no dejar tokens huérfanos
+      user.passwordResetToken   = undefined;
+      user.passwordResetExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+      logger.error(`[ForgotPassword] Error enviando email a ${user.email}: ${emailErr.message}`);
+      return next(emailErr);
+    }
+
+    genericResponse();
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/auth/reset-password/:token ─────────────────────
+exports.resetPassword = async (req, res, next) => {
+  try {
+    const { newPassword } = req.body;
+
+    // Hashear el token de la URL para comparar con el de la DB
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(req.params.token)
+      .digest('hex');
+
+    const user = await User.findOne({
+      passwordResetToken:   hashedToken,
+      passwordResetExpires: { $gt: Date.now() },
+    }).select('+passwordResetToken +passwordResetExpires');
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'El enlace de restablecimiento es inválido o ya expiró.',
+      });
+    }
+
+    // Actualizar contraseña y limpiar campos de reset
+    user.password             = newPassword;
+    user.passwordResetToken   = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    logger.info(`[ResetPassword] Contraseña restablecida para ${user.email}`);
+
+    // Loguear automáticamente al usuario con un token nuevo
     sendTokenResponse(user, 200, res);
   } catch (err) {
     next(err);
