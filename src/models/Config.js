@@ -38,6 +38,14 @@ const configSchema = new mongoose.Schema(
       max: 28,
       // Día del mes en que vence la expensa
     },
+    paymentPeriods: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: arr => arr.every(v => /^\d{4}-(0[1-9]|1[0-2])$/.test(v)),
+        message: 'Formato inválido en períodos de pago (YYYY-MM)',
+      },
+    },
 
     // ── Datos del consorcio ───────────────────────────────────
     consortiumName: {
