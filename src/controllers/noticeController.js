@@ -82,7 +82,10 @@ exports.createNotice = async (req, res, next) => {
           const totalFailure = results?.reduce((acc, r) => acc + r.failureCount, 0) ?? 0;
           logger.info(`[Push] Resultado: ${totalSuccess} exitosos, ${totalFailure} fallidos`);
           if (totalSuccess > 0) {
-            await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: new Date() });
+            const now = new Date();
+            await Notice.findByIdAndUpdate(notice._id, { pushSent: true, pushSentAt: now });
+            notice.pushSent = true;
+            notice.pushSentAt = now;
           } else {
             logger.warn(`[Push] Ningún push llegó a destino para aviso ${notice._id}`);
           }
