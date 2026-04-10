@@ -1,6 +1,7 @@
 const User    = require('../models/User');
 const Payment = require('../models/Payment');
 const logger  = require('../config/logger');
+const { sendToUser } = require('../services/firebaseService');
 
 // ── GET /api/owners — listar todos (admin) ────────────────────
 exports.getAllOwners = async (req, res, next) => {
@@ -108,6 +109,23 @@ exports.deleteOwner = async (req, res, next) => {
     if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
     logger.info(`Propietario desactivado: ${owner.email}`);
     res.json({ success: true, message: 'Propietario desactivado correctamente.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/owners/:id/notify — enviar push a un propietario ─
+exports.notifyOwner = async (req, res, next) => {
+  try {
+    const { title, body } = req.body;
+    if (!title || !body) return res.status(400).json({ success: false, message: 'title y body son requeridos.' });
+
+    const owner = await User.findOne({ _id: req.params.id, organization: req.orgId, role: 'owner' });
+    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+
+    await sendToUser(owner._id, { title, body, data: { type: 'admin_message' } });
+    logger.info(`Push enviado a ${owner.email} por admin ${req.user.email}`);
+    res.json({ success: true, message: 'Notificación enviada.' });
   } catch (err) {
     next(err);
   }
