@@ -52,14 +52,18 @@ exports.sendToUser = async (userId, { title, body, data = {} }) => {
 
     const message = {
       token: user.fcmToken,
+      notification: { title, body },
       data: { ...data, title, body, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
-      android: { priority: 'high' },
-      apns:    { payload: { aps: { contentAvailable: true } } },
-      webpush: { headers: { Urgency: 'high' } },
+      android: { priority: 'high', notification: { icon: 'ic_notification', sound: 'default' } },
+      apns:    { payload: { aps: { contentAvailable: true, sound: 'default' } } },
+      webpush: {
+        headers: { Urgency: 'high' },
+        notification: { title, body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' },
+      },
     };
 
     const response = await admin.messaging().send(message);
-    logger.debug(`Push enviado a ${user.email}: ${response}`);
+    logger.warn(`Push enviado a ${user.email}: ${response}`);
     return response;
   } catch (err) {
     // Token inválido → limpiar
