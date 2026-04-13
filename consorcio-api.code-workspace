@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../consorcio-app"
+		},
+		{
+			"path": "../qa-agent"
 		}
 	]
 }
