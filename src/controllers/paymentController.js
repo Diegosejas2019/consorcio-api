@@ -198,13 +198,19 @@ exports.getReceipt = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Este pago no tiene comprobante adjunto.' });
     }
 
+    const mimetype     = payment.receipt.mimetype || 'application/pdf';
+    const isImage      = mimetype.startsWith('image/');
+    const resourceType = isImage ? 'image' : 'raw';
+    const format       = isImage
+      ? (mimetype.split('/')[1] === 'jpeg' ? 'jpg' : mimetype.split('/')[1])
+      : 'pdf';
     const deliveryType = payment.receipt.url.includes('/authenticated/') ? 'authenticated' : 'upload';
 
     const signedUrl = cloudinary.utils.private_download_url(
       payment.receipt.publicId,
-      'pdf',
+      format,
       {
-        resource_type: 'raw',
+        resource_type: resourceType,
         type:          deliveryType,
         expires_at:    Math.floor(Date.now() / 1000) + 120,
       }
@@ -216,9 +222,12 @@ exports.getReceipt = async (req, res, next) => {
       return res.status(502).json({ success: false, message: 'No se pudo obtener el comprobante desde Cloudinary.' });
     }
 
-    const filename = (payment.receipt.filename || 'comprobante.pdf').replace(/"/g, '');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    const fallbackName = `comprobante.${format}`;
+    const filename     = (payment.receipt.filename || fallbackName).replace(/"/g, '');
+    res.setHeader('Content-Type', mimetype);
+    // Imágenes inline (el browser las muestra); PDF fuerza descarga
+    const disposition = isImage ? 'inline' : 'attachment';
+    res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
 
     const contentLength = cloudRes.headers.get('content-length');
     if (contentLength) res.setHeader('Content-Length', contentLength);

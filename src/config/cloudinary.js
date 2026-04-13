@@ -9,24 +9,47 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+const ALLOWED_MIMETYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+]);
+
+const MIME_TO_EXT = {
+  'application/pdf': 'pdf',
+  'image/jpeg':      'jpg',
+  'image/png':       'png',
+  'image/webp':      'webp',
+  'image/heic':      'heic',
+};
+
 // Storage de Cloudinary para multer
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: async (req) => ({
-    folder:          'consorcio/comprobantes',
-    resource_type:   'raw',
-    allowed_formats: ['pdf'],
-    public_id:       `pago_${req.user?.id}_${Date.now()}.pdf`,
-    type:            'upload',
-  }),
+  params: async (req, file) => {
+    const isImage = file.mimetype.startsWith('image/');
+    const ext     = MIME_TO_EXT[file.mimetype] || 'bin';
+    return {
+      folder:          'consorcio/comprobantes',
+      resource_type:   isImage ? 'image' : 'raw',
+      allowed_formats: isImage ? ['jpg', 'jpeg', 'png', 'webp', 'heic'] : ['pdf'],
+      // raw requiere extensión en public_id; image no (Cloudinary la maneja)
+      public_id:       isImage
+        ? `pago_${req.user?.id}_${Date.now()}`
+        : `pago_${req.user?.id}_${Date.now()}.${ext}`,
+      type:            'upload',
+    };
+  },
 });
 
 // Filtro de tipos de archivo
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype === 'application/pdf') {
+  if (ALLOWED_MIMETYPES.has(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Solo se permiten archivos PDF.'), false);
+    cb(new Error('Solo se permiten PDF o imágenes (JPG, PNG, WebP, HEIC).'), false);
   }
 };
 
