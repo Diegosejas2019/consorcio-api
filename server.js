@@ -13,7 +13,7 @@ const start = async () => {
     initScheduler();
 
     const server = app.listen(PORT, () => {
-      logger.info(`ConsorcioPro API corriendo en http://localhost:${PORT} [${process.env.NODE_ENV}]`);
+      logger.info(`GestionAr API corriendo en http://localhost:${PORT} [${process.env.NODE_ENV}]`);
     });
 
     // ── Graceful shutdown ────────────────────────────────────

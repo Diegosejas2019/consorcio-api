@@ -1,7 +1,7 @@
 {
   "name": "consorcio-api",
   "version": "1.0.0",
-  "description": "API REST para ConsorcioPro — gestión de consorcios en barrios privados",
+  "description": "API REST para GestionAr — gestión de consorcios en barrios privados",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

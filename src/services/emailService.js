@@ -19,7 +19,7 @@ const baseTemplate = (content) => `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ConsorcioPro</title>
+  <title>GestionAr</title>
   <style>
     body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f8f9fb; margin: 0; padding: 0; color: #111827; }
     .wrapper { max-width: 580px; margin: 32px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
@@ -40,13 +40,13 @@ const baseTemplate = (content) => `
 <body>
   <div class="wrapper">
     <div class="header">
-      <h1>🏘️ ConsorcioPro</h1>
+      <h1>🏘️ GestionAr</h1>
       <span>Administración de Barrio Privado</span>
     </div>
     <div class="body">${content}</div>
     <div class="footer">
       <p>Este mensaje fue enviado automáticamente. Por favor no respondas este email.</p>
-      <p>© 2025 ConsorcioPro — Todos los derechos reservados.</p>
+      <p>© 2025 GestionAr — Todos los derechos reservados.</p>
     </div>
   </div>
 </body>
@@ -56,7 +56,7 @@ const baseTemplate = (content) => `
 const sendEmail = async ({ to, subject, html }) => {
   try {
     const info = await transporter.sendMail({
-      from:    process.env.EMAIL_FROM || '"ConsorcioPro" <noreply@consorcio.com>',
+      from:    process.env.EMAIL_FROM || '"GestionAr" <noreply@consorcio.com>',
       to,
       subject,
       html,
@@ -86,7 +86,7 @@ exports.sendPaymentApproved = async (owner, payment) => {
   `);
   return sendEmail({
     to:      owner.email,
-    subject: `✓ Pago aprobado — ${payment.monthFormatted} | ConsorcioPro`,
+    subject: `✓ Pago aprobado — ${payment.monthFormatted} | GestionAr`,
     html,
   });
 };
@@ -105,7 +105,7 @@ exports.sendPaymentRejected = async (owner, payment, reason) => {
   `);
   return sendEmail({
     to:      owner.email,
-    subject: `Comprobante rechazado — ${payment.monthFormatted} | ConsorcioPro`,
+    subject: `Comprobante rechazado — ${payment.monthFormatted} | GestionAr`,
     html,
   });
 };
@@ -114,19 +114,19 @@ exports.sendPaymentRejected = async (owner, payment, reason) => {
 exports.sendWelcome = async (owner, tempPassword) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>
-    <p>¡Bienvenido/a a ConsorcioPro! Tu cuenta ha sido creada correctamente.</p>
+    <p>¡Bienvenido/a a GestionAr! Tu cuenta ha sido creada correctamente.</p>
     <div class="highlight">
       <p>Email: ${owner.email}</p>
       <p>Contraseña temporal: <strong>${tempPassword}</strong></p>
       <p>Unidad: ${owner.unit || '—'}</p>
     </div>
     <p>Te recomendamos cambiar tu contraseña al ingresar por primera vez.</p>
-    <a href="${process.env.APP_BASE_URL}" class="btn">Ingresar a ConsorcioPro</a>
+    <a href="${process.env.APP_BASE_URL}" class="btn">Ingresar a GestionAr</a>
     <p style="margin-top:20px">Si tenés problemas para ingresar, contactá al administrador.</p>
   `);
   return sendEmail({
     to:      owner.email,
-    subject: '¡Bienvenido/a a ConsorcioPro! Tu acceso está listo.',
+    subject: '¡Bienvenido/a a GestionAr! Tu acceso está listo.',
     html,
   });
 };
@@ -143,7 +143,7 @@ exports.sendPasswordReset = async (user, resetUrl) => {
   `);
   return sendEmail({
     to:      user.email,
-    subject: 'Restablecé tu contraseña — ConsorcioPro',
+    subject: 'Restablecé tu contraseña — GestionAr',
     html,
   });
 };

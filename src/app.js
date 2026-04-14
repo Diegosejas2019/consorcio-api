@@ -96,7 +96,7 @@ app.use('/api/mercadopago',   require('./routes/mercadopago'));
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
   res.json({
-    name:    'ConsorcioPro API',
+    name:    'GestionAr API',
     version: '1.0.0',
     status:  'online',
     docs:    '/api/docs',
