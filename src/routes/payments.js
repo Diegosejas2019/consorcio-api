@@ -16,4 +16,7 @@ router.delete('/:id',      ctrl.deletePayment);
 router.patch('/:id/approve', restrictTo('admin'), ctrl.approvePayment);
 router.patch('/:id/reject',  restrictTo('admin'), ctrl.rejectPayment);
 
+// Trigger manual de recordatorios (admin)
+router.post('/send-reminders', restrictTo('admin'), ctrl.sendReminders);
+
 module.exports = router;

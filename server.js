@@ -1,7 +1,8 @@
 require('dotenv').config();
-const app       = require('./src/app');
-const connectDB = require('./src/config/db');
-const logger    = require('./src/config/logger');
+const app              = require('./src/app');
+const connectDB        = require('./src/config/db');
+const logger           = require('./src/config/logger');
+const { initScheduler } = require('./src/services/schedulerService');
 
 const PORT = process.env.PORT || 3000;
 
@@ -9,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 const start = async () => {
   try {
     await connectDB();
+    initScheduler();
 
     const server = app.listen(PORT, () => {
       logger.info(`ConsorcioPro API corriendo en http://localhost:${PORT} [${process.env.NODE_ENV}]`);

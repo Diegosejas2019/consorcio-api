@@ -1,8 +1,10 @@
 const Payment       = require('../models/Payment');
 const User          = require('../models/User');
+const Organization  = require('../models/Organization');
 const { cloudinary } = require('../config/cloudinary');
 const emailService  = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
+const { sendDueDateReminders } = require('../services/schedulerService');
 const logger        = require('../config/logger');
 
 // ── GET /api/payments — listar (admin: todos; owner: los suyos) ─
@@ -308,6 +310,20 @@ exports.getDashboard = async (req, res, next) => {
         year,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/payments/send-reminders — trigger manual (admin) ─
+exports.sendReminders = async (req, res, next) => {
+  try {
+    const org = await Organization.findById(req.orgId);
+    if (!org) return res.status(404).json({ success: false, message: 'Organización no encontrada' });
+
+    const result = await sendDueDateReminders(org);
+    logger.info(`[sendReminders] Manual: ${JSON.stringify(result)}`);
+    res.json({ success: true, data: result });
   } catch (err) {
     next(err);
   }
