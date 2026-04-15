@@ -52,14 +52,16 @@ exports.sendToUser = async (userId, { title, body, data = {} }) => {
 
     const message = {
       token: user.fcmToken,
-      // Sin campo "notification" top-level: el SW siempre maneja la visualización
-      // vía onBackgroundMessage (compatible con Android 13+/14 que requiere
-      // POST_NOTIFICATIONS y Chrome moderno que ignora onBackgroundMessage
-      // cuando hay notification payload).
+      // Sin "notification" top-level: Android 14 requiere data-only para que
+      // onBackgroundMessage pueda disparar. webpush.notification es específico
+      // para Chrome/web y no afecta Android.
       data: { ...data, title, body, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
       android: { priority: 'high' },
       apns:    { payload: { aps: { contentAvailable: true } } },
-      webpush: { headers: { Urgency: 'high' } },
+      webpush: {
+        headers:      { Urgency: 'high' },
+        notification: { title, body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' },
+      },
     };
 
     const response = await admin.messaging().send(message);
@@ -104,7 +106,10 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
       data: { ...data, title, body, click_action: 'FLUTTER_NOTIFICATION_CLICK' },
       android: { priority: 'high' },
       apns:    { payload: { aps: { contentAvailable: true } } },
-      webpush: { headers: { Urgency: 'high' } },
+      webpush: {
+        headers:      { Urgency: 'high' },
+        notification: { title, body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' },
+      },
     };
 
     logger.debug(`[Firebase] Chunk ${ci + 1}/${chunks.length}: enviando a ${chunk.length} tokens`);
