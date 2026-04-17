@@ -117,11 +117,21 @@ const organizationSchema = new mongoose.Schema(
         message: 'Formato inválido en períodos de pago (YYYY-MM)',
       },
     },
+    lateFeeType: {
+      type: String,
+      enum: ['percent', 'fixed'],
+      default: 'percent',
+    },
     lateFeePercent: {
       type: Number,
       default: 5,
       min: 0,
       max: 100,
+    },
+    lateFeeFixed: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     dueDayOfMonth: {
       type: Number,

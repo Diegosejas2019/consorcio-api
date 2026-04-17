@@ -1,10 +1,29 @@
 const Organization = require('../models/Organization');
 
+// ── Helpers de recargo ────────────────────────────────────────
+/**
+ * Devuelve true si hoy es posterior al día de vencimiento del período actual.
+ * El recargo aplica a partir del día siguiente al vencimiento.
+ */
+function computeIsOverdue(org) {
+  if (!org.feePeriodCode || !org.dueDayOfMonth) return false;
+  const [year, month] = org.feePeriodCode.split('-').map(Number);
+  const dueDate = new Date(year, month - 1, org.dueDayOfMonth, 23, 59, 59, 999);
+  return new Date() > dueDate;
+}
+
+function computeSurcharge(org) {
+  if (!computeIsOverdue(org)) return 0;
+  if (org.lateFeeType === 'fixed') return org.lateFeeFixed || 0;
+  return Math.round((org.feeAmount || 0) * (org.lateFeePercent || 0) / 100);
+}
+
 /**
  * Mapea los campos de Organization a los nombres que espera el frontend,
  * manteniendo compatibilidad con la API existente.
  */
 function orgToConfigView(org, includePublicKey = false) {
+  const surcharge = computeSurcharge(org);
   const data = {
     _id: org._id,
     // ── Aliases de compatibilidad ──
@@ -12,12 +31,18 @@ function orgToConfigView(org, includePublicKey = false) {
     expenseMonth:     org.feePeriodLabel,
     expenseMonthCode: org.feePeriodCode,
     paymentPeriods:   org.paymentPeriods,
+    lateFeeType:      org.lateFeeType,
     lateFeePercent:   org.lateFeePercent,
+    lateFeeFixed:     org.lateFeeFixed,
     dueDayOfMonth:    org.dueDayOfMonth,
     consortiumName:   org.name,
     consortiumAddress: org.address,
     adminEmail:       org.adminEmail,
     adminPhone:       org.adminPhone,
+    // ── Recargo calculado ──
+    isOverdue:  computeIsOverdue(org),
+    surcharge,
+    totalDue:   (org.feeAmount || 0) + surcharge,
     // ── Nuevos campos ──
     feeLabel:     org.feeLabel,
     memberLabel:  org.memberLabel,
@@ -36,7 +61,9 @@ const FIELD_MAP = {
   expenseMonth:      'feePeriodLabel',
   expenseMonthCode:  'feePeriodCode',
   paymentPeriods:    'paymentPeriods',
+  lateFeeType:       'lateFeeType',
   lateFeePercent:    'lateFeePercent',
+  lateFeeFixed:      'lateFeeFixed',
   dueDayOfMonth:     'dueDayOfMonth',
   consortiumName:    'name',
   consortiumAddress: 'address',
@@ -55,7 +82,6 @@ const FIELD_MAP = {
 // ── GET /api/config ───────────────────────────────────────────
 exports.getConfig = async (req, res, next) => {
   try {
-    // Admin con org poblada en req.org (lo pone protect)
     const org = req.org
       ? await Organization.findById(req.org._id).select('+mpPublicKey')
       : null;
