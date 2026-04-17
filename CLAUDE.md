@@ -58,6 +58,7 @@ Entidad raíz del sistema multi-tenant. Cada organización tiene su propia confi
 Roles: `owner` | `admin` | `superadmin`.
 Campos clave: `unit`, `balance` (negativo = deuda), `isDebtor`, `fcmToken`.
 Password hasheado con bcrypt (12 rounds), nunca devuelto en queries.
+`DELETE /api/owners/:id` es soft-delete: pone `isActive: false`. El propietario deja de aparecer en listados y no puede iniciar sesión, pero su historial de pagos se conserva.
 
 ### Payment
 Estados: `pending` → `approved` | `rejected`.
