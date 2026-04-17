@@ -64,12 +64,15 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const { name, email, password, unit, phone } = req.body;
-    const owner = await User.create({
+    const { name, email, password, unit, phone, balance, isDebtor } = req.body;
+    const ownerData = {
       name, email, password, unit, phone,
       role: 'owner',
       organization: req.orgId,
-    });
+    };
+    if (balance  !== undefined) ownerData.balance  = balance;
+    if (isDebtor !== undefined) ownerData.isDebtor = isDebtor;
+    const owner = await User.create(ownerData);
     logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
     owner.password = undefined;
     res.status(201).json({ success: true, data: { owner } });
