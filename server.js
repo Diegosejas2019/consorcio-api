@@ -1,4 +1,10 @@
 require('dotenv').config();
+const Sentry = require('@sentry/node');
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || 'production',
+  enabled: !!process.env.SENTRY_DSN,
+});
 const app              = require('./src/app');
 const connectDB        = require('./src/config/db');
 const logger           = require('./src/config/logger');

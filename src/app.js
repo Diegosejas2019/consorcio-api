@@ -1,3 +1,4 @@
+const Sentry     = require('@sentry/node');
 const express    = require('express');
 const helmet     = require('helmet');
 const cors       = require('cors');
@@ -111,6 +112,14 @@ app.get('/api', (req, res) => {
       mercadopago:   '/api/mercadopago',
     },
   });
+});
+
+// ── Sentry Error Handler (debe ir antes de notFound y errorHandler) ──
+Sentry.setupExpressErrorHandler(app, {
+  shouldHandleError(error) {
+    // Solo reportar errores inesperados (5xx); ignorar 4xx esperados
+    return !error.statusCode || error.statusCode >= 500;
+  },
 });
 
 // ── 404 y Error Handler ───────────────────────────────────────
