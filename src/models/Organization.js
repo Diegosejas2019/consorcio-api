@@ -108,6 +108,15 @@ const organizationSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    // Períodos habilitados para pago: ["2025-04", "2025-05"]
+    paymentPeriods: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: arr => arr.every(v => /^\d{4}-(0[1-9]|1[0-2])$/.test(v)),
+        message: 'Formato inválido en períodos de pago (YYYY-MM)',
+      },
+    },
     lateFeePercent: {
       type: Number,
       default: 5,
