@@ -120,7 +120,8 @@ exports.approvePayment = async (req, res, next) => {
       .populate('owner', 'name email unit fcmToken');
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
     if (payment.status !== 'pending') {
-      return res.status(400).json({ success: false, message: `El pago ya fue ${payment.status}.` });
+      const statusLabel = { approved: 'aprobado', rejected: 'rechazado' }[payment.status] ?? payment.status;
+      return res.status(400).json({ success: false, message: `El pago ya fue ${statusLabel}.` });
     }
 
     payment.status      = 'approved';
@@ -162,7 +163,8 @@ exports.rejectPayment = async (req, res, next) => {
       .populate('owner', 'name email unit fcmToken');
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
     if (payment.status !== 'pending') {
-      return res.status(400).json({ success: false, message: `El pago ya fue ${payment.status}.` });
+      const statusLabel = { approved: 'aprobado', rejected: 'rechazado' }[payment.status] ?? payment.status;
+      return res.status(400).json({ success: false, message: `El pago ya fue ${statusLabel}.` });
     }
 
     payment.status        = 'rejected';

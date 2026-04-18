@@ -9,7 +9,7 @@ const errorHandler = (err, req, res, next) => {
 
   // ── Mongoose: ID inválido ─────────────────────────────────
   if (err.name === 'CastError') {
-    error = { message: `ID inválido: ${err.value}`, statusCode: 400 };
+    error = { message: 'El identificador proporcionado no es válido.', statusCode: 400 };
   }
 
   // ── Mongoose: campo duplicado (código 11000) ──────────────
@@ -53,7 +53,7 @@ const errorHandler = (err, req, res, next) => {
 
 // ── 404 Not Found ─────────────────────────────────────────────
 const notFound = (req, res, next) => {
-  const err = new Error(`Ruta no encontrada: ${req.originalUrl}`);
+  const err = new Error('El recurso solicitado no existe.');
   err.statusCode = 404;
   next(err);
 };
