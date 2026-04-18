@@ -1,6 +1,18 @@
 const router = require('express').Router();
+const multer = require('multer');
 const ctrl   = require('../controllers/ownerController');
 const { protect, restrictTo } = require('../middleware/auth');
+
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    const ok = file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      || file.originalname.endsWith('.xlsx');
+    if (ok) cb(null, true);
+    else cb(new Error('Solo se permiten archivos Excel (.xlsx).'), false);
+  },
+});
 
 // Todas las rutas requieren auth
 router.use(protect);
@@ -8,6 +20,7 @@ router.use(protect);
 router.get('/stats', restrictTo('admin'), ctrl.getStats);
 router.get('/',      restrictTo('admin'), ctrl.getAllOwners);
 router.post('/',     restrictTo('admin'), ctrl.createOwner);
+router.post('/bulk', restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), ctrl.updateOwner);

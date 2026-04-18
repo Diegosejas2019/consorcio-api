@@ -2,6 +2,7 @@ const User    = require('../models/User');
 const Payment = require('../models/Payment');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
+const XLSX    = require('xlsx');
 
 // ── GET /api/owners — listar todos (admin) ────────────────────
 exports.getAllOwners = async (req, res, next) => {
@@ -124,6 +125,79 @@ exports.notifyOwner = async (req, res, next) => {
     await sendToUser(owner._id, { title, body, data: { type: 'admin_message' } });
     logger.info(`Push enviado a ${owner.email} por admin ${req.user.email}`);
     res.json({ success: true, message: 'Notificación enviada.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/owners/bulk — carga masiva desde Excel (admin) ──
+exports.bulkCreateOwners = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Se requiere un archivo Excel (.xlsx).' });
+    }
+
+    let workbook;
+    try {
+      workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    } catch {
+      return res.status(400).json({ success: false, message: 'El archivo no es un Excel válido.' });
+    }
+
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: 'El archivo está vacío o no tiene filas de datos.' });
+    }
+
+    const ALLOWED = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'];
+    const created = [];
+    const errors  = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row    = rows[i];
+      const rowNum = i + 2; // fila Excel (1 = encabezados)
+
+      const ownerData = { role: 'owner', organization: req.orgId };
+      ALLOWED.forEach((f) => {
+        if (row[f] !== undefined && row[f] !== '') ownerData[f] = row[f];
+      });
+
+      // Convertir tipos
+      if (ownerData.balance !== undefined) ownerData.balance = Number(ownerData.balance);
+      if (ownerData.isDebtor !== undefined) {
+        const v = String(ownerData.isDebtor).toLowerCase();
+        ownerData.isDebtor = v === 'true' || v === '1' || v === 'si' || v === 'sí';
+      }
+
+      if (!ownerData.name || !ownerData.email || !ownerData.password) {
+        errors.push({ row: rowNum, email: ownerData.email || '', reason: 'name, email y password son obligatorios.' });
+        continue;
+      }
+
+      try {
+        const owner = await User.create(ownerData);
+        logger.info(`Bulk: propietario creado ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+        owner.password = undefined;
+        created.push(owner);
+      } catch (err) {
+        let reason = 'Error al crear el propietario.';
+        if (err.code === 11000) reason = 'El email ya está registrado.';
+        else if (err.name === 'ValidationError') reason = Object.values(err.errors).map((e) => e.message).join(' ');
+        errors.push({ row: rowNum, email: ownerData.email || '', reason });
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        created: created.length,
+        errors:  errors.length,
+        owners:  created,
+        failed:  errors,
+      },
+    });
   } catch (err) {
     next(err);
   }
