@@ -93,6 +93,8 @@ app.use('/api/notices',       require('./routes/notices'));
 app.use('/api/claims',        require('./routes/claims'));
 app.use('/api/config',        require('./routes/config'));
 app.use('/api/mercadopago',   require('./routes/mercadopago'));
+app.use('/api/providers',     require('./routes/providers'));
+app.use('/api/expenses',      require('./routes/expenses'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
@@ -110,6 +112,8 @@ app.get('/api', (req, res) => {
       claims:        '/api/claims',
       config:        '/api/config',
       mercadopago:   '/api/mercadopago',
+      providers:     '/api/providers',
+      expenses:      '/api/expenses',
     },
   });
 });

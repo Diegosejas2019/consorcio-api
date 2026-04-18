@@ -1,0 +1,60 @@
+const mongoose = require('mongoose');
+
+const expenseSchema = new mongoose.Schema(
+  {
+    organization: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: [true, 'La organización es obligatoria'],
+      index: true,
+    },
+    description: {
+      type: String,
+      required: [true, 'La descripción es obligatoria'],
+      trim: true,
+    },
+    category: {
+      type: String,
+      enum: ['cleaning', 'security', 'maintenance', 'utilities', 'administration', 'other'],
+      required: [true, 'La categoría es obligatoria'],
+    },
+    amount: {
+      type: Number,
+      required: [true, 'El importe es obligatorio'],
+      min: [0.01, 'El importe debe ser mayor a 0'],
+    },
+    date: {
+      type: Date,
+      required: [true, 'La fecha es obligatoria'],
+    },
+    provider: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Provider',
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'paid'],
+      default: 'pending',
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['cash', 'transfer', 'mercadopago'],
+    },
+    receipt: {
+      url:      { type: String },
+      publicId: { type: String },
+      _id: false,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+  },
+  { timestamps: true }
+);
+
+expenseSchema.index({ organization: 1, date: -1 });
+expenseSchema.index({ organization: 1, status: 1 });
+
+module.exports = mongoose.model('Expense', expenseSchema);

@@ -1,4 +1,5 @@
 const Payment       = require('../models/Payment');
+const Expense       = require('../models/Expense');
 const User          = require('../models/User');
 const Organization  = require('../models/Organization');
 const { cloudinary } = require('../config/cloudinary');
@@ -276,7 +277,10 @@ exports.getDashboard = async (req, res, next) => {
     const endMonth   = `${year}-12`;
     const orgFilter  = { organization: req.orgId };
 
-    const [monthly, byStatus] = await Promise.all([
+    const yearStart = new Date(`${year}-01-01`);
+    const yearEnd   = new Date(`${year}-12-31T23:59:59.999Z`);
+
+    const [monthly, byStatus, expensesAgg] = await Promise.all([
       Payment.aggregate([
         { $match: { ...orgFilter, month: { $gte: startMonth, $lte: endMonth } } },
         { $group: { _id: { month: '$month', status: '$status' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
@@ -285,6 +289,10 @@ exports.getDashboard = async (req, res, next) => {
       Payment.aggregate([
         { $match: orgFilter },
         { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      Expense.aggregate([
+        { $match: { ...orgFilter, status: 'paid', date: { $gte: yearStart, $lte: yearEnd } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
     ]);
 
@@ -300,13 +308,18 @@ exports.getDashboard = async (req, res, next) => {
     const statusMap = {};
     byStatus.forEach(s => { statusMap[s._id] = s.count; });
 
+    const totalExpenses = expensesAgg[0]?.total || 0;
+    const totalYear     = monthlyArr.reduce((sum, m) => sum + m.total, 0);
+
     res.json({
       success: true,
       data: {
-        monthly:  monthlyArr,
-        pending:  statusMap.pending  || 0,
-        approved: statusMap.approved || 0,
-        rejected: statusMap.rejected || 0,
+        monthly:       monthlyArr,
+        pending:       statusMap.pending  || 0,
+        approved:      statusMap.approved || 0,
+        rejected:      statusMap.rejected || 0,
+        totalExpenses,
+        balance:       totalYear - totalExpenses,
         year,
       },
     });
