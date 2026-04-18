@@ -1,8 +1,12 @@
 const router = require('express').Router();
 const ctrl   = require('../controllers/expenseController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { upload } = require('../config/cloudinary');
 
+// Accesible a todos los usuarios autenticados con organización
+router.get('/summary', protect, requireOrg, ctrl.getExpensesSummary);
+
+// El resto solo para admin
 router.use(protect, restrictTo('admin'));
 
 router.get('/',              ctrl.getExpenses);

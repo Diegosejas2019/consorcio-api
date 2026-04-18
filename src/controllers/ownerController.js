@@ -134,9 +134,9 @@ exports.notifyOwner = async (req, res, next) => {
 exports.downloadBulkTemplate = (_req, res) => {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([
-    ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'],
-    ['María García', 'maria@mail.com', 'clave123', 'Lote 12', '1122334455', '0', 'false'],
-    ['Juan Pérez',   'juan@mail.com',  'clave456', 'Casa 5A', '',           '0', 'false'],
+    ['nombre', 'email', 'contraseña', 'unidad', 'telefono', 'saldo', 'moroso'],
+    ['María García', 'maria@mail.com', 'clave123', 'Lote 12', '1122334455', '0', 'no'],
+    ['Juan Pérez',   'juan@mail.com',  'clave456', 'Casa 5A', '',           '0', 'no'],
   ]);
   XLSX.utils.book_append_sheet(wb, ws, 'Propietarios');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -166,7 +166,19 @@ exports.bulkCreateOwners = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'El archivo está vacío o no tiene filas de datos.' });
     }
 
-    const ALLOWED = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'];
+    // Mapeo columnas español → campo del modelo
+    const COL_MAP = {
+      nombre:     'name',
+      email:      'email',
+      'contraseña': 'password',
+      unidad:     'unit',
+      telefono:   'phone',
+      saldo:      'balance',
+      moroso:     'isDebtor',
+      // también aceptar inglés por compatibilidad
+      name: 'name', password: 'password', unit: 'unit', phone: 'phone',
+      balance: 'balance', isDebtor: 'isDebtor',
+    };
     const created = [];
     const errors  = [];
 
@@ -175,8 +187,9 @@ exports.bulkCreateOwners = async (req, res, next) => {
       const rowNum = i + 2; // fila Excel (1 = encabezados)
 
       const ownerData = { role: 'owner', organization: req.orgId };
-      ALLOWED.forEach((f) => {
-        if (row[f] !== undefined && row[f] !== '') ownerData[f] = row[f];
+      Object.entries(row).forEach(([col, val]) => {
+        const field = COL_MAP[col.trim().toLowerCase()] || COL_MAP[col.trim()];
+        if (field && val !== undefined && val !== '') ownerData[field] = val;
       });
 
       // Convertir tipos

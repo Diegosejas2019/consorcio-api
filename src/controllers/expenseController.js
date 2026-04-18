@@ -3,6 +3,43 @@ const Provider = require('../models/Provider');
 const logger   = require('../config/logger');
 const { cloudinary } = require('../config/cloudinary');
 
+const CATEGORY_LABELS = {
+  cleaning:       'Limpieza',
+  security:       'Seguridad',
+  maintenance:    'Mantenimiento',
+  utilities:      'Servicios',
+  administration: 'Administración',
+  other:          'Otros',
+};
+
+// ── GET /api/expenses/summary — resumen por categoría (owners y admin) ──
+exports.getExpensesSummary = async (req, res, next) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7); // YYYY-MM
+    const from  = new Date(`${month}-01T00:00:00.000Z`);
+    const to    = new Date(from);
+    to.setMonth(to.getMonth() + 1);
+
+    const agg = await Expense.aggregate([
+      { $match: { organization: req.orgId, date: { $gte: from, $lt: to } } },
+      { $group: { _id: '$category', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+      { $sort: { amount: -1 } },
+    ]);
+
+    const total = agg.reduce((s, c) => s + c.amount, 0);
+    const categories = agg.map(c => ({
+      category: c._id,
+      label:    CATEGORY_LABELS[c._id] || c._id,
+      amount:   c.amount,
+      count:    c.count,
+    }));
+
+    res.json({ success: true, data: { month, total, categories } });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── GET /api/expenses ─────────────────────────────────────────
 exports.getExpenses = async (req, res, next) => {
   try {
