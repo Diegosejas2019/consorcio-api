@@ -130,6 +130,21 @@ exports.notifyOwner = async (req, res, next) => {
   }
 };
 
+// ── GET /api/owners/bulk/template — descargar plantilla Excel ─
+exports.downloadBulkTemplate = (_req, res) => {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'],
+    ['María García', 'maria@mail.com', 'clave123', 'Lote 12', '1122334455', '0', 'false'],
+    ['Juan Pérez',   'juan@mail.com',  'clave456', 'Casa 5A', '',           '0', 'false'],
+  ]);
+  XLSX.utils.book_append_sheet(wb, ws, 'Propietarios');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Disposition', 'attachment; filename="plantilla_propietarios.xlsx"');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.send(buf);
+};
+
 // ── POST /api/owners/bulk — carga masiva desde Excel (admin) ──
 exports.bulkCreateOwners = async (req, res, next) => {
   try {

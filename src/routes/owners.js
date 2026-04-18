@@ -20,7 +20,8 @@ router.use(protect);
 router.get('/stats', restrictTo('admin'), ctrl.getStats);
 router.get('/',      restrictTo('admin'), ctrl.getAllOwners);
 router.post('/',     restrictTo('admin'), ctrl.createOwner);
-router.post('/bulk', restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
+router.get('/bulk/template', restrictTo('admin'), ctrl.downloadBulkTemplate);
+router.post('/bulk',          restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), ctrl.updateOwner);
