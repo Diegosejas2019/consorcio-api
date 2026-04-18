@@ -64,14 +64,9 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const { name, email, password, unit, phone, balance, isDebtor } = req.body;
-    const ownerData = {
-      name, email, password, unit, phone,
-      role: 'owner',
-      organization: req.orgId,
-    };
-    if (balance  !== undefined) ownerData.balance  = balance;
-    if (isDebtor !== undefined) ownerData.isDebtor = isDebtor;
+    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'];
+    const ownerData = { role: 'owner', organization: req.orgId };
+    allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
     const owner = await User.create(ownerData);
     logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
     owner.password = undefined;
