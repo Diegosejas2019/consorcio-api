@@ -30,7 +30,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-internal-key'],
 }));
 
 // ── Body parsers ──────────────────────────────────────────────
@@ -70,6 +70,7 @@ const forgotPasswordLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+app.use('/api/internal', require('./routes/internal'));
 app.use('/api', globalLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/forgot-password', forgotPasswordLimiter);
