@@ -26,15 +26,30 @@ exports.getAllOwners = async (req, res, next) => {
       User.countDocuments(filter),
     ]);
 
-    // Enriquecer con último pago aprobado
-    const enriched = await Promise.all(
-      owners.map(async (owner) => {
-        const lastPayment = await Payment.findOne({ owner: owner._id, status: 'approved' })
-          .sort({ createdAt: -1 })
-          .select('month amount createdAt');
-        return { ...owner.toJSON(), lastPayment };
-      })
-    );
+    // Enriquecer con último pago aprobado — una sola query para todos los propietarios
+    const ownerIds = owners.map((o) => o._id);
+    const lastPayments = await Payment.aggregate([
+      { $match: { owner: { $in: ownerIds }, status: 'approved' } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: '$owner',
+          month:     { $first: '$month' },
+          amount:    { $first: '$amount' },
+          createdAt: { $first: '$createdAt' },
+        },
+      },
+    ]);
+
+    const lastPaymentByOwner = lastPayments.reduce((map, p) => {
+      map[p._id.toString()] = { month: p.month, amount: p.amount, createdAt: p.createdAt };
+      return map;
+    }, {});
+
+    const enriched = owners.map((owner) => ({
+      ...owner.toJSON(),
+      lastPayment: lastPaymentByOwner[owner._id.toString()] ?? null,
+    }));
 
     res.json({
       success: true,
