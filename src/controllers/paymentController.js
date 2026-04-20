@@ -62,10 +62,17 @@ exports.getPayment = async (req, res, next) => {
 // ── POST /api/payments — subir comprobante ────────────────────
 exports.createPayment = async (req, res, next) => {
   try {
-    const { month, amount, ownerNote } = req.body;
+    const { month, ownerNote } = req.body;
+    let { amount } = req.body;
     const ownerId = req.user.role === 'owner' ? req.user._id : req.body.ownerId;
 
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
+
+    // Si no viene amount, usar monthlyFee de la organización como valor por defecto
+    if (amount === undefined || amount === null || amount === '') {
+      const org = await Organization.findById(req.orgId).select('monthlyFee');
+      amount = org?.monthlyFee ?? 0;
+    }
 
     const existing = await Payment.findOne({
       organization: req.orgId,

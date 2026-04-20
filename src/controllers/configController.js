@@ -15,7 +15,8 @@ function computeIsOverdue(org) {
 function computeSurcharge(org) {
   if (!computeIsOverdue(org)) return 0;
   if (org.lateFeeType === 'fixed') return org.lateFeeFixed || 0;
-  return Math.round((org.feeAmount || 0) * (org.lateFeePercent || 0) / 100);
+  const base = org.monthlyFee || org.feeAmount || 0;
+  return Math.round(base * (org.lateFeePercent || 0) / 100);
 }
 
 /**
@@ -26,6 +27,8 @@ function orgToConfigView(org, includePublicKey = false) {
   const surcharge = computeSurcharge(org);
   const data = {
     _id: org._id,
+    // ── Monto mensual ──
+    monthlyFee:       org.monthlyFee || 0,
     // ── Aliases de compatibilidad ──
     expenseAmount:    org.feeAmount,
     expenseMonth:     org.feePeriodLabel,
@@ -42,7 +45,7 @@ function orgToConfigView(org, includePublicKey = false) {
     // ── Recargo calculado ──
     isOverdue:  computeIsOverdue(org),
     surcharge,
-    totalDue:   (org.feeAmount || 0) + surcharge,
+    totalDue:   (org.monthlyFee || org.feeAmount || 0) + surcharge,
     // ── Nuevos campos ──
     feeLabel:     org.feeLabel,
     memberLabel:  org.memberLabel,
@@ -73,9 +76,10 @@ const FIELD_MAP = {
   mpAccessToken:     'mpAccessToken',
   mpWebhookSecret:   'mpWebhookSecret',
   // Nuevos campos (nombre directo)
-  feeLabel:    'feeLabel',
-  memberLabel: 'memberLabel',
-  unitLabel:   'unitLabel',
+  monthlyFee:   'monthlyFee',
+  feeLabel:     'feeLabel',
+  memberLabel:  'memberLabel',
+  unitLabel:    'unitLabel',
   businessType: 'businessType',
 };
 

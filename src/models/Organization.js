@@ -91,6 +91,12 @@ const organizationSchema = new mongoose.Schema(
     },
 
     // ── Configuración de cobros ───────────────────────────────────
+    // Monto mensual por defecto (se usa como importe base en pagos)
+    monthlyFee: {
+      type: Number,
+      default: 0,
+      min: [0, 'El monto mensual no puede ser negativo'],
+    },
     feeAmount: {
       type: Number,
       default: 0,
