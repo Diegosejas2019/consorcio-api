@@ -98,6 +98,16 @@ Soft-delete: `active: false`.
 ### Config
 Legado — singleton global. Usar `Organization` para configuración por organización.
 
+### Vote
+Votaciones creadas por el admin para los propietarios.
+Campos: `title`, `description`, `options[]` (label + votes), `status` (`open` | `closed`), `endsAt` (fecha límite opcional), `createdBy`, `closedBy`, `closedAt`, `pushSent`, `pushSentAt`.
+Mínimo 2 opciones. Las opciones no se pueden modificar una vez que hay votos registrados.
+Virtual: `totalVotes`, `statusLabel`.
+
+### VoteResponse
+Registro del voto de cada propietario. Índice único `{ vote, owner }` para garantizar un voto por persona.
+Campos: `vote`, `organization`, `owner`, `optionIndex`.
+
 ## Endpoints
 
 | Método | Ruta | Acceso |
@@ -148,6 +158,14 @@ Legado — singleton global. Usar `Organization` para configuración por organiz
 | DELETE | `/api/providers/:id` | admin |
 | GET | `/api/reports/monthly-summary` | admin |
 | GET/PATCH | `/api/config` | admin |
+| GET | `/api/votes` | autenticado |
+| POST | `/api/votes` | admin |
+| GET | `/api/votes/:id` | autenticado |
+| PATCH | `/api/votes/:id` | admin |
+| PATCH | `/api/votes/:id/close` | admin |
+| DELETE | `/api/votes/:id` | admin |
+| POST | `/api/votes/:id/cast` | owner |
+| GET | `/api/votes/:id/results` | admin |
 | POST | `/api/mercadopago/preference` | autenticado |
 | POST | `/api/mercadopago/webhook` | público (MP) |
 | GET | `/api/mercadopago/payment/:mpPaymentId` | autenticado |

@@ -96,6 +96,7 @@ app.use('/api/mercadopago',   require('./routes/mercadopago'));
 app.use('/api/providers',     require('./routes/providers'));
 app.use('/api/expenses',      require('./routes/expenses'));
 app.use('/api/reports',       require('./routes/reports'));
+app.use('/api/votes',         require('./routes/votes'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
