@@ -40,7 +40,7 @@ src/
     errorHandler.js     # handler global + 404
     validate.js         # wrapper de express-validator
   models/               # esquemas Mongoose
-  routes/               # definición de endpoints
+  routes/               # definición de endpoints (incluye internal.js para rutas internas)
   services/
     emailService.js     # envío de emails (Nodemailer SMTP) con templates HTML
     firebaseService.js  # push notifications FCM (sendToUser, sendMulticast)
@@ -55,6 +55,7 @@ Entidad raíz del sistema multi-tenant. Cada organización tiene su propia confi
 - Templates predefinidos con terminología específica (`feeLabel`, `memberLabel`, `unitLabel`)
 - Configuración de mora: `lateFeeType` (`percent` | `fixed`), `lateFeePercent`, `lateFeeFixed`
 - `dueDayOfMonth`: día de vencimiento (1–28)
+- `monthlyFee`: monto mensual por defecto (usado al crear preferencias MP y en reportes)
 - `paymentPeriods`: array de períodos habilitados para pago (formato `YYYY-MM`)
 - Credenciales MercadoPago propias con `select: false`
 - `slug` único (auto-generado desde el nombre)
@@ -128,6 +129,8 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | GET | `/api/owners` | admin |
 | GET | `/api/owners/stats` | admin |
 | POST | `/api/owners` | admin |
+| GET | `/api/owners/bulk/template` | admin |
+| POST | `/api/owners/bulk` | admin (Excel .xlsx, máx 5 MB) |
 | GET/PATCH/DELETE | `/api/owners/:id` | admin (o propio owner) |
 | POST | `/api/owners/:id/notify` | admin |
 | GET | `/api/payments` | autenticado (owner: los suyos) |
@@ -147,6 +150,7 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | POST | `/api/claims` | owner |
 | PATCH | `/api/claims/:id/status` | admin |
 | DELETE | `/api/claims/:id` | admin |
+| GET | `/api/expenses/summary` | autenticado (owner y admin) |
 | GET | `/api/expenses` | admin |
 | POST | `/api/expenses` | admin (con upload comprobante) |
 | PATCH | `/api/expenses/:id` | admin |
@@ -170,6 +174,7 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | POST | `/api/mercadopago/webhook` | público (MP) |
 | GET | `/api/mercadopago/payment/:mpPaymentId` | autenticado |
 | GET | `/health` | público |
+| POST | `/api/internal/create-organization` | interno (`x-internal-key` header) |
 
 ## Autenticación y roles
 
@@ -219,6 +224,7 @@ APP_BASE_URL                         # para construir notification_url del webho
 FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY
 SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM
 ALLOWED_ORIGINS
+INTERNAL_API_KEY                     # para el endpoint POST /api/internal/create-organization
 SENTRY_DSN                           # opcional
 ```
 
