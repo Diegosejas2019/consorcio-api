@@ -1,15 +1,48 @@
 const nodemailer = require('nodemailer');
 const logger     = require('../config/logger');
 
-// ── Crear transporter ─────────────────────────────────────────
+// ── Configuración SMTP ────────────────────────────────────────
+const SMTP_HOST            = process.env.SMTP_HOST;
+const SMTP_PORT            = Number(process.env.SMTP_PORT) || 587;
+const SMTP_SECURE          = process.env.SMTP_PORT === '465';
+const CONNECTION_TIMEOUT   = 30_000;   // 30 s — evita timeout en Gmail SMTP
+const SOCKET_TIMEOUT       = 30_000;   // 30 s — tiempo máximo de inactividad
+const MAX_RETRIES          = 3;        // reintentos automáticos ante fallo
+const RETRY_BASE_DELAY_MS  = 2_000;   // backoff exponencial: 2 s, 4 s, 8 s
+
+// ── Crear transporter con pool de conexiones ──────────────────
 const transporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST,
-  port:   Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_PORT === '465',
+  host:              SMTP_HOST,
+  port:              SMTP_PORT,
+  secure:            SMTP_SECURE,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  // Pool de conexiones: reutiliza sockets en lugar de abrir uno por email
+  pool:              true,
+  maxConnections:    5,
+  maxMessages:       100,
+  // Timeouts extendidos para tolerar latencia de Gmail SMTP
+  connectionTimeout: CONNECTION_TIMEOUT,
+  socketTimeout:     SOCKET_TIMEOUT,
+  greetingTimeout:   CONNECTION_TIMEOUT,
+  logger:            false,   // desactivado; usamos winston directamente
+  debug:             false,
+});
+
+// Verificar conectividad al iniciar (no bloquea el arranque)
+transporter.verify((err) => {
+  if (err) {
+    logger.warn('SMTP verify falló al iniciar — se reintentará en cada envío', {
+      host:    SMTP_HOST,
+      port:    SMTP_PORT,
+      secure:  SMTP_SECURE,
+      error:   err.message,
+    });
+  } else {
+    logger.info('SMTP listo', { host: SMTP_HOST, port: SMTP_PORT });
+  }
 });
 
 // ── Template base HTML ────────────────────────────────────────
@@ -52,21 +85,88 @@ const baseTemplate = (content) => `
 </body>
 </html>`;
 
-// ── Función genérica para enviar email ────────────────────────
+// ── Helpers internos ──────────────────────────────────────────
+
+/** Espera `ms` milisegundos (usado en el backoff entre reintentos). */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Determina si un error de nodemailer es transitorio y vale la pena reintentar.
+ * Errores de autenticación o dirección inválida no se reintentan.
+ */
+const isRetryable = (err) => {
+  const transientCodes = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ESOCKET', 'ENOTFOUND'];
+  if (transientCodes.includes(err.code)) return true;
+  // nodemailer expone responseCode para errores SMTP 4xx (temporales)
+  if (err.responseCode && err.responseCode >= 400 && err.responseCode < 500) return true;
+  return false;
+};
+
+// ── Función genérica para enviar email (con reintentos) ───────
 const sendEmail = async ({ to, subject, html }) => {
-  try {
-    const info = await transporter.sendMail({
-      from:    process.env.EMAIL_FROM || '"GestionAr" <noreply@consorcio.com>',
-      to,
-      subject,
-      html,
-    });
-    logger.info(`Email enviado: ${subject} → ${to} [${info.messageId}]`);
-    return info;
-  } catch (err) {
-    logger.error(`Error enviando email a ${to}: ${err.message}`);
-    throw err;
+  let lastErr;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      logger.info('Enviando email', { to, subject, attempt, maxRetries: MAX_RETRIES });
+
+      const info = await transporter.sendMail({
+        from:    process.env.EMAIL_FROM || '"GestionAr" <noreply@consorcio.com>',
+        to,
+        subject,
+        html,
+      });
+
+      logger.info('Email enviado correctamente', {
+        to,
+        subject,
+        messageId: info.messageId,
+        attempt,
+      });
+      return info;
+
+    } catch (err) {
+      lastErr = err;
+
+      logger.warn('Fallo al enviar email', {
+        to,
+        subject,
+        attempt,
+        maxRetries:    MAX_RETRIES,
+        errorCode:     err.code,
+        errorMessage:  err.message,
+        responseCode:  err.responseCode,
+        command:       err.command,
+      });
+
+      // Si el error no es transitorio, no tiene sentido reintentar
+      if (!isRetryable(err)) {
+        logger.error('Error no transitorio — se cancela el reintento', {
+          to,
+          subject,
+          errorCode:    err.code,
+          errorMessage: err.message,
+        });
+        break;
+      }
+
+      // Si quedan intentos, esperar con backoff exponencial antes del siguiente
+      if (attempt < MAX_RETRIES) {
+        const delay = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        logger.info(`Reintentando en ${delay / 1000}s…`, { to, subject, nextAttempt: attempt + 1 });
+        await sleep(delay);
+      }
+    }
   }
+
+  logger.error('Email no pudo ser enviado tras todos los intentos', {
+    to,
+    subject,
+    totalAttempts: MAX_RETRIES,
+    finalError:    lastErr?.message,
+    errorCode:     lastErr?.code,
+  });
+  throw lastErr;
 };
 
 // ── Templates específicos ─────────────────────────────────────
