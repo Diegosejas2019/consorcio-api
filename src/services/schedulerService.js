@@ -3,6 +3,7 @@ const Organization = require('../models/Organization');
 const Payment      = require('../models/Payment');
 const User         = require('../models/User');
 const firebase     = require('./firebaseService');
+const emailService = require('./emailService');
 const logger       = require('../config/logger');
 
 // ── Lógica central — reutilizable por cron y endpoint manual ─
@@ -34,15 +35,29 @@ async function sendDueDateReminders(org) {
   if (tokens.length === 0) return { sent: 0, noToken: unpaid.length };
 
   const feeLabel = org.feeLabel || 'Expensa';
-  const amount   = org.feeAmount?.toLocaleString('es-AR') ?? '0';
+  const amount   = org.monthlyFee ?? 0;
+  const amountFormatted = amount.toLocaleString('es-AR');
 
   await firebase.sendMulticast(tokens, {
     title: `Vencimiento de ${feeLabel}`,
-    body:  `Tu ${feeLabel} de $${amount} vence hoy. Podés pagar desde la app.`,
+    body:  `Tu ${feeLabel} de $${amountFormatted} vence hoy. Podés pagar desde la app.`,
     data:  { type: 'due_date_reminder', month },
   });
 
-  return { sent: tokens.length, noToken: unpaid.length - tokens.length };
+  // Enviar email de recordatorio a cada propietario sin pago
+  const emailResults = await Promise.allSettled(
+    unpaid.map((owner) =>
+      emailService.sendMonthlyReminder(owner, month, amount, org.dueDayOfMonth)
+    )
+  );
+  const emailSent  = emailResults.filter((r) => r.status === 'fulfilled').length;
+  const emailFailed = emailResults.filter((r) => r.status === 'rejected').length;
+  if (emailFailed > 0) {
+    logger.warn(`[Scheduler] Org ${org._id}: ${emailFailed} email(s) de recordatorio fallaron`);
+  }
+  logger.info(`[Scheduler] Org ${org._id}: ${emailSent} email(s) de recordatorio enviados`);
+
+  return { sent: tokens.length, noToken: unpaid.length - tokens.length, emailSent, emailFailed };
 }
 
 // ── Cron: diario a las 09:00 UTC ─────────────────────────────

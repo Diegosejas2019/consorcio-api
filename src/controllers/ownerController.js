@@ -2,6 +2,7 @@ const User    = require('../models/User');
 const Payment = require('../models/Payment');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
+const { sendWelcome } = require('../services/emailService');
 const XLSX    = require('xlsx');
 
 // ── GET /api/owners — listar todos (admin) ────────────────────
@@ -83,9 +84,15 @@ exports.createOwner = async (req, res, next) => {
     const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'];
     const ownerData = { role: 'owner', organization: req.orgId };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
+    const tempPassword = req.body.password;
     const owner = await User.create(ownerData);
     logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
     owner.password = undefined;
+
+    sendWelcome(owner, tempPassword).catch((err) =>
+      logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
+    );
+
     res.status(201).json({ success: true, data: { owner } });
   } catch (err) {
     next(err);
@@ -220,10 +227,15 @@ exports.bulkCreateOwners = async (req, res, next) => {
       }
 
       try {
+        const rawPassword = ownerData.password;
         const owner = await User.create(ownerData);
         logger.info(`Bulk: propietario creado ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
         owner.password = undefined;
         created.push(owner);
+
+        sendWelcome(owner, rawPassword).catch((err) =>
+          logger.error(`Bulk: error enviando email de bienvenida a ${owner.email}: ${err.message}`)
+        );
       } catch (err) {
         let reason = 'Error al crear el propietario.';
         if (err.code === 11000) reason = 'El email ya está registrado.';
