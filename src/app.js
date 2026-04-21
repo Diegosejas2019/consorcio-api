@@ -99,6 +99,8 @@ app.use('/api/expenses',      require('./routes/expenses'));
 app.use('/api/reports',       require('./routes/reports'));
 app.use('/api/votes',         require('./routes/votes'));
 app.use('/api/visits',        require('./routes/visits'));
+app.use('/api/spaces',        require('./routes/spaces'));
+app.use('/api/reservations',  require('./routes/reservations'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
