@@ -323,6 +323,27 @@ exports.sendPasswordReset = async (user, resetUrl) => {
   });
 };
 
+exports.sendReceiptEmail = async (owner, payment, receiptUrl) => {
+  const html = baseTemplate(`
+    <p>Hola <strong>${owner.name}</strong>,</p>
+    <p>Tu pago fue <span class="badge-success">✓ Acreditado</span> y tu recibo ya está disponible.</p>
+    <div class="highlight">
+      <p>Recibo N°: ${payment.receiptNumber}</p>
+      <p>Período: ${payment.monthFormatted}</p>
+      <p>Importe: $${payment.amount.toLocaleString('es-AR')}</p>
+      <p>Fecha de emisión: ${new Date(payment.receiptIssuedAt).toLocaleDateString('es-AR')}</p>
+    </div>
+    <p>Podés descargar tu recibo desde el siguiente enlace:</p>
+    <a href="${receiptUrl}" class="btn" target="_blank">Descargar recibo</a>
+    <p style="margin-top:20px; font-size:13px; color:#6b7280;">Si el botón no funciona, copiá este enlace en tu navegador:<br>${receiptUrl}</p>
+  `);
+  return sendEmail({
+    to:      owner.email,
+    subject: `Recibo de pago — ${payment.monthFormatted} | GestionAr`,
+    html,
+  });
+};
+
 exports.sendMonthlyReminder = async (owner, expenseMonth, amount, dueDay) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>

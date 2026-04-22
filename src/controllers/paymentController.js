@@ -1,12 +1,13 @@
-const Payment       = require('../models/Payment');
-const Expense       = require('../models/Expense');
-const User          = require('../models/User');
-const Organization  = require('../models/Organization');
-const { cloudinary } = require('../config/cloudinary');
-const emailService  = require('../services/emailService');
+const Payment         = require('../models/Payment');
+const Expense         = require('../models/Expense');
+const User            = require('../models/User');
+const Organization    = require('../models/Organization');
+const { cloudinary }  = require('../config/cloudinary');
+const emailService    = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
+const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
-const logger        = require('../config/logger');
+const logger          = require('../config/logger');
 
 // ── GET /api/payments — listar (admin: todos; owner: los suyos) ─
 exports.getPayments = async (req, res, next) => {
@@ -138,18 +139,36 @@ exports.approvePayment = async (req, res, next) => {
 
     await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false, balance: 0 });
 
-    Promise.allSettled([
-      emailService.sendPaymentApproved(payment.owner, payment),
-      firebaseService.sendToUser(payment.owner._id, {
-        title: 'Pago aprobado ✓',
-        body:  `Tu comprobante de ${payment.monthFormatted} fue aprobado por el administrador.`,
-        data:  { type: 'payment_approved', paymentId: payment._id.toString() },
-      }),
-    ]).then(results => {
-      results.forEach((r, i) => {
-        if (r.status === 'rejected') logger.warn(`Notificación ${i} falló: ${r.reason?.message}`);
+    // Generar recibo del sistema de forma asíncrona (no bloquea la aprobación)
+    if (!payment.systemReceipt?.url) {
+      receiptService.generateAndStoreReceipt(payment._id)
+        .then(async (updatedPayment) => {
+          const receiptUrl = updatedPayment.systemReceipt?.url;
+          await Promise.allSettled([
+            emailService.sendReceiptEmail(payment.owner, updatedPayment, receiptUrl),
+            emailService.sendPaymentApproved(payment.owner, updatedPayment),
+            firebaseService.sendToUser(payment.owner._id, {
+              title: 'Pago aprobado ✓',
+              body:  `Tu comprobante de ${payment.monthFormatted} fue aprobado por el administrador.`,
+              data:  { type: 'payment_approved', paymentId: payment._id.toString() },
+            }),
+          ]);
+        })
+        .catch(err => logger.error(`[approvePayment] Error generando recibo ${payment._id}: ${err.message}`));
+    } else {
+      Promise.allSettled([
+        emailService.sendPaymentApproved(payment.owner, payment),
+        firebaseService.sendToUser(payment.owner._id, {
+          title: 'Pago aprobado ✓',
+          body:  `Tu comprobante de ${payment.monthFormatted} fue aprobado por el administrador.`,
+          data:  { type: 'payment_approved', paymentId: payment._id.toString() },
+        }),
+      ]).then(results => {
+        results.forEach((r, i) => {
+          if (r.status === 'rejected') logger.warn(`Notificación ${i} falló: ${r.reason?.message}`);
+        });
       });
-    });
+    }
 
     logger.info(`Pago aprobado: ${payment._id} — ${payment.owner.name}`);
     res.json({ success: true, message: 'Pago aprobado correctamente.', data: { payment } });
@@ -196,8 +215,35 @@ exports.rejectPayment = async (req, res, next) => {
   }
 };
 
-// ── GET /api/payments/:id/receipt — descargar comprobante ─────
+// ── GET /api/payments/:id/receipt — recibo generado por el sistema ─
 exports.getReceipt = async (req, res, next) => {
+  try {
+    const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
+
+    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Acceso denegado.' });
+    }
+
+    if (!payment.systemReceipt?.url) {
+      return res.status(404).json({ success: false, message: 'El recibo aún no fue generado.' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        receiptNumber:   payment.receiptNumber,
+        receiptIssuedAt: payment.receiptIssuedAt,
+        url:             payment.systemReceipt.url,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/payments/:id/proof — descargar comprobante subido ─
+exports.getProof = async (req, res, next) => {
   try {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
@@ -237,7 +283,6 @@ exports.getReceipt = async (req, res, next) => {
     const fallbackName = `comprobante.${format}`;
     const filename     = (payment.receipt.filename || fallbackName).replace(/"/g, '');
     res.setHeader('Content-Type', mimetype);
-    // Imágenes inline (el browser las muestra); PDF fuerza descarga
     const disposition = isImage ? 'inline' : 'attachment';
     res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
 
@@ -332,6 +377,31 @@ exports.getDashboard = async (req, res, next) => {
         year,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/payments/:id/resend-receipt — reenviar recibo (admin) ─
+exports.resendReceipt = async (req, res, next) => {
+  try {
+    const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId })
+      .populate('owner', 'name email unit');
+    if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
+    if (payment.status !== 'approved') {
+      return res.status(400).json({ success: false, message: 'Solo se puede reenviar el recibo de pagos aprobados.' });
+    }
+
+    let updated = payment;
+    if (!payment.systemReceipt?.url) {
+      updated = await receiptService.generateAndStoreReceipt(payment._id);
+      await updated.populate('owner', 'name email unit');
+    }
+
+    await emailService.sendReceiptEmail(updated.owner, updated, updated.systemReceipt.url);
+
+    logger.info(`[resendReceipt] Recibo reenviado: ${updated.receiptNumber} → ${updated.owner.email}`);
+    res.json({ success: true, message: 'Recibo reenviado por email correctamente.' });
   } catch (err) {
     next(err);
   }

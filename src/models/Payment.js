@@ -81,6 +81,14 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       maxlength: [300, 'La nota no puede superar 300 caracteres'],
     },
+
+    // ── Recibo generado por el sistema ────────────────────────
+    systemReceipt: {
+      url:      { type: String },
+      publicId: { type: String },
+    },
+    receiptNumber:   { type: String },
+    receiptIssuedAt: { type: Date },
   },
   {
     timestamps: true,

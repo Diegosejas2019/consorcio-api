@@ -184,6 +184,12 @@ const organizationSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // ── Contador secuencial de recibos ───────────────────────────
+    receiptCounter: {
+      type:    Number,
+      default: 0,
+    },
+
     // ── MercadoPago (nunca se exponen en respuestas generales) ────
     mpPublicKey: {
       type: String,
