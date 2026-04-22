@@ -89,6 +89,9 @@ Virtuales: `categoryLabel`, `statusLabel` en español.
 ### Expense
 Gastos de la organización. Categorías: `cleaning` | `security` | `maintenance` | `utilities` | `administration` | `other`.
 Estados: `pending` | `paid`. Métodos de pago: `cash` | `transfer` | `mercadopago`.
+`expenseType`: `ordinary` (default) | `extraordinary` — clasifica el gasto para el informe "Mis Expensas".
+`invoiceNumber`: número de factura del gasto (opcional).
+`invoiceCuit`: CUIT del proveedor en la factura (opcional; si está vacío, el PDF usa el CUIT del Provider asociado).
 Puede tener comprobante adjunto en Cloudinary. Referencia opcional a `Provider`.
 
 ### Provider
@@ -161,6 +164,7 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | PATCH | `/api/providers/:id` | admin |
 | DELETE | `/api/providers/:id` | admin |
 | GET | `/api/reports/monthly-summary` | admin |
+| GET | `/api/reports/expensas-pdf` | admin (PDF descargable, `?month=YYYY-MM`) |
 | GET/PATCH | `/api/config` | admin |
 | GET | `/api/votes` | autenticado |
 | POST | `/api/votes` | admin |

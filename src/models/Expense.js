@@ -45,6 +45,19 @@ const expenseSchema = new mongoose.Schema(
       publicId: { type: String },
       _id: false,
     },
+    expenseType: {
+      type: String,
+      enum: ['ordinary', 'extraordinary'],
+      default: 'ordinary',
+    },
+    invoiceNumber: {
+      type: String,
+      trim: true,
+    },
+    invoiceCuit: {
+      type: String,
+      trim: true,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

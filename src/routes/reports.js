@@ -6,5 +6,6 @@ router.use(protect);
 router.use(restrictTo('admin'));
 
 router.get('/monthly-summary', ctrl.getMonthlySummary);
+router.get('/expensas-pdf',    ctrl.getExpensasPdf);
 
 module.exports = router;

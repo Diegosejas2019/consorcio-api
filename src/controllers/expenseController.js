@@ -52,7 +52,7 @@ exports.getExpenses = async (req, res, next) => {
 
     const [expenses, total] = await Promise.all([
       Expense.find(filter)
-        .populate('provider', 'name serviceType')
+        .populate('provider', 'name serviceType cuit')
         .sort({ date: -1 })
         .skip((page - 1) * limit)
         .limit(Number(limit))
@@ -73,7 +73,7 @@ exports.getExpenses = async (req, res, next) => {
 // ── POST /api/expenses ────────────────────────────────────────
 exports.createExpense = async (req, res, next) => {
   try {
-    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod'];
+    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'invoiceNumber', 'invoiceCuit'];
     const data    = { organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
 
@@ -87,7 +87,7 @@ exports.createExpense = async (req, res, next) => {
     }
 
     const expense = await Expense.create(data);
-    await expense.populate('provider', 'name serviceType');
+    await expense.populate('provider', 'name serviceType cuit');
 
     logger.info(`Gasto creado: ${expense.description} $${expense.amount} [org: ${req.orgId}]`);
     res.status(201).json({ success: true, data: { expense } });
@@ -99,7 +99,7 @@ exports.createExpense = async (req, res, next) => {
 // ── PATCH /api/expenses/:id ───────────────────────────────────
 exports.updateExpense = async (req, res, next) => {
   try {
-    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod'];
+    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'invoiceNumber', 'invoiceCuit'];
     const update  = {};
     allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
 
@@ -112,7 +112,7 @@ exports.updateExpense = async (req, res, next) => {
       { _id: req.params.id, organization: req.orgId },
       update,
       { new: true, runValidators: true }
-    ).populate('provider', 'name serviceType');
+    ).populate('provider', 'name serviceType cuit');
 
     if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
 
@@ -130,7 +130,7 @@ exports.markAsPaid = async (req, res, next) => {
       { _id: req.params.id, organization: req.orgId },
       { status: 'paid', ...(paymentMethod && { paymentMethod }) },
       { new: true }
-    ).populate('provider', 'name serviceType');
+    ).populate('provider', 'name serviceType cuit');
 
     if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
 
