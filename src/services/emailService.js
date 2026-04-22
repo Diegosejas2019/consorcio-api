@@ -1,16 +1,33 @@
-const nodemailer = require('nodemailer');
-const logger     = require('../config/logger');
+const logger = require('../config/logger');
 
-// ── Crear transporter ─────────────────────────────────────────
-const transporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST,
-  port:   Number(process.env.SMTP_PORT) || 587,
-  secure: process.env.SMTP_PORT === '465',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
+
+const sendEmail = async ({ to, subject, html }) => {
+  const res = await fetch(BREVO_API_URL, {
+    method: 'POST',
+    headers: {
+      'api-key': process.env.BREVO_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      sender: { name: 'GestionAr', email: process.env.EMAIL_FROM || 'gestionar.app.info@gmail.com' },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    const err = new Error(`Brevo error ${res.status}: ${errBody}`);
+    logger.error(`Error enviando email a ${to}: ${err.message}`);
+    throw err;
+  }
+
+  const data = await res.json();
+  logger.info(`Email enviado: ${subject} → ${to} [${data.messageId}]`);
+  return data;
+};
 
 // ── Template base HTML ────────────────────────────────────────
 const baseTemplate = (content) => `
@@ -52,26 +69,8 @@ const baseTemplate = (content) => `
 </body>
 </html>`;
 
-// ── Función genérica para enviar email ────────────────────────
-const sendEmail = async ({ to, subject, html }) => {
-  try {
-    const info = await transporter.sendMail({
-      from:    process.env.EMAIL_FROM || '"GestionAr" <noreply@consorcio.com>',
-      to,
-      subject,
-      html,
-    });
-    logger.info(`Email enviado: ${subject} → ${to} [${info.messageId}]`);
-    return info;
-  } catch (err) {
-    logger.error(`Error enviando email a ${to}: ${err.message}`);
-    throw err;
-  }
-};
-
 // ── Templates específicos ─────────────────────────────────────
 
-// Pago aprobado
 exports.sendPaymentApproved = async (owner, payment) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>
@@ -91,7 +90,6 @@ exports.sendPaymentApproved = async (owner, payment) => {
   });
 };
 
-// Pago rechazado
 exports.sendPaymentRejected = async (owner, payment, reason) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>
@@ -110,7 +108,6 @@ exports.sendPaymentRejected = async (owner, payment, reason) => {
   });
 };
 
-// Bienvenida a nuevo propietario
 exports.sendWelcome = async (owner, tempPassword) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>
@@ -131,7 +128,6 @@ exports.sendWelcome = async (owner, tempPassword) => {
   });
 };
 
-// Reset de contraseña
 exports.sendPasswordReset = async (user, resetUrl) => {
   const html = baseTemplate(`
     <p>Hola <strong>${user.name}</strong>,</p>
@@ -148,7 +144,6 @@ exports.sendPasswordReset = async (user, resetUrl) => {
   });
 };
 
-// Recordatorio de vencimiento mensual
 exports.sendMonthlyReminder = async (owner, expenseMonth, amount, dueDay) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>
