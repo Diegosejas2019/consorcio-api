@@ -215,35 +215,8 @@ exports.rejectPayment = async (req, res, next) => {
   }
 };
 
-// ── GET /api/payments/:id/receipt — recibo generado por el sistema ─
+// ── GET /api/payments/:id/receipt — descargar comprobante subido ─
 exports.getReceipt = async (req, res, next) => {
-  try {
-    const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
-    if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
-
-    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Acceso denegado.' });
-    }
-
-    if (!payment.systemReceipt?.url) {
-      return res.status(404).json({ success: false, message: 'El recibo aún no fue generado.' });
-    }
-
-    res.json({
-      success: true,
-      data: {
-        receiptNumber:   payment.receiptNumber,
-        receiptIssuedAt: payment.receiptIssuedAt,
-        url:             payment.systemReceipt.url,
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// ── GET /api/payments/:id/proof — descargar comprobante subido ─
-exports.getProof = async (req, res, next) => {
   try {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
@@ -291,6 +264,33 @@ exports.getProof = async (req, res, next) => {
 
     const { Readable } = require('stream');
     Readable.fromWeb(cloudRes.body).pipe(res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/payments/:id/system-receipt — recibo generado por el sistema ─
+exports.getSystemReceipt = async (req, res, next) => {
+  try {
+    const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
+
+    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Acceso denegado.' });
+    }
+
+    if (!payment.systemReceipt?.url) {
+      return res.status(404).json({ success: false, message: 'El recibo aún no fue generado.' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        receiptNumber:   payment.receiptNumber,
+        receiptIssuedAt: payment.receiptIssuedAt,
+        url:             payment.systemReceipt.url,
+      },
+    });
   } catch (err) {
     next(err);
   }

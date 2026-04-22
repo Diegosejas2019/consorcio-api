@@ -8,9 +8,9 @@ router.use(protect);
 router.get('/dashboard', restrictTo('admin'), ctrl.getDashboard);
 router.get('/',          ctrl.getPayments);
 router.post('/',         upload.single('receipt'), ctrl.createPayment);
-router.get('/:id/receipt', ctrl.getReceipt);
-router.get('/:id/proof',   ctrl.getProof);
-router.get('/:id',         ctrl.getPayment);
+router.get('/:id/receipt',        ctrl.getReceipt);
+router.get('/:id/system-receipt', ctrl.getSystemReceipt);
+router.get('/:id',                ctrl.getPayment);
 router.delete('/:id',      ctrl.deletePayment);
 
 // Solo admin puede aprobar/rechazar/reenviar recibo
