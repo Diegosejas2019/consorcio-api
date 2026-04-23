@@ -49,14 +49,6 @@ exports.createPreference = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Todos los períodos seleccionados ya están pagados.' });
     }
 
-    // Eliminar pagos MP pendientes para evitar conflicto de índice único
-    await Payment.deleteMany({
-      owner:         owner._id,
-      month:         { $in: payablePeriods },
-      status:        'pending',
-      paymentMethod: 'mercadopago',
-    });
-
     const totalAmount = monthlyFee * payablePeriods.length;
 
     const client     = await getMPClient(req.orgId);
@@ -99,21 +91,6 @@ exports.createPreference = async (req, res, next) => {
 
     const result = await preference.create({ body: preferenceData });
 
-    // Crear un registro de pago por período
-    const paymentDocs = await Payment.create(
-      payablePeriods.map(month => ({
-        organization:   req.orgId,
-        owner:          owner._id,
-        month,
-        amount:         monthlyFee,
-        status:         'pending',
-        paymentMethod:  'mercadopago',
-        mpPreferenceId: result.id,
-      }))
-    );
-
-    const firstPaymentId = Array.isArray(paymentDocs) ? paymentDocs[0]._id : paymentDocs._id;
-
     logger.info(`Preferencia MP creada: ${result.id} — ${owner.name} — ${payablePeriods.length} período(s) [org: ${req.orgId}]`);
 
     res.json({
@@ -122,7 +99,6 @@ exports.createPreference = async (req, res, next) => {
         preferenceId: result.id,
         initPoint:    result.init_point,
         sandboxUrl:   result.sandbox_init_point,
-        paymentId:    firstPaymentId,
         periods:      payablePeriods,
         totalAmount,
       },
@@ -189,8 +165,60 @@ exports.webhook = async (req, res) => {
       }
 
       if (!paymentList.length) {
-        logger.warn(`Webhook MP: no se encontraron pagos para ${mpData.external_reference || mpData.preference_id}`);
-        return;
+        // Sin registro previo: el pago fue iniciado sin crear registro anticipado.
+        // Para approved/pending creamos el registro ahora desde external_reference.
+        if (['rejected', 'cancelled'].includes(mpData.status)) {
+          logger.info(`Webhook MP: ${mpData.status} sin registro previo — ${mpData.external_reference}`);
+          return;
+        }
+
+        if (!mpData.external_reference) {
+          logger.warn(`Webhook MP: no se encontraron pagos y no hay external_reference para ${data.id}`);
+          return;
+        }
+
+        const parts = mpData.external_reference.split('|');
+        const [refOrgId, refOwnerId, monthCodes] = parts;
+        const refMonths = monthCodes?.split(',').filter(Boolean) || [];
+
+        if (!refOwnerId || refMonths.length === 0) {
+          logger.warn(`Webhook MP: external_reference incompleto: ${mpData.external_reference}`);
+          return;
+        }
+
+        // Excluir períodos que ya tienen pago activo (idempotencia + respeto al índice único)
+        const existingActive = await Payment.find({
+          owner:  refOwnerId,
+          month:  { $in: refMonths },
+          status: { $in: ['pending', 'approved'] },
+        }).select('month');
+        const activeSet  = new Set(existingActive.map(p => p.month));
+        const newMonths  = refMonths.filter(m => !activeSet.has(m));
+
+        if (newMonths.length === 0) {
+          logger.info(`Webhook MP: todos los períodos ya tienen pago activo para ${refOwnerId}`);
+          return;
+        }
+
+        const refOrg    = await Organization.findById(refOrgId);
+        const monthlyFee = refOrg?.monthlyFee || 0;
+
+        const created = await Payment.insertMany(
+          newMonths.map(month => ({
+            organization:   refOrgId,
+            owner:          refOwnerId,
+            month,
+            amount:         monthlyFee,
+            status:         'pending',
+            paymentMethod:  'mercadopago',
+            mpPreferenceId: mpData.preference_id,
+          }))
+        );
+
+        paymentList = await Payment.find({ _id: { $in: created.map(p => p._id) } })
+          .populate('owner', 'name email unit fcmToken');
+
+        logger.info(`Webhook MP: creados ${created.length} registro(s) desde external_reference — ${refOwnerId}`);
       }
 
       // Actualizar todos los pagos
