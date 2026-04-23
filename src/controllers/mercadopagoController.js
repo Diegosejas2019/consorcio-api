@@ -22,19 +22,60 @@ exports.createPreference = async (req, res, next) => {
 
     if (!org) return res.status(400).json({ success: false, message: 'Organización requerida.' });
 
+    const monthlyFee = org.monthlyFee || org.feeAmount || 0;
+
+    // Períodos a pagar: si se envían desde el frontend, usarlos; si no, el período vigente
+    const rawPeriods = req.body?.periods;
+    const periods    = Array.isArray(rawPeriods) && rawPeriods.length > 0
+      ? rawPeriods
+      : [org.feePeriodCode];
+
+    // Validar formato de períodos
+    const periodRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+    if (periods.some(p => !periodRegex.test(p))) {
+      return res.status(400).json({ success: false, message: 'Formato de período inválido.' });
+    }
+
+    // Excluir períodos ya aprobados
+    const existingApproved = await Payment.find({
+      owner: owner._id,
+      month: { $in: periods },
+      status: 'approved',
+    }).select('month');
+    const approvedSet = new Set(existingApproved.map(p => p.month));
+    const payablePeriods = periods.filter(p => !approvedSet.has(p));
+
+    if (payablePeriods.length === 0) {
+      return res.status(400).json({ success: false, message: 'Todos los períodos seleccionados ya están pagados.' });
+    }
+
+    // Eliminar pagos MP pendientes para evitar conflicto de índice único
+    await Payment.deleteMany({
+      owner:         owner._id,
+      month:         { $in: payablePeriods },
+      status:        'pending',
+      paymentMethod: 'mercadopago',
+    });
+
+    const totalAmount = monthlyFee * payablePeriods.length;
+
     const client     = await getMPClient(req.orgId);
     const preference = new Preference(client);
 
     const baseUrl = process.env.APP_BASE_URL;
 
+    const periodLabel = payablePeriods.length === 1
+      ? org.feePeriodLabel
+      : `${payablePeriods.length} períodos`;
+
     const preferenceData = {
       items: [
         {
-          id:          `fee-${org.feePeriodCode}-${owner._id}`,
-          title:       `${org.feeLabel} ${org.feePeriodLabel} — ${org.name}`,
+          id:          `fee-${payablePeriods[0]}-${payablePeriods.length}p-${owner._id}`,
+          title:       `${org.feeLabel} ${periodLabel} — ${org.name}`,
           description: `${owner.name} — ${owner.unit || ''}`.trim(),
           quantity:    1,
-          unit_price:  org.monthlyFee || org.feeAmount,
+          unit_price:  totalAmount,
           currency_id: 'ARS',
         },
       ],
@@ -50,25 +91,30 @@ exports.createPreference = async (req, res, next) => {
       },
       auto_return: 'approved',
       notification_url: `${baseUrl}/api/mercadopago/webhook`,
-      // Incluir orgId para poder resolverlo en el webhook (sin auth)
-      external_reference: `${req.orgId}|${owner._id}|${org.feePeriodCode}|${Date.now()}`,
+      // Formato: orgId|ownerId|period1,period2,...|timestamp
+      external_reference: `${req.orgId}|${owner._id}|${payablePeriods.join(',')}|${Date.now()}`,
       expires: true,
       expiration_date_to: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
     };
 
     const result = await preference.create({ body: preferenceData });
 
-    const payment = await Payment.create({
-      organization:   req.orgId,
-      owner:          owner._id,
-      month:          org.feePeriodCode,
-      amount:         org.monthlyFee || org.feeAmount,
-      status:         'pending',
-      paymentMethod:  'mercadopago',
-      mpPreferenceId: result.id,
-    });
+    // Crear un registro de pago por período
+    const paymentDocs = await Payment.create(
+      payablePeriods.map(month => ({
+        organization:   req.orgId,
+        owner:          owner._id,
+        month,
+        amount:         monthlyFee,
+        status:         'pending',
+        paymentMethod:  'mercadopago',
+        mpPreferenceId: result.id,
+      }))
+    );
 
-    logger.info(`Preferencia MP creada: ${result.id} — ${owner.name} [org: ${req.orgId}]`);
+    const firstPaymentId = Array.isArray(paymentDocs) ? paymentDocs[0]._id : paymentDocs._id;
+
+    logger.info(`Preferencia MP creada: ${result.id} — ${owner.name} — ${payablePeriods.length} período(s) [org: ${req.orgId}]`);
 
     res.json({
       success: true,
@@ -76,7 +122,9 @@ exports.createPreference = async (req, res, next) => {
         preferenceId: result.id,
         initPoint:    result.init_point,
         sandboxUrl:   result.sandbox_init_point,
-        paymentId:    payment._id,
+        paymentId:    firstPaymentId,
+        periods:      payablePeriods,
+        totalAmount,
       },
     });
   } catch (err) {
@@ -94,9 +142,7 @@ exports.webhook = async (req, res) => {
     const xRequestId = req.headers['x-request-id'];
 
     if (type === 'payment' && data?.id) {
-      // Necesitamos saber de qué org es este pago — primero buscar sin org filter
-      // usando mpPaymentId o external_reference (disponible tras llamar a MP)
-      const client    = await _getClientForWebhook(data.id);
+      const client = await _getClientForWebhook(data.id);
       if (!client) return;
 
       const { mpClient, orgId, org } = client;
@@ -105,7 +151,7 @@ exports.webhook = async (req, res) => {
 
       logger.info(`Webhook MP — pago ${data.id}: status=${mpData.status}`);
 
-      // Verificar firma del webhook con el secret de la org
+      // Verificar firma del webhook
       if (org?.mpWebhookSecret && xSignature) {
         const ts  = xSignature.split(',').find(p => p.startsWith('ts='))?.split('=')[1];
         const v1  = xSignature.split(',').find(p => p.startsWith('v1='))?.split('=')[1];
@@ -117,63 +163,84 @@ exports.webhook = async (req, res) => {
         }
       }
 
-      const externalRef = mpData.external_reference;
-      if (!externalRef) return;
+      // Buscar todos los pagos asociados a esta preferencia MP
+      let paymentList = [];
+      if (mpData.preference_id) {
+        paymentList = await Payment.find({
+          mpPreferenceId: mpData.preference_id,
+          status:         'pending',
+        }).populate('owner', 'name email unit fcmToken');
+      }
 
-      // Formato: orgId|ownerId|monthCode|timestamp
-      const parts = externalRef.split('|');
-      const [refOrgId, ownerId, monthCode] = parts;
+      // Fallback: buscar por external_reference (compatibilidad hacia atrás)
+      if (!paymentList.length && mpData.external_reference) {
+        const parts      = mpData.external_reference.split('|');
+        const [refOrgId, ownerId, monthCodes] = parts;
+        const months     = monthCodes?.split(',').filter(Boolean) || [];
+        if (months.length > 0) {
+          paymentList = await Payment.find({
+            organization:  refOrgId,
+            owner:         ownerId,
+            month:         { $in: months },
+            paymentMethod: 'mercadopago',
+            status:        'pending',
+          }).populate('owner', 'name email unit fcmToken');
+        }
+      }
 
-      const payment = await Payment.findOne({
-        organization:  refOrgId,
-        owner:         ownerId,
-        month:         monthCode,
-        paymentMethod: 'mercadopago',
-        status:        { $in: ['pending'] },
-      }).populate('owner', 'name email unit fcmToken');
-
-      if (!payment) {
-        logger.warn(`Webhook MP: no se encontró pago para ${externalRef}`);
+      if (!paymentList.length) {
+        logger.warn(`Webhook MP: no se encontraron pagos para ${mpData.external_reference || mpData.preference_id}`);
         return;
       }
 
-      payment.mpPaymentId = String(data.id);
-      payment.mpStatus    = mpData.status;
-      payment.mpDetail    = mpData.status_detail;
+      // Actualizar todos los pagos
+      for (const payment of paymentList) {
+        payment.mpPaymentId = String(data.id);
+        payment.mpStatus    = mpData.status;
+        payment.mpDetail    = mpData.status_detail;
+
+        if (mpData.status === 'approved') {
+          payment.status    = 'approved';
+          payment.reviewedAt = new Date();
+        } else if (['rejected', 'cancelled'].includes(mpData.status)) {
+          payment.status        = 'rejected';
+          payment.rejectionNote = `Rechazado por MercadoPago: ${mpData.status_detail}`;
+        }
+      }
+
+      await Promise.all(paymentList.map(p => p.save()));
+
+      const firstPayment  = paymentList[0];
+      const ownerDoc      = firstPayment.owner;
+      const totalAmount   = paymentList.reduce((sum, p) => sum + p.amount, 0);
 
       if (mpData.status === 'approved') {
-        payment.status    = 'approved';
-        payment.reviewedAt = new Date();
-        await payment.save();
+        await User.findByIdAndUpdate(ownerDoc._id, { isDebtor: false, balance: 0 });
 
-        await User.findByIdAndUpdate(ownerId, { isDebtor: false, balance: 0 });
+        const periodsSummary = paymentList.length === 1
+          ? firstPayment.monthFormatted
+          : `${paymentList.length} períodos`;
 
         Promise.allSettled([
-          emailService.sendPaymentApproved(payment.owner, payment),
-          firebaseService.sendToUser(payment.owner._id, {
+          emailService.sendPaymentApproved(ownerDoc, firstPayment),
+          firebaseService.sendToUser(ownerDoc._id, {
             title: '¡Pago recibido! ✓',
-            body:  `Tu pago de ${payment.monthFormatted} por $${payment.amount.toLocaleString('es-AR')} fue confirmado.`,
-            data:  { type: 'payment_approved', paymentId: payment._id.toString() },
+            body:  `Tu pago de ${periodsSummary} por $${totalAmount.toLocaleString('es-AR')} fue confirmado.`,
+            data:  { type: 'payment_approved', paymentId: firstPayment._id.toString() },
           }),
         ]);
 
-        logger.info(`Pago MP aprobado automáticamente: ${payment._id} — ${payment.owner?.name}`);
+        logger.info(`Pago MP aprobado: ${paymentList.length} período(s) — ${ownerDoc?.name}`);
 
       } else if (['rejected', 'cancelled'].includes(mpData.status)) {
-        payment.status        = 'rejected';
-        payment.rejectionNote = `Rechazado por MercadoPago: ${mpData.status_detail}`;
-        await payment.save();
-
         Promise.allSettled([
-          emailService.sendPaymentRejected(payment.owner, payment, payment.rejectionNote),
-          firebaseService.sendToUser(payment.owner._id, {
+          emailService.sendPaymentRejected(ownerDoc, firstPayment, firstPayment.rejectionNote),
+          firebaseService.sendToUser(ownerDoc._id, {
             title: 'Pago rechazado',
-            body:  `Tu pago de ${payment.monthFormatted} no pudo procesarse. Intentá nuevamente.`,
-            data:  { type: 'payment_rejected', paymentId: payment._id.toString() },
+            body:  `Tu pago no pudo procesarse. Intentá nuevamente.`,
+            data:  { type: 'payment_rejected', paymentId: firstPayment._id.toString() },
           }),
         ]);
-      } else {
-        await payment.save();
       }
     }
   } catch (err) {
@@ -183,9 +250,6 @@ exports.webhook = async (req, res) => {
 
 /**
  * Resuelve el cliente MP para un webhook dado su MP payment ID.
- * Estrategia: buscar en todos los pagos pending de MP este mpPaymentId,
- * o usar el orgId embebido en external_reference vía una llamada preliminar.
- * Para simplificar, intentamos con todos los orgs activos que tengan accessToken.
  */
 async function _getClientForWebhook(mpPaymentId) {
   try {
@@ -202,8 +266,7 @@ async function _getClientForWebhook(mpPaymentId) {
       }
     }
 
-    // Fallback: buscar la primera org con accessToken configurado
-    // (solo funciona en entornos con una única org activa o bien definida)
+    // Fallback: primera org activa con accessToken configurado
     const org = await Organization.findOne({ isActive: true }).select('+mpAccessToken +mpWebhookSecret');
     if (!org?.mpAccessToken) {
       logger.warn(`Webhook MP: no se encontró organización con MP configurado para pago ${mpPaymentId}`);
