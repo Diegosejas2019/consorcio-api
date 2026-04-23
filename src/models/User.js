@@ -52,6 +52,13 @@ const userSchema = new mongoose.Schema(
       default: 0,
       // Negativo = deuda, positivo = a favor
     },
+    percentage: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+      // Porcentaje de prorrateo de expensas (suma debe ser 100 entre todas las unidades)
+    },
     isDebtor: {
       type: Boolean,
       default: false,

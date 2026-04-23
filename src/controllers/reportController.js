@@ -2,6 +2,7 @@ const puppeteer    = require('puppeteer');
 const Payment      = require('../models/Payment');
 const Expense      = require('../models/Expense');
 const Organization = require('../models/Organization');
+const User         = require('../models/User');
 const logger       = require('../config/logger');
 
 const CATEGORIES = ['cleaning', 'security', 'maintenance', 'utilities', 'administration', 'other'];
@@ -85,12 +86,19 @@ const formatMonthLabel = (month) => {
   return new Date(year, mon - 1, 1).toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
 };
 
-const buildExpensasHTML = (org, month, ordinary, extraordinary) => {
+const monthAbbrev = (month) => {
+  const abbrevs = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
+  const [y, m] = month.split('-');
+  return `${abbrevs[parseInt(m, 10) - 1]}.${y.slice(2)}`;
+};
+
+const buildExpensasHTML = (org, month, ordinary, extraordinary, owners, paymentsByOwner) => {
   const monthLabel = formatMonthLabel(month);
   const totalOrd   = ordinary.reduce((s, e) => s + e.amount, 0);
   const totalExt   = extraordinary.reduce((s, e) => s + e.amount, 0);
   const grandTotal = totalOrd + totalExt;
 
+  // ── Sección 1: tabla de gastos ────────────────────────────────
   const renderRows = (items) => {
     if (!items.length) {
       return `<tr><td colspan="5" style="text-align:center;color:#9ca3af;padding:16px;">Sin gastos registrados</td></tr>`;
@@ -129,6 +137,131 @@ const buildExpensasHTML = (org, month, ordinary, extraordinary) => {
       <td style="padding:10px 12px;font-size:14px;font-weight:700;color:#1a1a2e;text-align:right;">${formatCurrency(total)}</td>
     </tr>`;
 
+  // ── Sección 2: estado de cuentas y prorrateo ──────────────────
+  const [year, mon] = month.split('-').map(Number);
+  const dueDay      = org.dueDayOfMonth || 10;
+  const dueDateStr  = `${String(dueDay).padStart(2,'0')}/${String(mon).padStart(2,'0')}/${year}`;
+  const lateFee     = org.lateFeePercent || 0;
+  const pagosHeader = monthAbbrev(month);
+
+  let totalPagosMes       = 0;
+  let totalSaldoDeudor    = 0;
+  let totalSaldoAnterior  = 0;
+  let totalExpensasProrr  = 0;
+  let totalFinal          = 0;
+
+  const ownerRows = owners.map((owner, idx) => {
+    const ownerId       = owner._id.toString();
+    const pagosMes      = paymentsByOwner[ownerId] || 0;
+    const saldoAnterior = owner.balance + pagosMes;
+    const saldoDeudor   = owner.balance; // estado actual tras pagos
+    const pct           = owner.percentage || 0;
+    const expProrr      = (pct / 100) * grandTotal;
+    const total         = saldoDeudor + expProrr;
+
+    totalSaldoAnterior += saldoAnterior;
+    totalPagosMes      += pagosMes;
+    totalSaldoDeudor   += saldoDeudor;
+    totalExpensasProrr += expProrr;
+    totalFinal         += total;
+
+    const saldoColor    = saldoDeudor < 0 ? '#dc2626' : '#374151';
+    const totalColor    = total < 0 ? '#dc2626' : (total === 0 ? '#6b7280' : '#111827');
+    const rowBg         = idx % 2 === 0 ? '#ffffff' : '#f9fafb';
+
+    return `
+      <tr style="background:${rowBg};border-bottom:1px solid #f3f4f6;">
+        <td style="padding:8px 10px;font-size:12px;color:#6b7280;text-align:center;">${idx + 1}</td>
+        <td style="padding:8px 10px;font-size:12px;color:#374151;font-weight:600;">${owner.unit || '—'}</td>
+        <td style="padding:8px 10px;font-size:12px;color:#374151;">${owner.name}</td>
+        <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:right;">${formatCurrency(saldoAnterior)}</td>
+        <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:right;">${pagosMes > 0 ? formatCurrency(pagosMes) : '—'}</td>
+        <td style="padding:8px 10px;font-size:12px;color:${saldoColor};text-align:right;font-weight:${saldoDeudor < 0 ? '600' : '400'};">${formatCurrency(saldoDeudor)}</td>
+        <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:center;">${pct > 0 ? pct.toFixed(2) + '%' : '—'}</td>
+        <td style="padding:8px 10px;font-size:12px;color:#374151;text-align:right;">${pct > 0 ? formatCurrency(expProrr) : '—'}</td>
+        <td style="padding:8px 10px;font-size:12px;color:${totalColor};text-align:right;font-weight:600;">${formatCurrency(total)}</td>
+      </tr>`;
+  }).join('');
+
+  const estadoCuentasSection = owners.length > 0 ? `
+  <!-- Estado de cuentas y prorrateo -->
+  <div style="margin-top:32px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:1px;">
+        Estado de cuentas y prorrateo
+      </div>
+      <div style="font-size:11px;color:#6b7280;text-align:right;">
+        Mes vencimiento: <strong style="color:#1a1a2e;text-transform:capitalize;">${monthLabel}</strong>
+        &nbsp;|&nbsp; 1° vto: <strong style="color:#1a1a2e;">${dueDateStr}</strong>
+        &nbsp;|&nbsp; Tasa de interés: <strong style="color:#1a1a2e;">${lateFee.toFixed(2)}%</strong>
+      </div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr style="background:#1a1a2e;">
+          <th style="padding:8px 10px;color:#d1d5db;text-align:center;font-size:11px;">#</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:left;font-size:11px;">UNIDAD FUNC.</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:left;font-size:11px;">CONSORCISTA</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:right;font-size:11px;">SALDO ANTERIOR</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:right;font-size:11px;">PAGOS ${pagosHeader}</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:right;font-size:11px;">SALDO DEUDOR / A FAVOR</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:center;font-size:11px;">%</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:right;font-size:11px;">ORDINARIA EXPENSAS</th>
+          <th style="padding:8px 10px;color:#d1d5db;text-align:right;font-size:11px;">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ownerRows}
+        <tr style="background:#f3f4f6;border-top:2px solid #1a1a2e;font-weight:700;">
+          <td colspan="3" style="padding:8px 10px;font-size:12px;color:#1a1a2e;">Total: ${owners.length}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#1a1a2e;text-align:right;">${formatCurrency(totalSaldoAnterior)}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#1a1a2e;text-align:right;">${formatCurrency(totalPagosMes)}</td>
+          <td style="padding:8px 10px;font-size:12px;color:${totalSaldoDeudor < 0 ? '#dc2626' : '#1a1a2e'};text-align:right;">${formatCurrency(totalSaldoDeudor)}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#1a1a2e;text-align:center;">100%</td>
+          <td style="padding:8px 10px;font-size:12px;color:#1a1a2e;text-align:right;">${formatCurrency(totalExpensasProrr)}</td>
+          <td style="padding:8px 10px;font-size:12px;color:#1a1a2e;text-align:right;">${formatCurrency(totalFinal)}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top:8px;font-size:10px;color:#9ca3af;line-height:1.4;">
+      El saldo anterior es el importe a pagar del cupón de pago del mes anterior (expensas y deudas liquidadas) de cada unidad.<br>
+      La columna saldo deudor no incluye intereses. Es el capital de deuda liquidado.
+    </p>
+  </div>` : '';
+
+  // ── Sección 3: datos bancarios ────────────────────────────────
+  const banco    = org.bankName    || 'Banco Roela';
+  const cuenta   = org.bankAccount || '00000';
+  const cbu      = org.bankCbu     || '0000000000000000000000';
+  const titular  = org.bankHolder  || 'x';
+
+  const bankSection = `
+  <div style="margin-top:24px;padding:16px 20px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;">
+    <div style="font-size:12px;font-weight:700;color:#1a1a2e;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;">
+      Datos para transferencia bancaria
+    </div>
+    <table style="font-size:13px;color:#374151;border-collapse:collapse;">
+      <tr>
+        <td style="padding:3px 16px 3px 0;color:#6b7280;font-size:12px;">Banco:</td>
+        <td style="padding:3px 0;font-weight:600;">${banco}</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 16px 3px 0;color:#6b7280;font-size:12px;">N° cuenta:</td>
+        <td style="padding:3px 0;font-weight:600;">${cuenta}</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 16px 3px 0;color:#6b7280;font-size:12px;">CBU:</td>
+        <td style="padding:3px 0;font-weight:600;letter-spacing:1px;">${cbu}</td>
+      </tr>
+      <tr>
+        <td style="padding:3px 16px 3px 0;color:#6b7280;font-size:12px;">Titular:</td>
+        <td style="padding:3px 0;font-weight:600;">${titular}</td>
+      </tr>
+    </table>
+  </div>`;
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -154,9 +287,7 @@ const buildExpensasHTML = (org, month, ordinary, extraordinary) => {
     }
     .org-name { font-size: 22px; font-weight: 800; color: #1a1a2e; }
     .org-meta  { font-size: 12px; color: #6b7280; margin-top: 4px; }
-    .period-badge {
-      text-align: right;
-    }
+    .period-badge { text-align: right; }
     .period-badge .label {
       font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #6b7280; font-weight: 600;
     }
@@ -228,6 +359,10 @@ const buildExpensasHTML = (org, month, ordinary, extraordinary) => {
     <div class="gt-amount">${formatCurrency(grandTotal)}</div>
   </div>
 
+  ${estadoCuentasSection}
+
+  ${bankSection}
+
   <div class="footer">
     ${org.name} — Liquidación generada automáticamente por GestionAr
   </div>
@@ -253,8 +388,8 @@ exports.getExpensasPdf = async (req, res, next) => {
     const monthStart  = new Date(year, mon - 1, 1);
     const monthEnd    = new Date(year, mon, 0, 23, 59, 59, 999);
 
-    const [org, expenses] = await Promise.all([
-      Organization.findById(orgId).select('name address cuit'),
+    const [org, expenses, owners, monthPayments] = await Promise.all([
+      Organization.findById(orgId).select('name address cuit dueDayOfMonth lateFeePercent bankName bankAccount bankCbu bankHolder'),
       Expense.find({
         organization: orgId,
         date: { $gte: monthStart, $lte: monthEnd },
@@ -262,16 +397,30 @@ exports.getExpensasPdf = async (req, res, next) => {
         .populate('provider', 'name cuit')
         .sort({ expenseType: 1, category: 1, date: 1 })
         .lean(),
+      User.find({ organization: orgId, role: 'owner', isActive: true })
+        .select('name unit balance percentage')
+        .sort({ unit: 1 })
+        .lean(),
+      Payment.find({ organization: orgId, status: 'approved', month })
+        .select('owner amount')
+        .lean(),
     ]);
 
     if (!org) {
       return res.status(404).json({ success: false, message: 'Organización no encontrada.' });
     }
 
+    // Agrupar pagos por propietario
+    const paymentsByOwner = {};
+    monthPayments.forEach(p => {
+      const ownerId = p.owner.toString();
+      paymentsByOwner[ownerId] = (paymentsByOwner[ownerId] || 0) + p.amount;
+    });
+
     const ordinary      = expenses.filter(e => e.expenseType !== 'extraordinary');
     const extraordinary = expenses.filter(e => e.expenseType === 'extraordinary');
 
-    const html = buildExpensasHTML(org, month, ordinary, extraordinary);
+    const html = buildExpensasHTML(org, month, ordinary, extraordinary, owners, paymentsByOwner);
 
     const browser = await puppeteer.launch({
       headless: true,

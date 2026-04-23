@@ -174,6 +174,10 @@ const organizationSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    cuit: {
+      type: String,
+      trim: true,
+    },
     adminEmail: {
       type: String,
       trim: true,
@@ -182,6 +186,28 @@ const organizationSchema = new mongoose.Schema(
     adminPhone: {
       type: String,
       trim: true,
+    },
+
+    // ── Datos bancarios para transferencia ───────────────────────
+    bankName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    bankAccount: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    bankCbu: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    bankHolder: {
+      type: String,
+      trim: true,
+      default: '',
     },
 
     // ── Contador secuencial de recibos ───────────────────────────

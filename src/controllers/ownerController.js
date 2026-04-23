@@ -81,7 +81,7 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor'];
+    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor', 'percentage'];
     const ownerData = { role: 'owner', organization: req.orgId };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
     const tempPassword = req.body.password;
@@ -102,7 +102,7 @@ exports.createOwner = async (req, res, next) => {
 // ── PATCH /api/owners/:id — actualizar datos ──────────────────
 exports.updateOwner = async (req, res, next) => {
   try {
-    const allowed = ['name', 'unit', 'phone', 'isActive', 'isDebtor', 'balance'];
+    const allowed = ['name', 'unit', 'phone', 'isActive', 'isDebtor', 'balance', 'percentage'];
     const update  = {};
     allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
 

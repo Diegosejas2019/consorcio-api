@@ -40,8 +40,13 @@ function orgToConfigView(org, includePublicKey = false) {
     dueDayOfMonth:    org.dueDayOfMonth,
     consortiumName:   org.name,
     consortiumAddress: org.address,
+    consortiumCuit:   org.cuit,
     adminEmail:       org.adminEmail,
     adminPhone:       org.adminPhone,
+    bankName:         org.bankName,
+    bankAccount:      org.bankAccount,
+    bankCbu:          org.bankCbu,
+    bankHolder:       org.bankHolder,
     // ── Recargo calculado ──
     isOverdue:  computeIsOverdue(org),
     surcharge,
@@ -70,6 +75,7 @@ const FIELD_MAP = {
   dueDayOfMonth:     'dueDayOfMonth',
   consortiumName:    'name',
   consortiumAddress: 'address',
+  consortiumCuit:    'cuit',
   adminEmail:        'adminEmail',
   adminPhone:        'adminPhone',
   mpPublicKey:       'mpPublicKey',
@@ -81,6 +87,10 @@ const FIELD_MAP = {
   memberLabel:  'memberLabel',
   unitLabel:    'unitLabel',
   businessType: 'businessType',
+  bankName:     'bankName',
+  bankAccount:  'bankAccount',
+  bankCbu:      'bankCbu',
+  bankHolder:   'bankHolder',
 };
 
 // ── GET /api/config ───────────────────────────────────────────
