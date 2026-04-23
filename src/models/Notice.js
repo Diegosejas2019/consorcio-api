@@ -36,6 +36,14 @@ const noticeSchema = new mongoose.Schema(
       default: false,
     },
     pushSentAt: Date,
+    // Email enviado a propietarios
+    emailSent: {
+      type: Boolean,
+      default: false,
+    },
+    emailSentAt: Date,
+    // Propietarios que han leído el aviso
+    readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   },
   {
     timestamps: true,

@@ -1,12 +1,21 @@
 const Notice          = require('../models/Notice');
 const User            = require('../models/User');
 const firebaseService = require('../services/firebaseService');
+const emailService    = require('../services/emailService');
 const logger          = require('../config/logger');
+
+// Agrega isRead para el usuario actual y elimina readBy del resultado
+function withIsRead(notice, userId) {
+  const obj = notice.toObject ? notice.toObject() : notice;
+  obj.isRead = (obj.readBy || []).some(id => id.toString() === userId.toString());
+  delete obj.readBy;
+  return obj;
+}
 
 // ── GET /api/notices ──────────────────────────────────────────
 exports.getNotices = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, tag } = req.query;
+    const { page = 1, limit = 50, tag } = req.query;
     const filter = { organization: req.orgId };
     if (tag) filter.tag = tag;
 
@@ -20,9 +29,12 @@ exports.getNotices = async (req, res, next) => {
       Notice.countDocuments(filter),
     ]);
 
+    const userId = req.user._id;
+    const mapped = notices.map(n => withIsRead(n, userId));
+
     res.json({
       success: true,
-      data: { notices },
+      data: { notices: mapped },
       pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -36,7 +48,7 @@ exports.getNotice = async (req, res, next) => {
     const notice = await Notice.findOne({ _id: req.params.id, organization: req.orgId })
       .populate('author', 'name');
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
-    res.json({ success: true, data: { notice } });
+    res.json({ success: true, data: { notice: withIsRead(notice, req.user._id) } });
   } catch (err) {
     next(err);
   }
@@ -45,7 +57,7 @@ exports.getNotice = async (req, res, next) => {
 // ── POST /api/notices — crear aviso (admin) ───────────────────
 exports.createNotice = async (req, res, next) => {
   try {
-    const { title, body, tag, sendPush = true } = req.body;
+    const { title, body, tag, sendPush = true, sendEmail: doSendEmail = true } = req.body;
 
     const notice = await Notice.create({
       organization: req.orgId,
@@ -95,9 +107,27 @@ exports.createNotice = async (req, res, next) => {
       }
     }
 
+    // Enviar emails a todos los propietarios (fire and forget)
+    if (doSendEmail) {
+      User.find({ organization: req.orgId, role: 'owner', isActive: true })
+        .then(async (emailOwners) => {
+          if (!emailOwners.length) return;
+          const results = await Promise.allSettled(
+            emailOwners.map(o => emailService.sendNoticeEmail(o, notice))
+          );
+          const ok   = results.filter(r => r.status === 'fulfilled').length;
+          const fail = results.filter(r => r.status === 'rejected').length;
+          logger.info(`[Email] Aviso "${notice.title}": ${ok} emails enviados, ${fail} fallidos`);
+          if (ok > 0) {
+            await Notice.findByIdAndUpdate(notice._id, { emailSent: true, emailSentAt: new Date() });
+          }
+        })
+        .catch(e => logger.error(`[Email] Error obteniendo owners para aviso ${notice._id}: ${e.message}`));
+    }
+
     await notice.populate('author', 'name');
     logger.info(`Aviso creado: "${notice.title}" por ${req.user.name}`);
-    res.status(201).json({ success: true, data: { notice } });
+    res.status(201).json({ success: true, data: { notice: withIsRead(notice, req.user._id) } });
   } catch (err) {
     next(err);
   }
@@ -114,7 +144,7 @@ exports.updateNotice = async (req, res, next) => {
     ).populate('author', 'name');
 
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
-    res.json({ success: true, data: { notice } });
+    res.json({ success: true, data: { notice: withIsRead(notice, req.user._id) } });
   } catch (err) {
     next(err);
   }
@@ -126,6 +156,32 @@ exports.deleteNotice = async (req, res, next) => {
     const notice = await Notice.findOneAndDelete({ _id: req.params.id, organization: req.orgId });
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
     res.json({ success: true, message: 'Aviso eliminado.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/notices/:id/read — marcar como leído ───────────
+exports.markAsRead = async (req, res, next) => {
+  try {
+    await Notice.findOneAndUpdate(
+      { _id: req.params.id, organization: req.orgId },
+      { $addToSet: { readBy: req.user._id } }
+    );
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/notices/:id/unread — marcar como no leído ──────
+exports.markAsUnread = async (req, res, next) => {
+  try {
+    await Notice.findOneAndUpdate(
+      { _id: req.params.id, organization: req.orgId },
+      { $pull: { readBy: req.user._id } }
+    );
+    res.json({ success: true });
   } catch (err) {
     next(err);
   }

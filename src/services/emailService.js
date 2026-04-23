@@ -363,4 +363,148 @@ exports.sendMonthlyReminder = async (owner, expenseMonth, amount, dueDay) => {
   });
 };
 
+exports.sendNoticeEmail = async (owner, notice) => {
+  const tagLabels = { info: 'INFORMATIVO', warning: 'ADVERTENCIA', urgent: 'URGENTE' };
+  const tagColors = { info: '#9cf27b', warning: '#fbbf24', urgent: '#f87171' };
+  const tagBg     = { info: 'rgba(156,242,123,0.12)', warning: 'rgba(251,191,36,0.12)', urgent: 'rgba(248,113,113,0.12)' };
+  const tagIcons  = { info: '📢', warning: '⚠️', urgent: '🚨' };
+
+  const color = tagColors[notice.tag] || tagColors.info;
+  const bg    = tagBg[notice.tag]     || tagBg.info;
+  const label = tagLabels[notice.tag] || notice.tag.toUpperCase();
+  const icon  = tagIcons[notice.tag]  || '📢';
+
+  const sentDate = new Date(notice.createdAt).toLocaleDateString('es-AR', {
+    day: '2-digit', month: 'long', year: 'numeric',
+  });
+
+  const bodyHtml = notice.body
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+
+  const html = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>${notice.title} · GestionAr</title>
+  <style>
+    body { margin:0 !important; padding:0 !important; width:100% !important; }
+    table { border-collapse: collapse !important; }
+    img { border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
+    @media only screen and (max-width: 620px) {
+      .wrap { width: 100% !important; }
+      .px-32 { padding-left: 20px !important; padding-right: 20px !important; }
+      .py-40 { padding-top: 28px !important; padding-bottom: 28px !important; }
+      .h1 { font-size: 22px !important; line-height: 28px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#0e1512; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#eef1ed;">
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0e1512;">
+    <tr>
+      <td align="center" style="padding: 32px 16px;">
+        <table role="presentation" class="wrap" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px; max-width:560px;">
+
+          <!-- LOGO -->
+          <tr>
+            <td align="left" class="px-32" style="padding: 8px 32px 24px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td valign="middle" style="padding-right:10px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" width="28" height="28" style="width:28px; height:28px; background-color:#9cf27b; border-radius:8px; color:#0e1512; font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:700; line-height:28px;">G</td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td valign="middle" style="font-family:'Inter Tight', Arial, sans-serif; font-size:20px; font-weight:700; letter-spacing:-0.5px; color:#eef1ed;">
+                    Gestion<span style="color:#9cf27b;">Ar</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- MAIN CARD -->
+          <tr>
+            <td align="left" class="px-32 py-40" style="background-color:#18221d; border:1px solid rgba(255,255,255,0.08); border-radius:20px; padding: 36px 40px;">
+
+              <!-- TAG BADGE -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+                <tr>
+                  <td style="background-color:${bg}; border-radius:999px; padding:5px 12px; font-family:'Courier New', monospace; font-size:11px; font-weight:500; color:${color}; letter-spacing:0.5px;">
+                    ${icon}&nbsp;&nbsp;${label}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- TITLE -->
+              <h1 class="h1" style="margin:0 0 20px 0; font-family:'Inter Tight', Arial, sans-serif; font-size:26px; line-height:32px; font-weight:700; letter-spacing:-0.6px; color:#eef1ed;">
+                ${notice.title}
+              </h1>
+
+              <!-- META -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:20px;">
+                <tr>
+                  <td style="font-family:'Inter', Arial, sans-serif; font-size:13px; color:#6b7870;">
+                    <span style="color:#a8b3ac;">De:</span> Administración &nbsp;·&nbsp; <span style="color:#a8b3ac;">Fecha:</span> ${sentDate}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- BODY -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="font-family:'Inter', Arial, sans-serif; font-size:15px; line-height:26px; color:#c8d6c8;">
+                    ${bodyHtml}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CTA -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:28px;">
+                <tr>
+                  <td align="center" bgcolor="#9cf27b" style="background-color:#9cf27b; border-radius:999px;">
+                    <a href="${process.env.APP_BASE_URL}" target="_blank" style="display:inline-block; background-color:#9cf27b; color:#0e1512; font-family:'Inter Tight', Arial, sans-serif; font-size:14px; font-weight:600; line-height:44px; text-align:center; text-decoration:none; padding:0 28px; border-radius:999px;">
+                      Ver en la aplicación&nbsp;&nbsp;→
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td class="px-32" style="padding: 28px 32px 16px 32px;" align="center">
+              <p style="margin:0 0 6px 0; font-family:'Inter', Arial, sans-serif; font-size:12px; line-height:18px; color:#6b7870; text-align:center;">
+                Este mensaje fue enviado automáticamente. Por favor no respondas a este email.
+              </p>
+              <p style="margin:0; font-family:'Courier New', monospace; font-size:11px; line-height:18px; color:#6b7870; text-align:center; letter-spacing:0.5px;">
+                © 2026 GESTIONAR — ADMINISTRACIÓN DE BARRIOS PRIVADOS
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  return sendEmail({
+    to:      owner.email,
+    subject: `${icon} ${notice.title} | GestionAr`,
+    html,
+  });
+};
+
 module.exports = { ...exports, sendEmail };
