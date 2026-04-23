@@ -145,6 +145,7 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | PATCH | `/api/payments/:id/approve` | admin |
 | PATCH | `/api/payments/:id/reject` | admin |
 | POST | `/api/payments/send-reminders` | admin |
+| POST | `/api/payments/:id/resend-receipt` | admin |
 | GET | `/api/notices` | autenticado |
 | GET | `/api/notices/:id` | autenticado |
 | POST | `/api/notices` | admin |
@@ -195,7 +196,20 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 Cron diario a las 09:00 UTC. Por cada organización cuyo `dueDayOfMonth` coincida con el día actual, envía notificaciones FCM a todos los owners sin pago aprobado en el período vigente (`feePeriodCode`). El endpoint `POST /api/payments/send-reminders` permite disparar esto manualmente.
 
 ### emailService
-Templates HTML para: pago aprobado, pago rechazado, reset de contraseña.
+Proveedor: **Brevo** (API HTTP, reemplazó Nodemailer). Variable de entorno: `BREVO_API_KEY`.
+
+Emails enviados y cuándo se disparan:
+
+| Función | Cuándo se envía | Disparado por |
+|---------|----------------|---------------|
+| `sendWelcome(owner, tempPassword)` | Al crear un propietario (individual o carga masiva) | `POST /api/owners`, `POST /api/owners/bulk` |
+| `sendPasswordReset(user, resetUrl)` | Al solicitar recuperación de contraseña (link válido 10 min) | `POST /api/auth/forgot-password` |
+| `sendPaymentApproved(owner, payment)` | Al aprobar un pago manualmente o via webhook MP | `PATCH /api/payments/:id/approve`, webhook MP |
+| `sendPaymentRejected(owner, payment, reason)` | Al rechazar un pago manualmente o via webhook MP | `PATCH /api/payments/:id/reject`, webhook MP |
+| `sendReceiptEmail(owner, payment, receiptUrl)` | Al aprobar un pago (si se genera recibo PDF) o al reenviar el recibo | `PATCH /api/payments/:id/approve`, `POST /api/payments/:id/resend-receipt` |
+| `sendMonthlyReminder(owner, month, amount, dueDay)` | Cron diario 09:00 UTC (solo owners sin pago aprobado) o disparo manual | `schedulerService`, `POST /api/payments/send-reminders` |
+
+Los errores de envío se loguean pero **no interrumpen** el flujo principal (`.catch()` silencioso en bienvenida y recordatorios; awaiteado en aprobación/rechazo).
 
 ### firebaseService
 `sendToUser(userId, {title, body, data})` — busca el FCM token del usuario y envía.
