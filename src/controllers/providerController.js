@@ -1,3 +1,4 @@
+const { Readable } = require('stream');
 const Provider  = require('../models/Provider');
 const logger    = require('../config/logger');
 const { cloudinary } = require('../config/cloudinary');
@@ -116,7 +117,7 @@ exports.getDocument = async (req, res, next) => {
     const contentLength = cloudRes.headers.get('content-length');
     if (contentLength) res.setHeader('Content-Length', contentLength);
 
-    cloudRes.body.pipe(res);
+    Readable.fromWeb(cloudRes.body).pipe(res);
   } catch (err) {
     next(err);
   }
