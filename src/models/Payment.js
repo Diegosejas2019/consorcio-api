@@ -82,6 +82,17 @@ const paymentSchema = new mongoose.Schema(
       maxlength: [300, 'La nota no puede superar 300 caracteres'],
     },
 
+    // ── Unidades asociadas al pago (snapshot) ─────────────────
+    units: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Unit' }],
+    breakdown: [
+      {
+        _id: false,
+        unit:   { type: mongoose.Schema.Types.ObjectId, ref: 'Unit' },
+        name:   { type: String },
+        amount: { type: Number },
+      },
+    ],
+
     // ── Recibo generado por el sistema ────────────────────────
     systemReceipt: {
       url:      { type: String },

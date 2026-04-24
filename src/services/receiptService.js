@@ -24,6 +24,23 @@ const buildReceiptHTML = (payment, owner, org) => {
   const receiptDate = formatDate(payment.receiptIssuedAt || new Date());
   const totalAmount = payment.amount ?? 0;
 
+  // Mostrar unidades en el info-box del propietario
+  const unitDisplay = payment.breakdown?.length > 0
+    ? payment.breakdown.map(b => b.name).join(', ')
+    : (owner.unit || '—');
+
+  // Filas de detalle: una por unidad si hay breakdown, o fila única
+  const detailRows = payment.breakdown?.length > 0
+    ? payment.breakdown.map(b => `
+      <tr>
+        <td>${org.feeLabel || 'Cuota'} — ${b.name} — ${payment.monthFormatted}</td>
+        <td>${formatCurrency(b.amount)}</td>
+      </tr>`).join('')
+    : `<tr>
+        <td>${org.feeLabel || 'Cuota'} — ${payment.monthFormatted}</td>
+        <td>${formatCurrency(totalAmount)}</td>
+      </tr>`;
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -222,7 +239,7 @@ const buildReceiptHTML = (payment, owner, org) => {
     <div class="info-box">
       <div class="box-label">${org.memberLabel || 'Propietario'}</div>
       <div class="box-value">${owner.name}</div>
-      <div class="box-sub">${org.unitLabel || 'Unidad'}: ${owner.unit || '—'}</div>
+      <div class="box-sub">${org.unitLabel || 'Unidad'}: ${unitDisplay}</div>
     </div>
     <div class="info-box">
       <div class="box-label">Período</div>
@@ -239,10 +256,7 @@ const buildReceiptHTML = (payment, owner, org) => {
       </tr>
     </thead>
     <tbody>
-      <tr>
-        <td>${org.feeLabel || 'Cuota'} — ${payment.monthFormatted}</td>
-        <td>${formatCurrency(totalAmount)}</td>
-      </tr>
+      ${detailRows}
     </tbody>
     <tfoot>
       <tr>

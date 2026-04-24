@@ -99,6 +99,13 @@ userSchema.index({ email: 1, organization: 1 }, { unique: true });
 userSchema.index({ organization: 1, role: 1, isActive: 1 });
 userSchema.index({ organization: 1, isDebtor: 1 });
 
+// ── Virtual: unidades del propietario ────────────────────────
+userSchema.virtual('units', {
+  ref: 'Unit',
+  localField: '_id',
+  foreignField: 'owner',
+});
+
 // ── Virtual: initials ────────────────────────────────────────
 userSchema.virtual('initials').get(function () {
   if (!this.name) return '';

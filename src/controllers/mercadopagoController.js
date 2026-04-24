@@ -2,7 +2,9 @@ const { MercadoPagoConfig, Preference, Payment: MPPayment } = require('mercadopa
 const crypto       = require('crypto');
 const Payment      = require('../models/Payment');
 const User         = require('../models/User');
+const Unit         = require('../models/Unit');
 const Organization = require('../models/Organization');
+const { calcUnitFee } = require('./unitController');
 const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const logger  = require('../config/logger');
@@ -49,7 +51,12 @@ exports.createPreference = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Todos los períodos seleccionados ya están pagados.' });
     }
 
-    const totalAmount = monthlyFee * payablePeriods.length;
+    // Calcular monto desde unidades activas del propietario
+    const activeUnits = await Unit.find({ owner: owner._id, active: true, organization: req.orgId }).sort({ name: 1 });
+    const unitTotal = activeUnits.length > 0
+      ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+      : monthlyFee;
+    const totalAmount = unitTotal * payablePeriods.length;
 
     const client     = await getMPClient(req.orgId);
     const preference = new Preference(client);
@@ -200,18 +207,32 @@ exports.webhook = async (req, res) => {
           return;
         }
 
-        const refOrg    = await Organization.findById(refOrgId);
+        const refOrg     = await Organization.findById(refOrgId);
         const monthlyFee = refOrg?.monthlyFee || 0;
+
+        // Calcular monto desde unidades activas del propietario
+        const refUnits = await Unit.find({ owner: refOwnerId, active: true, organization: refOrgId }).sort({ name: 1 });
+        const unitAmount = refUnits.length > 0
+          ? refUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+          : monthlyFee;
+        const unitsSnapshot   = refUnits.map(u => u._id);
+        const breakdownSnapshot = refUnits.map(u => ({
+          unit:   u._id,
+          name:   u.name,
+          amount: calcUnitFee(u, monthlyFee),
+        }));
 
         const created = await Payment.insertMany(
           newMonths.map(month => ({
             organization:   refOrgId,
             owner:          refOwnerId,
             month,
-            amount:         monthlyFee,
+            amount:         unitAmount,
             status:         'pending',
             paymentMethod:  'mercadopago',
             mpPreferenceId: mpData.preference_id,
+            units:          unitsSnapshot,
+            breakdown:      breakdownSnapshot,
           }))
         );
 

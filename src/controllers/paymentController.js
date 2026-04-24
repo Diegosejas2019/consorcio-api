@@ -1,7 +1,9 @@
 const Payment         = require('../models/Payment');
 const Expense         = require('../models/Expense');
 const User            = require('../models/User');
+const Unit            = require('../models/Unit');
 const Organization    = require('../models/Organization');
+const { calcUnitFee } = require('./unitController');
 const { cloudinary }  = require('../config/cloudinary');
 const emailService    = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
@@ -69,10 +71,21 @@ exports.createPayment = async (req, res, next) => {
 
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
-    // Si no viene amount, usar monthlyFee de la organización como valor por defecto
+    // Cargar unidades activas del propietario para calcular monto y breakdown
+    const [org, activeUnits] = await Promise.all([
+      Organization.findById(req.orgId).select('monthlyFee'),
+      Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
+    ]);
+
+    const monthlyFee = org?.monthlyFee ?? 0;
+
+    // Si no viene amount, calcularlo desde las unidades (o usar monthlyFee si no hay unidades)
     if (amount === undefined || amount === null || amount === '') {
-      const org = await Organization.findById(req.orgId).select('monthlyFee');
-      amount = org?.monthlyFee ?? 0;
+      if (activeUnits.length > 0) {
+        amount = activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0);
+      } else {
+        amount = monthlyFee;
+      }
     }
 
     const existing = await Payment.findOne({
@@ -99,14 +112,24 @@ exports.createPayment = async (req, res, next) => {
       };
     }
 
+    // Snapshot de unidades al momento del pago
+    const unitsSnapshot   = activeUnits.map(u => u._id);
+    const breakdownSnapshot = activeUnits.map(u => ({
+      unit:   u._id,
+      name:   u.name,
+      amount: calcUnitFee(u, monthlyFee),
+    }));
+
     const payment = await Payment.create({
       organization: req.orgId,
-      owner: ownerId,
+      owner:        ownerId,
       month,
-      amount: Number(amount),
-      receipt: receiptData,
+      amount:       Number(amount),
+      receipt:      receiptData,
       ownerNote,
       paymentMethod: 'manual',
+      units:         unitsSnapshot,
+      breakdown:     breakdownSnapshot,
     });
 
     await payment.populate('owner', 'name unit email');
