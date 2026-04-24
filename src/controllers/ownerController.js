@@ -3,6 +3,7 @@ const Payment = require('../models/Payment');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome } = require('../services/emailService');
+const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const XLSX    = require('xlsx');
 
 // ── GET /api/owners — listar todos (admin) ────────────────────
@@ -84,6 +85,12 @@ exports.createOwner = async (req, res, next) => {
     const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor', 'percentage'];
     const ownerData = { role: 'owner', organization: req.orgId };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
+
+    // Calcular período de inicio de cobro
+    const currentPeriod = formatYYYYMM(new Date());
+    const chargeCurrentMonth = req.body.chargeCurrentMonth !== false;
+    ownerData.startBillingPeriod = chargeCurrentMonth ? currentPeriod : getNextMonth(currentPeriod);
+
     const tempPassword = req.body.password;
     const owner = await User.create(ownerData);
     logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
@@ -102,7 +109,7 @@ exports.createOwner = async (req, res, next) => {
 // ── PATCH /api/owners/:id — actualizar datos ──────────────────
 exports.updateOwner = async (req, res, next) => {
   try {
-    const allowed = ['name', 'unit', 'phone', 'isActive', 'isDebtor', 'balance', 'percentage'];
+    const allowed = ['name', 'unit', 'phone', 'isActive', 'isDebtor', 'balance', 'percentage', 'startBillingPeriod'];
     const update  = {};
     allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
 
@@ -208,7 +215,7 @@ exports.bulkCreateOwners = async (req, res, next) => {
       const row    = rows[i];
       const rowNum = i + 2; // fila Excel (1 = encabezados)
 
-      const ownerData = { role: 'owner', organization: req.orgId };
+      const ownerData = { role: 'owner', organization: req.orgId, startBillingPeriod: formatYYYYMM(new Date()) };
       Object.entries(row).forEach(([col, val]) => {
         const field = COL_MAP[col.trim().toLowerCase()] || COL_MAP[col.trim()];
         if (field && val !== undefined && val !== '') ownerData[field] = val;

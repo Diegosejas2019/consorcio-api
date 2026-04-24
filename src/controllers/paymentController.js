@@ -72,10 +72,20 @@ exports.createPayment = async (req, res, next) => {
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
     // Cargar unidades activas del propietario para calcular monto y breakdown
-    const [org, activeUnits] = await Promise.all([
+    const [org, activeUnits, ownerDoc] = await Promise.all([
       Organization.findById(req.orgId).select('monthlyFee'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
+      User.findById(ownerId).select('startBillingPeriod'),
     ]);
+
+    // Validar que el período no sea anterior al inicio de cobro del propietario
+    const startBilling = ownerDoc?.startBillingPeriod;
+    if (startBilling && month < startBilling) {
+      return res.status(400).json({
+        success: false,
+        message: `No se pueden registrar pagos anteriores al período de inicio de cobro del propietario (${startBilling}).`,
+      });
+    }
 
     const monthlyFee = org?.monthlyFee ?? 0;
 

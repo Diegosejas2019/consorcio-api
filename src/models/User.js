@@ -69,6 +69,12 @@ const userSchema = new mongoose.Schema(
       select: false,
     },
 
+    // — Período de inicio de cobro (YYYY-MM) —
+    startBillingPeriod: {
+      type: String,
+      match: [/^\d{4}-\d{2}$/, 'El período de inicio debe tener formato YYYY-MM'],
+    },
+
     // — Control de acceso —
     isActive: {
       type: Boolean,
