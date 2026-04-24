@@ -1,3 +1,4 @@
+const { Readable } = require('stream');
 const Expense  = require('../models/Expense');
 const Provider = require('../models/Provider');
 const logger   = require('../config/logger');
@@ -184,7 +185,7 @@ exports.getAttachment = async (req, res, next) => {
     const contentLength = cloudRes.headers.get('content-length');
     if (contentLength) res.setHeader('Content-Length', contentLength);
 
-    cloudRes.body.pipe(res);
+    Readable.fromWeb(cloudRes.body).pipe(res);
   } catch (err) {
     next(err);
   }
