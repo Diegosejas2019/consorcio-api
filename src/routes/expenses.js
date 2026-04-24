@@ -11,7 +11,7 @@ router.use(protect, restrictTo('admin'));
 
 router.get('/',              ctrl.getExpenses);
 router.post('/',             upload.single('receipt'), ctrl.createExpense);
-router.patch('/:id',         ctrl.updateExpense);
+router.patch('/:id',         upload.single('receipt'), ctrl.updateExpense);
 router.patch('/:id/paid',    ctrl.markAsPaid);
 router.delete('/:id',        ctrl.deleteExpense);
 

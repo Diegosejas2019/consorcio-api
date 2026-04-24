@@ -59,4 +59,27 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 });
 
-module.exports = { upload, cloudinary };
+const providerStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
+    const isImage = file.mimetype.startsWith('image/');
+    const ext     = MIME_TO_EXT[file.mimetype] || 'bin';
+    return {
+      folder:          'consorcio/proveedores',
+      resource_type:   isImage ? 'image' : 'raw',
+      allowed_formats: isImage ? ['jpg', 'jpeg', 'png', 'webp', 'heic'] : ['pdf'],
+      public_id:       isImage
+        ? `prov_${Date.now()}`
+        : `prov_${Date.now()}.${ext}`,
+      type:            'upload',
+    };
+  },
+});
+
+const uploadProvider = multer({
+  storage:    providerStorage,
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+module.exports = { upload, uploadProvider, cloudinary };

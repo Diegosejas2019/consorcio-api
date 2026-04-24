@@ -1,5 +1,6 @@
-const Provider = require('../models/Provider');
-const logger   = require('../config/logger');
+const Provider  = require('../models/Provider');
+const logger    = require('../config/logger');
+const { cloudinary } = require('../config/cloudinary');
 
 // ── GET /api/providers ────────────────────────────────────────
 exports.getProviders = async (req, res, next) => {
@@ -21,6 +22,15 @@ exports.createProvider = async (req, res, next) => {
     const data    = { organization: req.orgId };
     allowed.forEach((f) => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
 
+    if (req.file) {
+      data.document = {
+        url:      req.file.path,
+        publicId: req.file.filename,
+        mimetype: req.file.mimetype,
+        size:     req.file.size,
+      };
+    }
+
     const provider = await Provider.create(data);
     logger.info(`Proveedor creado: ${provider.name} [org: ${req.orgId}]`);
     res.status(201).json({ success: true, data: { provider } });
@@ -35,6 +45,20 @@ exports.updateProvider = async (req, res, next) => {
     const allowed = ['name', 'serviceType', 'cuit', 'phone', 'email', 'active'];
     const update  = {};
     allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+
+    if (req.file) {
+      const current = await Provider.findOne({ _id: req.params.id, organization: req.orgId });
+      if (current?.document?.publicId) {
+        const resType = current.document.mimetype?.startsWith('image/') ? 'image' : 'raw';
+        await cloudinary.uploader.destroy(current.document.publicId, { resource_type: resType }).catch(() => {});
+      }
+      update.document = {
+        url:      req.file.path,
+        publicId: req.file.filename,
+        mimetype: req.file.mimetype,
+        size:     req.file.size,
+      };
+    }
 
     const provider = await Provider.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },

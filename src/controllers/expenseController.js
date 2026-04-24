@@ -108,6 +108,20 @@ exports.updateExpense = async (req, res, next) => {
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
     }
 
+    if (req.file) {
+      const current = await Expense.findOne({ _id: req.params.id, organization: req.orgId });
+      if (current?.receipt?.publicId) {
+        const resType = current.receipt.mimetype?.startsWith('image/') ? 'image' : 'raw';
+        await cloudinary.uploader.destroy(current.receipt.publicId, { resource_type: resType }).catch(() => {});
+      }
+      update.receipt = {
+        url:      req.file.path,
+        publicId: req.file.filename,
+        mimetype: req.file.mimetype,
+        size:     req.file.size,
+      };
+    }
+
     const expense = await Expense.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },
       update,
