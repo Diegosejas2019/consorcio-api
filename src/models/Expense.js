@@ -40,11 +40,14 @@ const expenseSchema = new mongoose.Schema(
       type: String,
       enum: ['cash', 'transfer', 'mercadopago'],
     },
-    receipt: {
+    attachments: [{
       url:      { type: String },
       publicId: { type: String },
-      _id: false,
-    },
+      filename: { type: String },
+      mimetype: { type: String },
+      size:     { type: Number },
+      _id:      false,
+    }],
     expenseType: {
       type: String,
       enum: ['ordinary', 'extraordinary'],

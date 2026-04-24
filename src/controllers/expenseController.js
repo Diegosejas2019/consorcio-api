@@ -82,8 +82,14 @@ exports.createExpense = async (req, res, next) => {
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
     }
 
-    if (req.file) {
-      data.receipt = { url: req.file.path, publicId: req.file.filename };
+    if (req.files?.length) {
+      data.attachments = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
     }
 
     const expense = await Expense.create(data);
@@ -100,37 +106,109 @@ exports.createExpense = async (req, res, next) => {
 exports.updateExpense = async (req, res, next) => {
   try {
     const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'invoiceNumber', 'invoiceCuit'];
-    const update  = {};
-    allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+    const setFields = {};
+    allowed.forEach((f) => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
 
     if (req.body.provider) {
       const prov = await Provider.findOne({ _id: req.body.provider, organization: req.orgId });
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
     }
 
-    if (req.file) {
-      const current = await Expense.findOne({ _id: req.params.id, organization: req.orgId });
-      if (current?.receipt?.publicId) {
-        const resType = current.receipt.mimetype?.startsWith('image/') ? 'image' : 'raw';
-        await cloudinary.uploader.destroy(current.receipt.publicId, { resource_type: resType }).catch(() => {});
-      }
-      update.receipt = {
-        url:      req.file.path,
-        publicId: req.file.filename,
-        mimetype: req.file.mimetype,
-        size:     req.file.size,
-      };
+    const updateQuery = { $set: setFields };
+
+    if (req.files?.length) {
+      const newAttachments = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
+      updateQuery.$push = { attachments: { $each: newAttachments } };
     }
 
     const expense = await Expense.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },
-      update,
+      updateQuery,
       { new: true, runValidators: true }
     ).populate('provider', 'name serviceType cuit');
 
     if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
 
     res.json({ success: true, data: { expense } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/expenses/:id/attachment/:index ───────────────────
+exports.getAttachment = async (req, res, next) => {
+  try {
+    const expense = await Expense.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
+
+    const idx        = parseInt(req.params.index, 10);
+    const attachment = expense.attachments?.[idx];
+    if (!attachment?.publicId) {
+      return res.status(404).json({ success: false, message: 'Adjunto no encontrado.' });
+    }
+
+    const mimetype     = attachment.mimetype || 'application/pdf';
+    const isImage      = mimetype.startsWith('image/');
+    const resourceType = isImage ? 'image' : 'raw';
+    const ext          = isImage
+      ? (mimetype.split('/')[1] === 'jpeg' ? 'jpg' : mimetype.split('/')[1])
+      : 'pdf';
+    const deliveryType = attachment.url?.includes('/authenticated/') ? 'authenticated' : 'upload';
+
+    const signedUrl = cloudinary.utils.private_download_url(
+      attachment.publicId,
+      ext,
+      {
+        resource_type: resourceType,
+        type:          deliveryType,
+        expires_at:    Math.floor(Date.now() / 1000) + 120,
+      }
+    );
+
+    const cloudRes = await fetch(signedUrl);
+    if (!cloudRes.ok) {
+      logger.error(`Cloudinary proxy error: ${cloudRes.status} — publicId: ${attachment.publicId}`);
+      return res.status(502).json({ success: false, message: 'No se pudo obtener el adjunto desde Cloudinary.' });
+    }
+
+    const filename = (attachment.filename || `comprobante.${ext}`).replace(/"/g, '');
+    res.setHeader('Content-Type', mimetype);
+    res.setHeader('Content-Disposition', `${isImage ? 'inline' : 'attachment'}; filename="${filename}"`);
+
+    const contentLength = cloudRes.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    cloudRes.body.pipe(res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── DELETE /api/expenses/:id/attachment/:index ────────────────
+exports.deleteAttachment = async (req, res, next) => {
+  try {
+    const expense = await Expense.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
+
+    const idx        = parseInt(req.params.index, 10);
+    const attachment = expense.attachments?.[idx];
+    if (!attachment) return res.status(404).json({ success: false, message: 'Adjunto no encontrado.' });
+
+    if (attachment.publicId) {
+      const resType = attachment.mimetype?.startsWith('image/') ? 'image' : 'raw';
+      await cloudinary.uploader.destroy(attachment.publicId, { resource_type: resType }).catch(() => {});
+    }
+
+    expense.attachments.splice(idx, 1);
+    await expense.save();
+
+    res.json({ success: true, message: 'Adjunto eliminado.' });
   } catch (err) {
     next(err);
   }
@@ -161,8 +239,11 @@ exports.deleteExpense = async (req, res, next) => {
     const expense = await Expense.findOneAndDelete({ _id: req.params.id, organization: req.orgId });
     if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
 
-    if (expense.receipt?.publicId) {
-      await cloudinary.uploader.destroy(expense.receipt.publicId, { resource_type: 'raw' }).catch(() => {});
+    for (const att of expense.attachments || []) {
+      if (att.publicId) {
+        const resType = att.mimetype?.startsWith('image/') ? 'image' : 'raw';
+        await cloudinary.uploader.destroy(att.publicId, { resource_type: resType }).catch(() => {});
+      }
     }
 
     logger.info(`Gasto eliminado: ${expense.description} [org: ${req.orgId}]`);

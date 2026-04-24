@@ -22,12 +22,14 @@ const providerSchema = new mongoose.Schema(
     phone: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
     active: { type: Boolean, default: true },
-    document: {
+    documents: [{
       url:      { type: String },
       publicId: { type: String },
+      filename: { type: String },
       mimetype: { type: String },
       size:     { type: Number },
-    },
+      _id:      false,
+    }],
   },
   { timestamps: true }
 );

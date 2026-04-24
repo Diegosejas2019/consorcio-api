@@ -9,10 +9,12 @@ router.get('/summary', protect, requireOrg, ctrl.getExpensesSummary);
 // El resto solo para admin
 router.use(protect, restrictTo('admin'));
 
-router.get('/',              ctrl.getExpenses);
-router.post('/',             upload.single('receipt'), ctrl.createExpense);
-router.patch('/:id',         upload.single('receipt'), ctrl.updateExpense);
-router.patch('/:id/paid',    ctrl.markAsPaid);
-router.delete('/:id',        ctrl.deleteExpense);
+router.get('/',                          ctrl.getExpenses);
+router.post('/',                         upload.array('attachments', 5), ctrl.createExpense);
+router.patch('/:id',                     upload.array('attachments', 5), ctrl.updateExpense);
+router.get('/:id/attachment/:index',     ctrl.getAttachment);
+router.delete('/:id/attachment/:index',  ctrl.deleteAttachment);
+router.patch('/:id/paid',                ctrl.markAsPaid);
+router.delete('/:id',                    ctrl.deleteExpense);
 
 module.exports = router;

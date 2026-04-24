@@ -22,13 +22,14 @@ exports.createProvider = async (req, res, next) => {
     const data    = { organization: req.orgId };
     allowed.forEach((f) => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
 
-    if (req.file) {
-      data.document = {
-        url:      req.file.path,
-        publicId: req.file.filename,
-        mimetype: req.file.mimetype,
-        size:     req.file.size,
-      };
+    if (req.files?.length) {
+      data.documents = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
     }
 
     const provider = await Provider.create(data);
@@ -43,31 +44,103 @@ exports.createProvider = async (req, res, next) => {
 exports.updateProvider = async (req, res, next) => {
   try {
     const allowed = ['name', 'serviceType', 'cuit', 'phone', 'email', 'active'];
-    const update  = {};
-    allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+    const setFields = {};
+    allowed.forEach((f) => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
 
-    if (req.file) {
-      const current = await Provider.findOne({ _id: req.params.id, organization: req.orgId });
-      if (current?.document?.publicId) {
-        const resType = current.document.mimetype?.startsWith('image/') ? 'image' : 'raw';
-        await cloudinary.uploader.destroy(current.document.publicId, { resource_type: resType }).catch(() => {});
-      }
-      update.document = {
-        url:      req.file.path,
-        publicId: req.file.filename,
-        mimetype: req.file.mimetype,
-        size:     req.file.size,
-      };
+    const updateQuery = { $set: setFields };
+
+    if (req.files?.length) {
+      const newDocs = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
+      updateQuery.$push = { documents: { $each: newDocs } };
     }
 
     const provider = await Provider.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },
-      update,
+      updateQuery,
       { new: true, runValidators: true }
     );
     if (!provider) return res.status(404).json({ success: false, message: 'Proveedor no encontrado.' });
 
     res.json({ success: true, data: { provider } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/providers/:id/document/:index ────────────────────
+exports.getDocument = async (req, res, next) => {
+  try {
+    const provider = await Provider.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!provider) return res.status(404).json({ success: false, message: 'Proveedor no encontrado.' });
+
+    const idx = parseInt(req.params.index, 10);
+    const doc = provider.documents?.[idx];
+    if (!doc?.publicId) {
+      return res.status(404).json({ success: false, message: 'Documento no encontrado.' });
+    }
+
+    const mimetype     = doc.mimetype || 'application/pdf';
+    const isImage      = mimetype.startsWith('image/');
+    const resourceType = isImage ? 'image' : 'raw';
+    const ext          = isImage
+      ? (mimetype.split('/')[1] === 'jpeg' ? 'jpg' : mimetype.split('/')[1])
+      : 'pdf';
+    const deliveryType = doc.url?.includes('/authenticated/') ? 'authenticated' : 'upload';
+
+    const signedUrl = cloudinary.utils.private_download_url(
+      doc.publicId,
+      ext,
+      {
+        resource_type: resourceType,
+        type:          deliveryType,
+        expires_at:    Math.floor(Date.now() / 1000) + 120,
+      }
+    );
+
+    const cloudRes = await fetch(signedUrl);
+    if (!cloudRes.ok) {
+      logger.error(`Cloudinary proxy error: ${cloudRes.status} — publicId: ${doc.publicId}`);
+      return res.status(502).json({ success: false, message: 'No se pudo obtener el documento desde Cloudinary.' });
+    }
+
+    const filename = (doc.filename || `documento.${ext}`).replace(/"/g, '');
+    res.setHeader('Content-Type', mimetype);
+    res.setHeader('Content-Disposition', `${isImage ? 'inline' : 'attachment'}; filename="${filename}"`);
+
+    const contentLength = cloudRes.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    cloudRes.body.pipe(res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── DELETE /api/providers/:id/document/:index ─────────────────
+exports.deleteDocument = async (req, res, next) => {
+  try {
+    const provider = await Provider.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!provider) return res.status(404).json({ success: false, message: 'Proveedor no encontrado.' });
+
+    const idx = parseInt(req.params.index, 10);
+    const doc = provider.documents?.[idx];
+    if (!doc) return res.status(404).json({ success: false, message: 'Documento no encontrado.' });
+
+    if (doc.publicId) {
+      const resType = doc.mimetype?.startsWith('image/') ? 'image' : 'raw';
+      await cloudinary.uploader.destroy(doc.publicId, { resource_type: resType }).catch(() => {});
+    }
+
+    provider.documents.splice(idx, 1);
+    await provider.save();
+
+    res.json({ success: true, message: 'Documento eliminado.' });
   } catch (err) {
     next(err);
   }

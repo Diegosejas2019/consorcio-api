@@ -6,8 +6,10 @@ const { uploadProvider } = require('../config/cloudinary');
 router.use(protect, restrictTo('admin'));
 
 router.get('/',       ctrl.getProviders);
-router.post('/',      uploadProvider.single('document'), ctrl.createProvider);
-router.patch('/:id',  uploadProvider.single('document'), ctrl.updateProvider);
+router.post('/',      uploadProvider.array('documents', 5), ctrl.createProvider);
+router.patch('/:id',  uploadProvider.array('documents', 5), ctrl.updateProvider);
+router.get('/:id/document/:index',    ctrl.getDocument);
+router.delete('/:id/document/:index', ctrl.deleteDocument);
 router.delete('/:id', ctrl.deleteProvider);
 
 module.exports = router;
