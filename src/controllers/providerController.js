@@ -20,7 +20,7 @@ exports.getProviders = async (req, res, next) => {
 exports.createProvider = async (req, res, next) => {
   try {
     const allowed = ['name', 'serviceType', 'cuit', 'phone', 'email'];
-    const data    = { organization: req.orgId };
+    const data    = { organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
 
     if (req.files?.length) {
@@ -45,7 +45,7 @@ exports.createProvider = async (req, res, next) => {
 exports.updateProvider = async (req, res, next) => {
   try {
     const allowed = ['name', 'serviceType', 'cuit', 'phone', 'email', 'active'];
-    const setFields = {};
+    const setFields = { updatedBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
 
     const updateQuery = { $set: setFields };

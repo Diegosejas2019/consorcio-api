@@ -45,6 +45,12 @@ const claimSchema = new mongoose.Schema(
       ref: 'User',
     },
     resolvedAt: Date,
+
+    // ── Auditoría / soft delete ───────────────────────────────
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deletedAt: { type: Date },
+    isActive:  { type: Boolean, default: true },
   },
   {
     timestamps: true,
@@ -55,6 +61,7 @@ const claimSchema = new mongoose.Schema(
 
 claimSchema.index({ owner: 1, createdAt: -1 });
 claimSchema.index({ status: 1 });
+claimSchema.index({ organization: 1, isActive: 1 });
 
 claimSchema.virtual('categoryLabel').get(function () {
   const labels = {

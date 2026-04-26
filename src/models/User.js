@@ -75,6 +75,12 @@ const userSchema = new mongoose.Schema(
       match: [/^\d{4}-\d{2}$/, 'El período de inicio debe tener formato YYYY-MM'],
     },
 
+    // — Auditoría —
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+
     // — Control de acceso —
     isActive: {
       type: Boolean,

@@ -66,11 +66,18 @@ const expenseSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+
+    // ── Auditoría / soft delete ───────────────────────────────
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deletedAt: { type: Date },
+    isActive:  { type: Boolean, default: true },
   },
   { timestamps: true }
 );
 
 expenseSchema.index({ organization: 1, date: -1 });
 expenseSchema.index({ organization: 1, status: 1 });
+expenseSchema.index({ organization: 1, isActive: 1 });
 
 module.exports = mongoose.model('Expense', expenseSchema);

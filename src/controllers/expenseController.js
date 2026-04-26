@@ -22,7 +22,7 @@ exports.getExpensesSummary = async (req, res, next) => {
     to.setMonth(to.getMonth() + 1);
 
     const agg = await Expense.aggregate([
-      { $match: { organization: req.orgId, date: { $gte: from, $lt: to } } },
+      { $match: { organization: req.orgId, isActive: { $ne: false }, date: { $gte: from, $lt: to } } },
       { $group: { _id: '$category', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
       { $sort: { amount: -1 } },
     ]);
@@ -46,7 +46,7 @@ exports.getExpenses = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, month, category, status } = req.query;
 
-    const filter = { organization: req.orgId };
+    const filter = { organization: req.orgId, isActive: { $ne: false } };
     if (month)    filter.date = { $gte: new Date(`${month}-01`), $lte: new Date(`${month}-31`) };
     if (category) filter.category = category;
     if (status)   filter.status   = status;
@@ -107,7 +107,7 @@ exports.createExpense = async (req, res, next) => {
 exports.updateExpense = async (req, res, next) => {
   try {
     const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'invoiceNumber', 'invoiceCuit'];
-    const setFields = {};
+    const setFields = { updatedBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
 
     if (req.body.provider) {
@@ -237,17 +237,15 @@ exports.markAsPaid = async (req, res, next) => {
 // ── DELETE /api/expenses/:id ──────────────────────────────────
 exports.deleteExpense = async (req, res, next) => {
   try {
-    const expense = await Expense.findOneAndDelete({ _id: req.params.id, organization: req.orgId });
+    const expense = await Expense.findOne({ _id: req.params.id, organization: req.orgId, isActive: { $ne: false } });
     if (!expense) return res.status(404).json({ success: false, message: 'Gasto no encontrado.' });
 
-    for (const att of expense.attachments || []) {
-      if (att.publicId) {
-        const resType = att.mimetype?.startsWith('image/') ? 'image' : 'raw';
-        await cloudinary.uploader.destroy(att.publicId, { resource_type: resType }).catch(() => {});
-      }
-    }
+    expense.isActive  = false;
+    expense.deletedAt = new Date();
+    expense.deletedBy = req.user._id;
+    await expense.save();
 
-    logger.info(`Gasto eliminado: ${expense.description} [org: ${req.orgId}]`);
+    logger.info('Expense soft deleted', { id: expense._id, userId: req.user._id });
     res.json({ success: true, message: 'Gasto eliminado correctamente.' });
   } catch (err) {
     next(err);

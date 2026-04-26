@@ -140,6 +140,7 @@ exports.createPayment = async (req, res, next) => {
       paymentMethod: 'manual',
       units:         unitsSnapshot,
       breakdown:     breakdownSnapshot,
+      createdBy:     req.user._id,
     });
 
     await payment.populate('owner', 'name unit email');
@@ -168,6 +169,7 @@ exports.approvePayment = async (req, res, next) => {
     payment.status      = 'approved';
     payment.reviewedBy  = req.user._id;
     payment.reviewedAt  = new Date();
+    payment.approvedBy  = req.user._id;
     await payment.save();
 
     await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false, balance: 0 });
@@ -203,7 +205,7 @@ exports.approvePayment = async (req, res, next) => {
       });
     }
 
-    logger.info(`Pago aprobado: ${payment._id} — ${payment.owner.name}`);
+    logger.info('Payment approved', { paymentId: payment._id, approvedBy: req.user._id });
     res.json({ success: true, message: 'Pago aprobado correctamente.', data: { payment } });
   } catch (err) {
     next(err);
@@ -230,6 +232,7 @@ exports.rejectPayment = async (req, res, next) => {
     payment.rejectionNote = rejectionNote.trim();
     payment.reviewedBy    = req.user._id;
     payment.reviewedAt    = new Date();
+    payment.rejectedBy    = req.user._id;
     await payment.save();
 
     Promise.allSettled([
@@ -378,7 +381,7 @@ exports.getDashboard = async (req, res, next) => {
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       Expense.aggregate([
-        { $match: { ...orgFilter, status: 'paid', date: { $gte: yearStart, $lte: yearEnd } } },
+        { $match: { ...orgFilter, status: 'paid', isActive: { $ne: false }, date: { $gte: yearStart, $lte: yearEnd } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
     ]);

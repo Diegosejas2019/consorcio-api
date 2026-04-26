@@ -83,7 +83,7 @@ exports.getOwner = async (req, res, next) => {
 exports.createOwner = async (req, res, next) => {
   try {
     const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor', 'percentage'];
-    const ownerData = { role: 'owner', organization: req.orgId };
+    const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
 
     // Calcular período de inicio de cobro
@@ -215,7 +215,7 @@ exports.bulkCreateOwners = async (req, res, next) => {
       const row    = rows[i];
       const rowNum = i + 2; // fila Excel (1 = encabezados)
 
-      const ownerData = { role: 'owner', organization: req.orgId, startBillingPeriod: formatYYYYMM(new Date()) };
+      const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id, startBillingPeriod: formatYYYYMM(new Date()) };
       Object.entries(row).forEach(([col, val]) => {
         const field = COL_MAP[col.trim().toLowerCase()] || COL_MAP[col.trim()];
         if (field && val !== undefined && val !== '') ownerData[field] = val;

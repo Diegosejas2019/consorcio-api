@@ -41,7 +41,7 @@ exports.getMonthlySummary = async (req, res, next) => {
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       Expense.aggregate([
-        { $match: { organization: orgId, status: 'paid', date: { $gte: monthStart, $lte: monthEnd } } },
+        { $match: { organization: orgId, status: 'paid', isActive: { $ne: false }, date: { $gte: monthStart, $lte: monthEnd } } },
         { $group: { _id: '$category', total: { $sum: '$amount' } } },
       ]),
       Payment.aggregate([
@@ -49,7 +49,7 @@ exports.getMonthlySummary = async (req, res, next) => {
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       Expense.aggregate([
-        { $match: { organization: orgId, status: 'paid', date: { $lt: monthStart } } },
+        { $match: { organization: orgId, status: 'paid', isActive: { $ne: false }, date: { $lt: monthStart } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
     ]);
@@ -392,6 +392,7 @@ exports.getExpensasPdf = async (req, res, next) => {
       Organization.findById(orgId).select('name address cuit dueDayOfMonth lateFeePercent bankName bankAccount bankCbu bankHolder'),
       Expense.find({
         organization: orgId,
+        isActive: { $ne: false },
         date: { $gte: monthStart, $lte: monthEnd },
       })
         .populate('provider', 'name cuit')

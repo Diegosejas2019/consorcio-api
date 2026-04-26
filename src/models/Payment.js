@@ -82,6 +82,11 @@ const paymentSchema = new mongoose.Schema(
       maxlength: [300, 'La nota no puede superar 300 caracteres'],
     },
 
+    // ── Auditoría ─────────────────────────────────────────────
+    createdBy:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
     // ── Unidades asociadas al pago (snapshot) ─────────────────
     units: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Unit' }],
     breakdown: [

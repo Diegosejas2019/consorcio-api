@@ -8,7 +8,7 @@ exports.getClaims = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, status } = req.query;
 
-    const filter = { organization: req.orgId };
+    const filter = { organization: req.orgId, isActive: { $ne: false } };
     if (req.user.role === 'owner') filter.owner = req.user._id;
     if (status) filter.status = status;
 
@@ -77,7 +77,8 @@ exports.updateStatus = async (req, res, next) => {
     if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });
 
     const prev = claim.status;
-    claim.status = status;
+    claim.status    = status;
+    claim.updatedBy = req.user._id;
     if (adminNote !== undefined) claim.adminNote = adminNote.trim();
     if (status === 'resolved' && prev !== 'resolved') {
       claim.resolvedBy = req.user._id;
@@ -103,7 +104,7 @@ exports.updateStatus = async (req, res, next) => {
 // ── DELETE /api/claims/:id — eliminar (owner pendiente / admin) ─
 exports.deleteClaim = async (req, res, next) => {
   try {
-    const claim = await Claim.findOne({ _id: req.params.id, organization: req.orgId });
+    const claim = await Claim.findOne({ _id: req.params.id, organization: req.orgId, isActive: { $ne: false } });
     if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });
 
     if (req.user.role === 'owner') {
@@ -115,7 +116,12 @@ exports.deleteClaim = async (req, res, next) => {
       }
     }
 
-    await claim.deleteOne();
+    claim.isActive  = false;
+    claim.deletedAt = new Date();
+    claim.deletedBy = req.user._id;
+    await claim.save();
+
+    logger.info('Claim soft deleted', { id: claim._id, userId: req.user._id });
     res.json({ success: true, message: 'Reclamo eliminado.' });
   } catch (err) {
     next(err);

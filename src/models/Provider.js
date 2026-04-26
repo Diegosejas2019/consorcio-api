@@ -22,6 +22,11 @@ const providerSchema = new mongoose.Schema(
     phone: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
     active: { type: Boolean, default: true },
+
+    // ── Auditoría ─────────────────────────────────────────────
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
     documents: [{
       url:      { type: String },
       publicId: { type: String },
