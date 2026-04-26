@@ -21,13 +21,23 @@ async function sendDueDateReminders(org) {
     status: 'approved',
   })).map(p => p.owner.toString());
 
-  // Owners activos sin pago aprobado
+  // Owners activos sin pago aprobado (respeta startBillingPeriod)
   const unpaid = await User.find({
     organization: org._id,
     role: 'owner',
     isActive: true,
     _id: { $nin: paidIds },
+    $or: [
+      { startBillingPeriod: { $exists: false } },
+      { startBillingPeriod: { $lte: month } },
+    ],
   }).select('+fcmToken');
+
+  if (unpaid.length > 0) {
+    const unpaidIds = unpaid.map(u => u._id);
+    await User.updateMany({ _id: { $in: unpaidIds } }, { isDebtor: true });
+    logger.info(`[Scheduler] Org ${org._id}: ${unpaid.length} propietario(s) marcados como deudores`);
+  }
 
   const tokens = unpaid.map(u => u.fcmToken).filter(Boolean);
   logger.info(`[Scheduler] Org ${org._id}: ${unpaid.length} sin pago, ${tokens.length} token(s) FCM`);
