@@ -26,6 +26,7 @@ function computeSurcharge(org) {
 function orgToConfigView(org, includePublicKey = false) {
   const surcharge = computeSurcharge(org);
   const data = {
+    hasMercadoPago: !!org.mpAccessToken,
     _id: org._id,
     // ── Monto mensual ──
     monthlyFee:       org.monthlyFee || 0,
@@ -97,7 +98,7 @@ const FIELD_MAP = {
 exports.getConfig = async (req, res, next) => {
   try {
     const org = req.org
-      ? await Organization.findById(req.org._id).select('+mpPublicKey')
+      ? await Organization.findById(req.org._id).select('+mpPublicKey +mpAccessToken')
       : null;
 
     if (!org) {
