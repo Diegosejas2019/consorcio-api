@@ -11,7 +11,7 @@ API REST multi-tenant para la gestión de organizaciones (consorcios, gimnasios,
 - **Almacenamiento de archivos:** Cloudinary (comprobantes: PDF, JPG, PNG, WebP, HEIC)
 - **Pagos:** MercadoPago Checkout Pro (preferencias + webhook HMAC)
 - **Push notifications:** Firebase Admin SDK (FCM, mensajes data-only)
-- **Email:** Nodemailer (SMTP)
+- **Email:** Brevo (API HTTP)
 - **Monitoreo:** Sentry (solo errores 5xx)
 - **Deploy:** Railway
 
@@ -42,7 +42,7 @@ src/
   models/               # esquemas Mongoose
   routes/               # definición de endpoints (incluye internal.js para rutas internas)
   services/
-    emailService.js     # envío de emails (Nodemailer SMTP) con templates HTML
+    emailService.js     # envío de emails (Brevo API HTTP) con templates HTML
     firebaseService.js  # push notifications FCM (sendToUser, sendMulticast)
     schedulerService.js # cron diario 09:00 UTC — recordatorios de vencimiento
 ```
@@ -55,17 +55,21 @@ Entidad raíz del sistema multi-tenant. Cada organización tiene su propia confi
 - Templates predefinidos con terminología específica (`feeLabel`, `memberLabel`, `unitLabel`)
 - Configuración de mora: `lateFeeType` (`percent` | `fixed`), `lateFeePercent`, `lateFeeFixed`
 - `dueDayOfMonth`: día de vencimiento (1–28)
-- `monthlyFee`: monto mensual por defecto (usado al crear preferencias MP y en reportes)
+- `monthlyFee`: monto mensual base; `feeAmount`: importe alternativo (ambos default 0)
+- `feePeriodCode`: período actual de cobro (formato `YYYY-MM`); `feePeriodLabel`: versión legible ("Abril 2025")
 - `paymentPeriods`: array de períodos habilitados para pago (formato `YYYY-MM`)
-- Credenciales MercadoPago propias con `select: false`
+- `bankName`, `bankAccount`, `bankCbu`, `bankHolder`: datos bancarios para transferencia
+- `receiptCounter`: contador secuencial de recibos (se incrementa con cada recibo generado)
+- `isActive`: soft-disable de la organización
+- Credenciales MercadoPago propias con `select: false`: `mpPublicKey`, `mpAccessToken`, `mpWebhookSecret`
 - `slug` único (auto-generado desde el nombre)
 
 ### User
 Roles: `owner` | `admin` | `superadmin`.
-Campos clave: `unit`, `balance` (negativo = deuda), `isDebtor`, `fcmToken` (select: false).
+Campos clave: `unit` (texto libre), `phone`, `balance` (negativo = deuda), `percentage` (prorrateo 0–100), `isDebtor`, `startBillingPeriod` (YYYY-MM, período a partir del cual se cobran expensas), `fcmToken` (select: false).
 Password hasheado con bcrypt (12 rounds), nunca devuelto en queries.
 `DELETE /api/owners/:id` es soft-delete: pone `isActive: false`. El propietario deja de aparecer en listados y no puede iniciar sesión, pero su historial de pagos se conserva.
-Virtual `initials` (primeras 2 letras de los primeros 2 nombres).
+Virtual `initials` (primeras 2 letras de los primeros 2 nombres). Virtual `units` (ref a `Unit`, las unidades asignadas al propietario).
 
 ### Payment
 Estados: `pending` → `approved` | `rejected`.
@@ -79,6 +83,7 @@ Virtual `monthFormatted` (ej: "Abril 2025").
 Tags: `info` | `warning` | `urgent`.
 Al crear, el admin puede disparar push notification a todos los miembros.
 Virtual `tagLabel` en español.
+Owners pueden marcar avisos como leídos/no leídos (`PATCH /:id/read`, `PATCH /:id/unread`).
 
 ### Claim
 Categorías: `infrastructure` | `security` | `noise` | `cleaning` | `billing` | `other`.
@@ -98,6 +103,33 @@ Puede tener comprobante adjunto en Cloudinary. Referencia opcional a `Provider`.
 Proveedores de servicios de la organización.
 Campos: `name`, `serviceType` (mismas categorías que Expense), `cuit`, `phone`, `email`, `active`.
 Soft-delete: `active: false`.
+
+### Unit
+Unidades funcionales de la organización (lotes, departamentos, membresías, etc.), asignadas a un propietario.
+Campos: `organization`, `owner` (ref User), `name`, `coefficient` (default 1, para prorrateo), `customFee` (monto fijo personalizado; prevalece sobre `organization.monthlyFee * coefficient`), `active`.
+Índices: `{organization, owner}`, `{organization, active}`.
+
+### Visit
+Visitas autorizadas por propietarios para ingreso al complejo.
+Tipos (`type`): `visit` | `provider` | `delivery`.
+Estados (`status`): `pending` | `approved` | `rejected` | `inside` | `exited`.
+Campos: `organization`, `owner`, `name` (del visitante), `type`, `expectedDate`, `note`, `approvedBy`, `approvedAt`.
+Virtuales: `typeLabel`, `statusLabel` en español.
+
+### Space
+Espacios comunes reservables de la organización.
+Campos: `organization`, `name`, `description`, `capacity`, `requiresApproval` (bool, default false).
+
+### Reservation
+Reservas de espacios comunes por propietarios.
+Campos: `organization`, `owner`, `space` (ref Space), `date` (YYYY-MM-DD), `startTime` (HH:mm), `endTime` (HH:mm), `status` (`pending` | `approved` | `rejected` | `cancelled`), `note`.
+Índice compuesto `{organization, space, date}` para consultas de disponibilidad.
+Virtual `statusLabel` en español.
+
+### OrganizationFeature
+Feature flags por organización. Permite habilitar/deshabilitar módulos (visits, reservations, votes, expenses, providers) de forma independiente.
+Campos: `organization`, `featureKey` (string), `enabled` (bool, default true).
+Índice único `{organization, featureKey}`.
 
 ### Config
 Legado — singleton global. Usar `Organization` para configuración por organización.
@@ -129,6 +161,8 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | GET/PATCH | `/api/organizations/:id` | admin, superadmin |
 | DELETE | `/api/organizations/:id` | superadmin |
 | GET | `/api/organizations/:id/members` | admin, superadmin |
+| GET | `/api/organizations/:id/features` | autenticado |
+| PUT | `/api/organizations/:id/features` | admin, superadmin |
 | GET | `/api/owners` | admin |
 | GET | `/api/owners/stats` | admin |
 | POST | `/api/owners` | admin |
@@ -136,6 +170,10 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | POST | `/api/owners/bulk` | admin (Excel .xlsx, máx 5 MB) |
 | GET/PATCH/DELETE | `/api/owners/:id` | admin (o propio owner) |
 | POST | `/api/owners/:id/notify` | admin |
+| GET | `/api/units` | autenticado + requireOrg |
+| POST | `/api/units` | admin, superadmin |
+| PATCH | `/api/units/:id` | admin, superadmin |
+| DELETE | `/api/units/:id` | admin, superadmin |
 | GET | `/api/payments` | autenticado (owner: los suyos) |
 | POST | `/api/payments` | autenticado (con upload comprobante) |
 | GET | `/api/payments/dashboard` | admin |
@@ -149,7 +187,10 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | GET | `/api/notices` | autenticado |
 | GET | `/api/notices/:id` | autenticado |
 | POST | `/api/notices` | admin |
-| PATCH/DELETE | `/api/notices/:id` | admin |
+| PATCH | `/api/notices/:id` | admin |
+| DELETE | `/api/notices/:id` | admin |
+| PATCH | `/api/notices/:id/read` | autenticado |
+| PATCH | `/api/notices/:id/unread` | autenticado |
 | GET | `/api/claims` | autenticado (owner: los suyos) |
 | POST | `/api/claims` | owner |
 | PATCH | `/api/claims/:id/status` | admin |
@@ -164,6 +205,18 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | POST | `/api/providers` | admin |
 | PATCH | `/api/providers/:id` | admin |
 | DELETE | `/api/providers/:id` | admin |
+| GET | `/api/visits` | autenticado (owner: las suyas) |
+| POST | `/api/visits` | owner |
+| PATCH | `/api/visits/:id/status` | admin |
+| DELETE | `/api/visits/:id` | autenticado |
+| GET | `/api/spaces` | autenticado |
+| POST | `/api/spaces` | admin |
+| PATCH | `/api/spaces/:id` | admin |
+| DELETE | `/api/spaces/:id` | admin |
+| GET | `/api/reservations` | autenticado (owner: las suyas) |
+| POST | `/api/reservations` | autenticado |
+| PATCH | `/api/reservations/:id/status` | admin |
+| DELETE | `/api/reservations/:id` | autenticado |
 | GET | `/api/reports/monthly-summary` | admin |
 | GET | `/api/reports/expensas-pdf` | admin (PDF descargable, `?month=YYYY-MM`) |
 | GET/PATCH | `/api/config` | admin |
@@ -196,7 +249,7 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 Cron diario a las 09:00 UTC. Por cada organización cuyo `dueDayOfMonth` coincida con el día actual, envía notificaciones FCM a todos los owners sin pago aprobado en el período vigente (`feePeriodCode`). El endpoint `POST /api/payments/send-reminders` permite disparar esto manualmente.
 
 ### emailService
-Proveedor: **Brevo** (API HTTP, reemplazó Nodemailer). Variable de entorno: `BREVO_API_KEY`.
+Proveedor: **Brevo** (API HTTP). Variable de entorno: `BREVO_API_KEY`.
 
 Emails enviados y cuándo se disparan:
 
@@ -240,7 +293,7 @@ JWT_EXPIRES_IN                       # default: 7d
 CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET
 APP_BASE_URL                         # para construir notification_url del webhook MP
 FIREBASE_PROJECT_ID / FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY
-SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM
+BREVO_API_KEY                        # email via Brevo API
 ALLOWED_ORIGINS
 INTERNAL_API_KEY                     # para el endpoint POST /api/internal/create-organization
 SENTRY_DSN                           # opcional
@@ -268,7 +321,7 @@ no en variables de entorno.
 - Respuestas siempre con `{ success: true/false, data/message }`
 - Fechas en ISO 8601, período en formato `YYYY-MM`
 - Logging con Winston: `logger.info/warn/error/debug`
-- Rate limiting: 200 req/15min global; 10 intentos/15min en login; 3 req/hora en forgot-password
+- Rate limiting: 200 req/15min global; 10 intentos/15min en login; 5 req/hora en forgot-password
 - Webhook MP recibe body en `raw`
 - `mpPublicKey`, `mpAccessToken`, `mpWebhookSecret` en Organization tienen `select: false`
 - `fcmToken` y `password` en User tienen `select: false`
