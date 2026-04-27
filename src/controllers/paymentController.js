@@ -133,7 +133,10 @@ exports.createPayment = async (req, res, next) => {
     ]);
 
     if (!month && extraordinaryIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'El período es obligatorio.' });
+      if (!amount || Number(amount) < 1) {
+        return res.status(400).json({ success: false, message: 'El período o importe son obligatorios.' });
+      }
+      // balance payment — continúa
     }
 
     const monthlyFee = org?.monthlyFee ?? 0;
@@ -224,6 +227,10 @@ exports.createPayment = async (req, res, next) => {
       amount: calcUnitFee(u, monthlyFee),
     }));
 
+    const paymentType = (!month && extraordinaryIds.length === 0)
+      ? 'balance'
+      : (!month ? 'extraordinary' : 'monthly');
+
     const payment = await Payment.create({
       organization:      req.orgId,
       owner:             ownerId,
@@ -232,6 +239,7 @@ exports.createPayment = async (req, res, next) => {
       receipt:           receiptData,
       ownerNote,
       paymentMethod:     'manual',
+      type:              paymentType,
       units:             unitsSnapshot,
       breakdown:         breakdownSnapshot,
       extraordinaryItems,
@@ -267,7 +275,18 @@ exports.approvePayment = async (req, res, next) => {
     payment.approvedBy  = req.user._id;
     await payment.save();
 
-    await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false, balance: 0 });
+    if (payment.type === 'balance') {
+      const updated = await User.findByIdAndUpdate(
+        payment.owner._id,
+        { $inc: { balance: payment.amount } },
+        { new: true }
+      ).select('balance');
+      if ((updated?.balance ?? -1) >= 0) {
+        await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false });
+      }
+    } else {
+      await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false, balance: 0 });
+    }
 
     // Generar recibo del sistema de forma asíncrona (no bloquea la aprobación)
     if (!payment.systemReceipt?.url) {
