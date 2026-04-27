@@ -74,7 +74,7 @@ exports.getExpenses = async (req, res, next) => {
 // ── POST /api/expenses ────────────────────────────────────────
 exports.createExpense = async (req, res, next) => {
   try {
-    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'invoiceNumber', 'invoiceCuit'];
+    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'isChargeable', 'appliesToAllOwners', 'invoiceNumber', 'invoiceCuit'];
     const data    = { organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
 
@@ -106,7 +106,7 @@ exports.createExpense = async (req, res, next) => {
 // ── PATCH /api/expenses/:id ───────────────────────────────────
 exports.updateExpense = async (req, res, next) => {
   try {
-    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'invoiceNumber', 'invoiceCuit'];
+    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'isChargeable', 'appliesToAllOwners', 'invoiceNumber', 'invoiceCuit'];
     const setFields = { updatedBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
 
