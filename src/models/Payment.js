@@ -29,9 +29,8 @@ const paymentSchema = new mongoose.Schema(
     // ── Período ───────────────────────────────────────────────
     month: {
       type: String,
-      required: [true, 'El período es obligatorio'],
       match: [/^\d{4}-(0[1-9]|1[0-2])$/, 'Formato de mes inválido (YYYY-MM)'],
-      // Ej: "2025-04"
+      // Ej: "2025-04". Opcional en pagos de solo-extraordinarios.
     },
 
     // ── Importe ───────────────────────────────────────────────
@@ -127,6 +126,7 @@ paymentSchema.index({ organization: 1, month: 1, status: 1 });
 
 // ── Virtual: mes formateado ──────────────────────────────────
 paymentSchema.virtual('monthFormatted').get(function () {
+  if (!this.month) return 'Extraordinario';
   const months = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
     'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
@@ -136,10 +136,12 @@ paymentSchema.virtual('monthFormatted').get(function () {
 });
 
 // ── Evitar duplicados: un solo pago activo por propietario/mes ─
+// sparse: true excluye documentos sin month (pagos de solo-extraordinarios)
 paymentSchema.index(
   { owner: 1, month: 1 },
   {
     unique: true,
+    sparse: true,
     partialFilterExpression: { status: { $in: ['pending', 'approved'] } },
   }
 );

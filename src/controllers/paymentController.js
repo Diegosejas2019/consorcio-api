@@ -130,30 +130,31 @@ exports.createPayment = async (req, res, next) => {
       User.findById(ownerId).select('startBillingPeriod'),
     ]);
 
-    // Si no viene month pero hay extraordinarios, usar el período actual de la org
-    if (!month && extraordinaryIds.length > 0) {
-      month = org.feePeriodCode;
-    }
-
-    if (!month) return res.status(400).json({ success: false, message: 'El período es obligatorio.' });
-
-    // Validar que el período no sea anterior al inicio de cobro del propietario
-    const startBilling = ownerDoc?.startBillingPeriod;
-    if (startBilling && month < startBilling) {
-      return res.status(400).json({
-        success: false,
-        message: `No se pueden registrar pagos anteriores al período de inicio de cobro del propietario (${startBilling}).`,
-      });
+    if (!month && extraordinaryIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'El período es obligatorio.' });
     }
 
     const monthlyFee = org?.monthlyFee ?? 0;
 
-    // Si no viene amount, calcularlo desde las unidades (o usar monthlyFee si no hay unidades)
+    // Validar que el período no sea anterior al inicio de cobro del propietario
+    if (month) {
+      const startBilling = ownerDoc?.startBillingPeriod;
+      if (startBilling && month < startBilling) {
+        return res.status(400).json({
+          success: false,
+          message: `No se pueden registrar pagos anteriores al período de inicio de cobro del propietario (${startBilling}).`,
+        });
+      }
+    }
+
+    // Si no viene amount, calcularlo desde las unidades (solo si hay período mensual)
     if (amount === undefined || amount === null || amount === '') {
-      if (activeUnits.length > 0) {
-        amount = activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0);
+      if (month) {
+        amount = activeUnits.length > 0
+          ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+          : monthlyFee;
       } else {
-        amount = monthlyFee;
+        amount = 0; // solo-extraordinarios: la suma se agrega abajo
       }
     }
 
@@ -187,17 +188,19 @@ exports.createPayment = async (req, res, next) => {
       amount = Number(amount) + expenses.reduce((s, e) => s + e.amount, 0);
     }
 
-    const existing = await Payment.findOne({
-      organization: req.orgId,
-      owner: ownerId,
-      month,
-      status: { $in: ['pending', 'approved'] },
-    });
-    if (existing) {
-      return res.status(400).json({
-        success: false,
-        message: `Ya existe un comprobante ${existing.status === 'approved' ? 'aprobado' : 'pendiente'} para el período ${month}.`,
+    if (month) {
+      const existing = await Payment.findOne({
+        organization: req.orgId,
+        owner: ownerId,
+        month,
+        status: { $in: ['pending', 'approved'] },
       });
+      if (existing) {
+        return res.status(400).json({
+          success: false,
+          message: `Ya existe un comprobante ${existing.status === 'approved' ? 'aprobado' : 'pendiente'} para el período ${month}.`,
+        });
+      }
     }
 
     let receiptData;
