@@ -219,17 +219,17 @@ exports.createPayment = async (req, res, next) => {
       };
     }
 
-    // Snapshot de unidades al momento del pago
-    const unitsSnapshot   = activeUnits.map(u => u._id);
-    const breakdownSnapshot = activeUnits.map(u => ({
-      unit:   u._id,
-      name:   u.name,
-      amount: calcUnitFee(u, monthlyFee),
-    }));
-
     const paymentType = (!month && extraordinaryIds.length === 0)
       ? 'balance'
       : (!month ? 'extraordinary' : 'monthly');
+
+    // Snapshot de unidades al momento del pago (no aplica a pagos de saldo anterior)
+    const unitsSnapshot     = paymentType !== 'balance' ? activeUnits.map(u => u._id) : [];
+    const breakdownSnapshot = paymentType !== 'balance' ? activeUnits.map(u => ({
+      unit:   u._id,
+      name:   u.name,
+      amount: calcUnitFee(u, monthlyFee),
+    })) : [];
 
     const payment = await Payment.create({
       organization:      req.orgId,
