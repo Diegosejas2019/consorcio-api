@@ -92,9 +92,16 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'balance', 'isDebtor', 'percentage'];
+    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'percentage'];
     const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
+
+    const initialDebtAmount = Number(req.body.initialDebtAmount ?? 0);
+    if (initialDebtAmount < 0) {
+      return res.status(400).json({ success: false, message: 'La deuda inicial no puede ser negativa.' });
+    }
+    ownerData.balance  = initialDebtAmount > 0 ? -initialDebtAmount : 0;
+    ownerData.isDebtor = initialDebtAmount > 0;
 
     // Calcular período de inicio de cobro
     const currentPeriod = formatYYYYMM(new Date());
