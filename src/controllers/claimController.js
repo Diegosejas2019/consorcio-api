@@ -1,7 +1,9 @@
+const { Readable }    = require('stream');
 const Claim           = require('../models/Claim');
 const firebaseService = require('../services/firebaseService');
 const User            = require('../models/User');
 const logger          = require('../config/logger');
+const { cloudinary, deleteCloudinaryAttachments } = require('../config/cloudinary');
 
 // ── GET /api/claims ───────────────────────────────────────────
 exports.getClaims = async (req, res, next) => {
@@ -38,13 +40,19 @@ exports.createClaim = async (req, res, next) => {
   try {
     const { category, title, body } = req.body;
 
-    const claim = await Claim.create({
-      organization: req.orgId,
-      owner: req.user._id,
-      category,
-      title,
-      body,
-    });
+    const claimData = { organization: req.orgId, owner: req.user._id, category, title, body };
+
+    if (req.files?.length) {
+      claimData.attachments = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
+    }
+
+    const claim = await Claim.create(claimData);
 
     await claim.populate('owner', 'name unit email');
 
@@ -116,6 +124,10 @@ exports.deleteClaim = async (req, res, next) => {
       }
     }
 
+    if (claim.attachments?.length) {
+      await deleteCloudinaryAttachments(claim.attachments);
+    }
+
     claim.isActive  = false;
     claim.deletedAt = new Date();
     claim.deletedBy = req.user._id;
@@ -123,6 +135,53 @@ exports.deleteClaim = async (req, res, next) => {
 
     logger.info('Claim soft deleted', { id: claim._id, userId: req.user._id });
     res.json({ success: true, message: 'Reclamo eliminado.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/claims/:id/attachment/:index ─────────────────────
+exports.getAttachment = async (req, res, next) => {
+  try {
+    const filter = { _id: req.params.id, organization: req.orgId, isActive: { $ne: false } };
+    if (req.user.role === 'owner') filter.owner = req.user._id;
+
+    const claim = await Claim.findOne(filter);
+    if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });
+
+    const idx        = parseInt(req.params.index, 10);
+    const attachment = claim.attachments?.[idx];
+    if (!attachment?.publicId) {
+      return res.status(404).json({ success: false, message: 'Adjunto no encontrado.' });
+    }
+
+    const mimetype     = attachment.mimetype || 'application/pdf';
+    const isImage      = mimetype.startsWith('image/');
+    const resourceType = isImage ? 'image' : 'raw';
+    const ext          = isImage
+      ? (mimetype.split('/')[1] === 'jpeg' ? 'jpg' : mimetype.split('/')[1])
+      : 'pdf';
+    const deliveryType = attachment.url?.includes('/authenticated/') ? 'authenticated' : 'upload';
+
+    const signedUrl = cloudinary.utils.private_download_url(
+      attachment.publicId,
+      ext,
+      { resource_type: resourceType, type: deliveryType, expires_at: Math.floor(Date.now() / 1000) + 120 }
+    );
+
+    const cloudRes = await fetch(signedUrl);
+    if (!cloudRes.ok) {
+      logger.error(`Cloudinary proxy error: ${cloudRes.status} — publicId: ${attachment.publicId}`);
+      return res.status(502).json({ success: false, message: 'No se pudo obtener el adjunto desde Cloudinary.' });
+    }
+
+    const filename = (attachment.filename || `adjunto.${ext}`).replace(/"/g, '');
+    res.setHeader('Content-Type', mimetype);
+    res.setHeader('Content-Disposition', `${isImage ? 'inline' : 'attachment'}; filename="${filename}"`);
+    const contentLength = cloudRes.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    Readable.fromWeb(cloudRes.body).pipe(res);
   } catch (err) {
     next(err);
   }

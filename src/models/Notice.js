@@ -44,6 +44,16 @@ const noticeSchema = new mongoose.Schema(
     emailSentAt: Date,
     // Propietarios que han leído el aviso
     readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+
+    attachments: [
+      {
+        url:      String,
+        publicId: String,
+        filename: String,
+        mimetype: String,
+        size:     Number,
+      },
+    ],
   },
   {
     timestamps: true,

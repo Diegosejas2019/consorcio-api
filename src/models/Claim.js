@@ -51,6 +51,16 @@ const claimSchema = new mongoose.Schema(
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date },
     isActive:  { type: Boolean, default: true },
+
+    attachments: [
+      {
+        url:      String,
+        publicId: String,
+        filename: String,
+        mimetype: String,
+        size:     Number,
+      },
+    ],
   },
   {
     timestamps: true,

@@ -1,8 +1,10 @@
+const { Readable }    = require('stream');
 const Notice          = require('../models/Notice');
 const User            = require('../models/User');
 const firebaseService = require('../services/firebaseService');
 const emailService    = require('../services/emailService');
 const logger          = require('../config/logger');
+const { cloudinary, deleteCloudinaryAttachments } = require('../config/cloudinary');
 
 // Agrega isRead para el usuario actual y elimina readBy del resultado
 function withIsRead(notice, userId) {
@@ -57,13 +59,24 @@ exports.getNotice = async (req, res, next) => {
 // ── POST /api/notices — crear aviso (admin) ───────────────────
 exports.createNotice = async (req, res, next) => {
   try {
-    const { title, body, tag, sendPush = true, sendEmail: doSendEmail = true } = req.body;
+    const parseBool = (v, def) => v === undefined ? def : (v === 'false' || v === false ? false : Boolean(v));
+    const { title, body, tag } = req.body;
+    const sendPush     = parseBool(req.body.sendPush, true);
+    const doSendEmail  = parseBool(req.body.sendEmail, true);
 
-    const notice = await Notice.create({
-      organization: req.orgId,
-      title, body, tag,
-      author: req.user._id,
-    });
+    const noticeData = { organization: req.orgId, title, body, tag, author: req.user._id };
+
+    if (req.files?.length) {
+      noticeData.attachments = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
+    }
+
+    const notice = await Notice.create(noticeData);
 
     // Enviar push notification solo a los propietarios de esta organización
     if (sendPush) {
@@ -137,9 +150,25 @@ exports.createNotice = async (req, res, next) => {
 exports.updateNotice = async (req, res, next) => {
   try {
     const { title, body, tag } = req.body;
+    const update = { $set: {} };
+    if (title !== undefined) update.$set.title = title;
+    if (body  !== undefined) update.$set.body  = body;
+    if (tag   !== undefined) update.$set.tag   = tag;
+
+    if (req.files?.length) {
+      const newAttachments = req.files.map(f => ({
+        url:      f.path,
+        publicId: f.filename,
+        filename: f.originalname,
+        mimetype: f.mimetype,
+        size:     f.size,
+      }));
+      update.$push = { attachments: { $each: newAttachments } };
+    }
+
     const notice = await Notice.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },
-      { title, body, tag },
+      update,
       { new: true, runValidators: true }
     ).populate('author', 'name');
 
@@ -155,7 +184,54 @@ exports.deleteNotice = async (req, res, next) => {
   try {
     const notice = await Notice.findOneAndDelete({ _id: req.params.id, organization: req.orgId });
     if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
+    if (notice.attachments?.length) {
+      await deleteCloudinaryAttachments(notice.attachments);
+    }
     res.json({ success: true, message: 'Aviso eliminado.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/notices/:id/attachment/:index ────────────────────
+exports.getAttachment = async (req, res, next) => {
+  try {
+    const notice = await Notice.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!notice) return res.status(404).json({ success: false, message: 'Aviso no encontrado.' });
+
+    const idx        = parseInt(req.params.index, 10);
+    const attachment = notice.attachments?.[idx];
+    if (!attachment?.publicId) {
+      return res.status(404).json({ success: false, message: 'Adjunto no encontrado.' });
+    }
+
+    const mimetype     = attachment.mimetype || 'application/pdf';
+    const isImage      = mimetype.startsWith('image/');
+    const resourceType = isImage ? 'image' : 'raw';
+    const ext          = isImage
+      ? (mimetype.split('/')[1] === 'jpeg' ? 'jpg' : mimetype.split('/')[1])
+      : 'pdf';
+    const deliveryType = attachment.url?.includes('/authenticated/') ? 'authenticated' : 'upload';
+
+    const signedUrl = cloudinary.utils.private_download_url(
+      attachment.publicId,
+      ext,
+      { resource_type: resourceType, type: deliveryType, expires_at: Math.floor(Date.now() / 1000) + 120 }
+    );
+
+    const cloudRes = await fetch(signedUrl);
+    if (!cloudRes.ok) {
+      logger.error(`Cloudinary proxy error: ${cloudRes.status} — publicId: ${attachment.publicId}`);
+      return res.status(502).json({ success: false, message: 'No se pudo obtener el adjunto desde Cloudinary.' });
+    }
+
+    const filename = (attachment.filename || `adjunto.${ext}`).replace(/"/g, '');
+    res.setHeader('Content-Type', mimetype);
+    res.setHeader('Content-Disposition', `${isImage ? 'inline' : 'attachment'}; filename="${filename}"`);
+    const contentLength = cloudRes.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+
+    Readable.fromWeb(cloudRes.body).pipe(res);
   } catch (err) {
     next(err);
   }
