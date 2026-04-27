@@ -74,10 +74,12 @@ Virtual `initials` (primeras 2 letras de los primeros 2 nombres). Virtual `units
 ### Payment
 Estados: `pending` → `approved` | `rejected`.
 Canales: `manual` | `mercadopago`.
-Restricción: un solo pago activo (`pending` o `approved`) por propietario por mes (índice parcial único).
+`month` (YYYY-MM): opcional — ausente en pagos de solo-extraordinarios.
+Restricción: un solo pago activo (`pending` o `approved`) por propietario por mes; índice `{owner, month}` con `sparse: true` para excluir pagos sin `month`.
+`extraordinaryItems`: array de `{ expense, amount }` con los conceptos extraordinarios incluidos en el pago.
 Comprobante en Cloudinary: `url`, `publicId`, `filename`, `mimetype`, `size`.
 Campos MP: `mpPreferenceId`, `mpPaymentId`, `mpStatus`, `mpDetail`.
-Virtual `monthFormatted` (ej: "Abril 2025").
+Virtual `monthFormatted`: "Abril 2025" si tiene `month`, "Extraordinario" si no.
 
 ### Notice
 Tags: `info` | `warning` | `urgent`.
@@ -94,10 +96,18 @@ Virtuales: `categoryLabel`, `statusLabel` en español.
 ### Expense
 Gastos de la organización. Categorías: `cleaning` | `security` | `maintenance` | `utilities` | `administration` | `other`.
 Estados: `pending` | `paid`. Métodos de pago: `cash` | `transfer` | `mercadopago`.
-`expenseType`: `ordinary` (default) | `extraordinary` — clasifica el gasto para el informe "Mis Expensas".
+`expenseType`: `ordinary` (default) | `extraordinary` — clasifica el gasto.
+`isChargeable` (bool, default `false`): solo relevante en `extraordinary`. Si `true`, el gasto aparece como concepto cobrable que los propietarios pueden incluir al crear un pago.
+`appliesToAllOwners` (bool, default `true`): si `false`, solo aplica a propietarios específicos (uso futuro).
 `invoiceNumber`: número de factura del gasto (opcional).
 `invoiceCuit`: CUIT del proveedor en la factura (opcional; si está vacío, el PDF usa el CUIT del Provider asociado).
 Puede tener comprobante adjunto en Cloudinary. Referencia opcional a `Provider`.
+
+**Flujo de gastos extraordinarios cobrables:**
+1. Admin crea un `Expense` con `expenseType: 'extraordinary'` e `isChargeable: true`.
+2. Al llamar `GET /api/payments` (o al crear un pago), el sistema devuelve los gastos extraordinarios cobrables disponibles (no pagados aún por ese propietario).
+3. El propietario crea un pago con `extraordinaryIds: [id1, id2]` (puede ir con o sin `month`). Si no hay `month`, es un pago de solo-extraordinarios.
+4. El sistema valida que los gastos existan, sean cobrables, y no estén ya en un pago activo del mismo propietario.
 
 ### Provider
 Proveedores de servicios de la organización.
