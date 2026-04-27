@@ -102,9 +102,25 @@ exports.createOwner = async (req, res, next) => {
     ownerData.startBillingPeriod = chargeCurrentMonth ? currentPeriod : getNextMonth(currentPeriod);
 
     const tempPassword = req.body.password;
-    const owner = await User.create(ownerData);
-    logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
-    owner.password = undefined;
+
+    // Si existe un propietario inactivo con ese email, reactivarlo en lugar de crear uno nuevo
+    const existing = req.body.email
+      ? await User.findOne({ email: req.body.email, isActive: false }).select('+password')
+      : null;
+
+    let owner;
+    if (existing) {
+      Object.assign(existing, ownerData, { isActive: true });
+      if (tempPassword) existing.password = tempPassword; // el pre-save hashea
+      await existing.save();
+      existing.password = undefined;
+      owner = existing;
+      logger.info(`Propietario reactivado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+    } else {
+      owner = await User.create(ownerData);
+      logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+      owner.password = undefined;
+    }
 
     sendWelcome(owner, tempPassword).catch((err) =>
       logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
