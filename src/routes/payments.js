@@ -5,8 +5,9 @@ const { upload } = require('../config/cloudinary');
 
 router.use(protect);
 
-router.get('/dashboard', restrictTo('admin'), ctrl.getDashboard);
-router.get('/',          ctrl.getPayments);
+router.get('/dashboard',       restrictTo('admin'), ctrl.getDashboard);
+router.get('/available-items', ctrl.getAvailableItems);
+router.get('/',                ctrl.getPayments);
 router.post('/',         upload.single('receipt'), ctrl.createPayment);
 router.get('/:id/receipt',        ctrl.getReceipt);
 router.get('/:id/system-receipt', ctrl.getSystemReceipt);

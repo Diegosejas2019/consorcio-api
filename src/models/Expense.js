@@ -53,6 +53,14 @@ const expenseSchema = new mongoose.Schema(
       enum: ['ordinary', 'extraordinary'],
       default: 'ordinary',
     },
+    isChargeable: {
+      type: Boolean,
+      default: false,
+    },
+    appliesToAllOwners: {
+      type: Boolean,
+      default: true,
+    },
     invoiceNumber: {
       type: String,
       trim: true,

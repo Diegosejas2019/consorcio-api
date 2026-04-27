@@ -98,6 +98,13 @@ const paymentSchema = new mongoose.Schema(
       },
     ],
 
+    // ── Conceptos extraordinarios incluidos en el pago ───────
+    extraordinaryItems: [{
+      _id:    false,
+      expense: { type: mongoose.Schema.Types.ObjectId, ref: 'Expense' },
+      amount:  { type: Number },
+    }],
+
     // ── Recibo generado por el sistema ────────────────────────
     systemReceipt: {
       url:      { type: String },

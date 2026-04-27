@@ -62,21 +62,80 @@ exports.getPayment = async (req, res, next) => {
   }
 };
 
+// ── GET /api/payments/available-items — períodos y extraordinarios disponibles ─
+exports.getAvailableItems = async (req, res, next) => {
+  try {
+    const owner = req.user;
+
+    const [org, activePayments] = await Promise.all([
+      Organization.findById(req.orgId).select('paymentPeriods feePeriodCode monthlyFee'),
+      Payment.find({
+        organization: req.orgId,
+        owner:        owner._id,
+        status:       { $in: ['pending', 'approved'] },
+      }).select('month extraordinaryItems'),
+    ]);
+
+    const paidMonths    = new Set(activePayments.map(p => p.month));
+    const paidExtraIds  = new Set(
+      activePayments.flatMap(p => (p.extraordinaryItems || []).map(e => e.expense.toString()))
+    );
+
+    const startBilling = owner.startBillingPeriod;
+    const periods = (org.paymentPeriods || [])
+      .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling));
+
+    const extras = await Expense.find({
+      organization: req.orgId,
+      expenseType:  'extraordinary',
+      isChargeable: true,
+      isActive:     { $ne: false },
+    }).select('_id description amount date').lean();
+
+    const extraordinary = extras
+      .filter(e => !paidExtraIds.has(e._id.toString()))
+      .map(e => ({
+        id:     e._id,
+        title:  e.description,
+        amount: e.amount,
+        period: e.date ? e.date.toISOString().slice(0, 7) : null,
+      }));
+
+    res.json({ success: true, data: { periods, extraordinary } });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── POST /api/payments — subir comprobante ────────────────────
 exports.createPayment = async (req, res, next) => {
   try {
-    const { month, ownerNote } = req.body;
+    let { month, ownerNote } = req.body;
     let { amount } = req.body;
     const ownerId = req.user.role === 'owner' ? req.user._id : req.body.ownerId;
+
+    // Parse extraordinaryIds: puede venir como string JSON, array, o múltiples campos
+    let extraordinaryIds = req.body.extraordinaryIds;
+    if (typeof extraordinaryIds === 'string') {
+      try { extraordinaryIds = JSON.parse(extraordinaryIds); } catch { extraordinaryIds = [extraordinaryIds]; }
+    }
+    if (!Array.isArray(extraordinaryIds)) extraordinaryIds = extraordinaryIds ? [extraordinaryIds] : [];
 
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
     // Cargar unidades activas del propietario para calcular monto y breakdown
     const [org, activeUnits, ownerDoc] = await Promise.all([
-      Organization.findById(req.orgId).select('monthlyFee'),
+      Organization.findById(req.orgId).select('monthlyFee feePeriodCode'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
       User.findById(ownerId).select('startBillingPeriod'),
     ]);
+
+    // Si no viene month pero hay extraordinarios, usar el período actual de la org
+    if (!month && extraordinaryIds.length > 0) {
+      month = org.feePeriodCode;
+    }
+
+    if (!month) return res.status(400).json({ success: false, message: 'El período es obligatorio.' });
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
     const startBilling = ownerDoc?.startBillingPeriod;
@@ -96,6 +155,36 @@ exports.createPayment = async (req, res, next) => {
       } else {
         amount = monthlyFee;
       }
+    }
+
+    // Sumar conceptos extraordinarios
+    let extraordinaryItems = [];
+    if (extraordinaryIds.length > 0) {
+      const expenses = await Expense.find({
+        _id:          { $in: extraordinaryIds },
+        organization: req.orgId,
+        expenseType:  'extraordinary',
+        isChargeable: true,
+        isActive:     { $ne: false },
+      }).select('_id amount').lean();
+
+      if (expenses.length !== extraordinaryIds.length) {
+        return res.status(400).json({ success: false, message: 'Uno o más conceptos extraordinarios no son válidos.' });
+      }
+
+      // Verificar que no estén ya pagados por este propietario
+      const alreadyPaid = await Payment.findOne({
+        organization: req.orgId,
+        owner:        ownerId,
+        status:       { $in: ['pending', 'approved'] },
+        'extraordinaryItems.expense': { $in: extraordinaryIds },
+      });
+      if (alreadyPaid) {
+        return res.status(400).json({ success: false, message: 'Uno o más conceptos extraordinarios ya tienen un pago activo.' });
+      }
+
+      extraordinaryItems = expenses.map(e => ({ expense: e._id, amount: e.amount }));
+      amount = Number(amount) + expenses.reduce((s, e) => s + e.amount, 0);
     }
 
     const existing = await Payment.findOne({
@@ -131,16 +220,17 @@ exports.createPayment = async (req, res, next) => {
     }));
 
     const payment = await Payment.create({
-      organization: req.orgId,
-      owner:        ownerId,
+      organization:      req.orgId,
+      owner:             ownerId,
       month,
-      amount:       Number(amount),
-      receipt:      receiptData,
+      amount:            Number(amount),
+      receipt:           receiptData,
       ownerNote,
-      paymentMethod: 'manual',
-      units:         unitsSnapshot,
-      breakdown:     breakdownSnapshot,
-      createdBy:     req.user._id,
+      paymentMethod:     'manual',
+      units:             unitsSnapshot,
+      breakdown:         breakdownSnapshot,
+      extraordinaryItems,
+      createdBy:         req.user._id,
     });
 
     await payment.populate('owner', 'name unit email');
