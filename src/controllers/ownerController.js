@@ -1,5 +1,6 @@
 const User    = require('../models/User');
 const Payment = require('../models/Payment');
+const Unit    = require('../models/Unit');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome } = require('../services/emailService');
@@ -28,19 +29,22 @@ exports.getAllOwners = async (req, res, next) => {
       User.countDocuments(filter),
     ]);
 
-    // Enriquecer con último pago aprobado — una sola query para todos los propietarios
+    // Enriquecer con último pago aprobado y unidades — queries únicas para todos los propietarios
     const ownerIds = owners.map((o) => o._id);
-    const lastPayments = await Payment.aggregate([
-      { $match: { owner: { $in: ownerIds }, status: 'approved' } },
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: '$owner',
-          month:     { $first: '$month' },
-          amount:    { $first: '$amount' },
-          createdAt: { $first: '$createdAt' },
+    const [lastPayments, allUnits] = await Promise.all([
+      Payment.aggregate([
+        { $match: { owner: { $in: ownerIds }, status: 'approved' } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$owner',
+            month:     { $first: '$month' },
+            amount:    { $first: '$amount' },
+            createdAt: { $first: '$createdAt' },
+          },
         },
-      },
+      ]),
+      Unit.find({ organization: req.orgId, active: true }).select('owner name'),
     ]);
 
     const lastPaymentByOwner = lastPayments.reduce((map, p) => {
@@ -48,9 +52,15 @@ exports.getAllOwners = async (req, res, next) => {
       return map;
     }, {});
 
+    const unitsByOwner = allUnits.reduce((map, u) => {
+      (map[u.owner.toString()] ||= []).push(u.name);
+      return map;
+    }, {});
+
     const enriched = owners.map((owner) => ({
       ...owner.toJSON(),
       lastPayment: lastPaymentByOwner[owner._id.toString()] ?? null,
+      units: unitsByOwner[owner._id.toString()] ?? [],
     }));
 
     res.json({
