@@ -26,6 +26,7 @@ exports.getPayments = async (req, res, next) => {
       Payment.find(filter)
         .populate('owner', 'name unit email')
         .populate('reviewedBy', 'name')
+        .populate('extraordinaryItems.expense', 'description amount date attachments')
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(Number(limit))
@@ -48,7 +49,8 @@ exports.getPayment = async (req, res, next) => {
   try {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId })
       .populate('owner', 'name unit email')
-      .populate('reviewedBy', 'name');
+      .populate('reviewedBy', 'name')
+      .populate('extraordinaryItems.expense', 'description amount date attachments');
 
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
