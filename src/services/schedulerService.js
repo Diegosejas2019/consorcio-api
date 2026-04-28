@@ -10,9 +10,9 @@ const logger       = require('../config/logger');
 async function sendDueDateReminders(org) {
   let month = org.feePeriodCode;
   if (!month) {
-    // Fallback: usar el último período habilitado de paymentPeriods
-    const periods = org.paymentPeriods || [];
-    month = periods.length > 0 ? [...periods].sort().at(-1) : null;
+    // Fallback: usar el mes actual (el cron corre en la fecha de vencimiento)
+    const now = new Date();
+    month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   }
   if (!month) {
     logger.warn(`[Scheduler] Org ${org._id} sin feePeriodCode configurado, se omite.`);
