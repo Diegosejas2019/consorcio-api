@@ -14,13 +14,23 @@ const logger          = require('../config/logger');
 // ── GET /api/payments — listar (admin: todos; owner: los suyos) ─
 exports.getPayments = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, status, month, ownerId } = req.query;
+    const { page = 1, limit = 20, status, month, ownerId, effectiveMonth } = req.query;
 
     const filter = { organization: req.orgId };
     if (req.user.role === 'owner') filter.owner = req.user._id;
     else if (ownerId) filter.owner = ownerId;
     if (status) filter.status = status;
     if (month)  filter.month  = month;
+    if (effectiveMonth) {
+      const [yr, mo] = effectiveMonth.split('-');
+      const monthStart = new Date(`${yr}-${mo}-01T00:00:00.000Z`);
+      const monthEnd   = new Date(monthStart);
+      monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
+      filter.$or = [
+        { month: effectiveMonth },
+        { month: { $exists: false }, createdAt: { $gte: monthStart, $lt: monthEnd } },
+      ];
+    }
 
     const [payments, total] = await Promise.all([
       Payment.find(filter)
