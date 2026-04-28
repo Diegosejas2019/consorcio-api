@@ -41,6 +41,7 @@ exports.createPreference = async (req, res, next) => {
 
     // Excluir períodos ya aprobados
     const existingApproved = await Payment.find({
+      organization: req.orgId,
       owner: owner._id,
       month: { $in: periods },
       status: 'approved',
@@ -196,9 +197,10 @@ exports.webhook = async (req, res) => {
 
         // Excluir períodos que ya tienen pago activo (idempotencia + respeto al índice único)
         const existingActive = await Payment.find({
-          owner:  refOwnerId,
-          month:  { $in: refMonths },
-          status: { $in: ['pending', 'approved'] },
+          organization: refOrgId,
+          owner:        refOwnerId,
+          month:        { $in: refMonths },
+          status:       { $in: ['pending', 'approved'] },
         }).select('month');
         const activeSet  = new Set(existingActive.map(p => p.month));
         const newMonths  = refMonths.filter(m => !activeSet.has(m));
@@ -208,7 +210,10 @@ exports.webhook = async (req, res) => {
           return;
         }
 
-        const refOrg     = await Organization.findById(refOrgId);
+        const [refOrg, refMembership] = await Promise.all([
+          Organization.findById(refOrgId),
+          OrganizationMember.findOne({ user: refOwnerId, organization: refOrgId, role: 'owner' }).select('_id'),
+        ]);
         const monthlyFee = refOrg?.monthlyFee || 0;
 
         // Calcular monto desde unidades activas del propietario
@@ -227,6 +232,7 @@ exports.webhook = async (req, res) => {
           newMonths.map(month => ({
             organization:   refOrgId,
             owner:          refOwnerId,
+            membership:     refMembership?._id,
             month,
             amount:         unitAmount,
             status:         'pending',

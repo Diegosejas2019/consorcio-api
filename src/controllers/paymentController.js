@@ -245,6 +245,7 @@ exports.createPayment = async (req, res, next) => {
     const payment = await Payment.create({
       organization:      req.orgId,
       owner:             ownerId,
+      membership:        ownerMembership?._id,
       month,
       amount:            Number(amount),
       receipt:           receiptData,
