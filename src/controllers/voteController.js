@@ -39,8 +39,9 @@ exports.getVotes = async (req, res, next) => {
         const obj = v.toObject();
         const optionIndex = responseMap[v._id.toString()];
         obj.myVote = optionIndex !== undefined ? optionIndex : null;
-        // Owners solo ven resultados si ya votaron o la votación está cerrada
-        if (optionIndex === undefined && v.status === 'open') {
+        // Owners solo ven resultados si ya votaron, la votación está cerrada, o venció
+        const isExpired = v.endsAt && new Date() > new Date(v.endsAt);
+        if (optionIndex === undefined && v.status === 'open' && !isExpired) {
           obj.options = obj.options.map((o) => ({ label: o.label }));
         }
         return obj;
@@ -75,8 +76,9 @@ exports.getVote = async (req, res, next) => {
     if (req.user.role === 'owner') {
       const response = await VoteResponse.findOne({ vote: vote._id, owner: req.user._id });
       obj.myVote = response ? response.optionIndex : null;
-      // Ocultar conteos si la votación sigue abierta y el owner no votó aún
-      if (!response && vote.status === 'open') {
+      // Ocultar conteos si la votación sigue abierta, no venció, y el owner no votó aún
+      const isExpired = vote.endsAt && new Date() > new Date(vote.endsAt);
+      if (!response && vote.status === 'open' && !isExpired) {
         obj.options = obj.options.map((o) => ({ label: o.label }));
       }
     } else {
