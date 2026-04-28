@@ -25,6 +25,11 @@ const paymentSchema = new mongoose.Schema(
       required: [true, 'El propietario es obligatorio'],
       index: true,
     },
+    membership: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'OrganizationMember',
+      index: true,
+    },
 
     // ── Período ───────────────────────────────────────────────
     month: {
