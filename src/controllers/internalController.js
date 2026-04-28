@@ -1,6 +1,12 @@
-const Organization = require('../models/Organization');
-const User         = require('../models/User');
-const logger       = require('../config/logger');
+const Organization        = require('../models/Organization');
+const OrganizationFeature = require('../models/OrganizationFeature');
+const User                = require('../models/User');
+const logger              = require('../config/logger');
+
+function currentYearPeriods() {
+  const year = new Date().getFullYear();
+  return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+}
 
 // ── POST /api/internal/create-organization ────────────────────
 exports.createOrganization = async (req, res, next) => {
@@ -26,16 +32,22 @@ exports.createOrganization = async (req, res, next) => {
     }
 
     const org = await Organization.create({
-      name:          organizationName,
+      name:           organizationName,
       slug,
-      businessType:  resolvedType,
-      feeAmount:     preset.feeAmount,
+      businessType:   resolvedType,
+      feeAmount:      preset.feeAmount,
       lateFeePercent: preset.lateFeePercent,
-      dueDayOfMonth: preset.dueDayOfMonth,
-      feeLabel:      preset.feeLabel,
-      memberLabel:   preset.memberLabel,
-      unitLabel:     preset.unitLabel,
+      dueDayOfMonth:  preset.dueDayOfMonth,
+      feeLabel:       preset.feeLabel,
+      memberLabel:    preset.memberLabel,
+      unitLabel:      preset.unitLabel,
+      paymentPeriods: currentYearPeriods(),
     });
+
+    await OrganizationFeature.insertMany([
+      { organization: org._id, featureKey: 'visits',       enabled: false },
+      { organization: org._id, featureKey: 'reservations', enabled: false },
+    ]);
 
     const admin = await User.create({
       name:         adminName,

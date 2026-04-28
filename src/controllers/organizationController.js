@@ -1,6 +1,12 @@
-const Organization = require('../models/Organization');
-const User         = require('../models/User');
-const logger       = require('../config/logger');
+const Organization        = require('../models/Organization');
+const OrganizationFeature = require('../models/OrganizationFeature');
+const User                = require('../models/User');
+const logger              = require('../config/logger');
+
+function currentYearPeriods() {
+  const year = new Date().getFullYear();
+  return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+}
 
 // ── GET /api/organizations — listar (superadmin: todas; admin: la propia) ─
 exports.getOrganizations = async (req, res, next) => {
@@ -89,7 +95,13 @@ exports.createOrganization = async (req, res, next) => {
       mpPublicKey,
       mpAccessToken,
       mpWebhookSecret,
+      paymentPeriods: currentYearPeriods(),
     });
+
+    await OrganizationFeature.insertMany([
+      { organization: org._id, featureKey: 'visits',       enabled: false },
+      { organization: org._id, featureKey: 'reservations', enabled: false },
+    ]);
 
     // Si el creador es admin, vincularlo a la nueva org automáticamente
     if (req.user.role === 'admin') {

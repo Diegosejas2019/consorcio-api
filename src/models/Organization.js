@@ -13,7 +13,7 @@ const TEMPLATES = {
     feeLabel:        'Expensa',
     memberLabel:     'Propietario',
     unitLabel:       'Lote / Casa',
-    lateFeePercent:  5,
+    lateFeePercent:  0,
     dueDayOfMonth:   10,
     feeAmount:       0,
   },
