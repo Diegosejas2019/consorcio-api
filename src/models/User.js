@@ -46,18 +46,19 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    // @deprecated — leer desde OrganizationMember; se mantiene solo para docs legacy
     balance: {
       type: Number,
       default: 0,
-      // Negativo = deuda, positivo = a favor
     },
+    // @deprecated — leer desde OrganizationMember
     percentage: {
       type: Number,
       default: 0,
       min: 0,
       max: 100,
-      // Porcentaje de prorrateo de expensas (suma debe ser 100 entre todas las unidades)
     },
+    // @deprecated — leer desde OrganizationMember
     isDebtor: {
       type: Boolean,
       default: false,
@@ -69,7 +70,7 @@ const userSchema = new mongoose.Schema(
       select: false,
     },
 
-    // — Período de inicio de cobro (YYYY-MM) —
+    // @deprecated — leer desde OrganizationMember
     startBillingPeriod: {
       type: String,
       match: [/^\d{4}-\d{2}$/, 'El período de inicio debe tener formato YYYY-MM'],

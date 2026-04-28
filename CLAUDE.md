@@ -65,21 +65,30 @@ Entidad raíz del sistema multi-tenant. Cada organización tiene su propia confi
 - `slug` único (auto-generado desde el nombre)
 
 ### User
-Roles: `owner` | `admin` | `superadmin`.
-Campos clave: `unit` (texto libre), `phone`, `balance` (negativo = deuda), `percentage` (prorrateo 0–100), `isDebtor`, `startBillingPeriod` (YYYY-MM, período a partir del cual se cobran expensas), `fcmToken` (select: false).
+Identidad global del usuario. Roles: `owner` | `admin` | `superadmin`.
+Campos globales: `name`, `email`, `phone`, `unit` (texto libre), `role`, `organization` (ref, backward compat), `fcmToken` (select: false).
+**Deprecated en User** (leer desde `OrganizationMember`): `balance`, `isDebtor`, `percentage`, `startBillingPeriod` — estos campos existen en el schema por backward compat pero no se escriben en nuevas creaciones.
 Password hasheado con bcrypt (12 rounds), nunca devuelto en queries.
-`DELETE /api/owners/:id` es soft-delete: pone `isActive: false`. El propietario deja de aparecer en listados y no puede iniciar sesión, pero su historial de pagos se conserva.
+`DELETE /api/owners/:id` es soft-delete: pone `isActive: false` en OrganizationMember (y en User solo si no quedan otras membresías activas). El historial de pagos se conserva.
 Virtual `initials` (primeras 2 letras de los primeros 2 nombres). Virtual `units` (ref a `Unit`, las unidades asignadas al propietario).
 
 ### Payment
 Estados: `pending` → `approved` | `rejected`.
 Canales: `manual` | `mercadopago`.
-`month` (YYYY-MM): opcional — ausente en pagos de solo-extraordinarios.
+Tipos (`type`): `monthly` | `extraordinary` | `balance`. Determinado automáticamente al crear: sin `month` y sin `extraordinaryIds` → `balance`; sin `month` con extras → `extraordinary`; con `month` → `monthly`.
+`month` (YYYY-MM): opcional — ausente en pagos de solo-extraordinarios y en pagos de saldo anterior.
 Restricción: un solo pago activo (`pending` o `approved`) por propietario por mes; índice `{owner, month}` con `sparse: true` para excluir pagos sin `month`.
 `extraordinaryItems`: array de `{ expense, amount }` con los conceptos extraordinarios incluidos en el pago.
+`units`: snapshot de IDs de unidades al momento del pago (vacío para `balance`).
+`breakdown`: array de `{ unit, name, amount }` — snapshot de cuotas por unidad (vacío para `balance`).
 Comprobante en Cloudinary: `url`, `publicId`, `filename`, `mimetype`, `size`.
 Campos MP: `mpPreferenceId`, `mpPaymentId`, `mpStatus`, `mpDetail`.
-Virtual `monthFormatted`: "Abril 2025" si tiene `month`, "Extraordinario" si no.
+Virtual `monthFormatted`: "Abril 2025" si tiene `month`; "Saldo anterior" si `type === 'balance'`; "Extraordinario" si no.
+
+**Flujo de pagos de saldo anterior (`type: 'balance'`):**
+- El owner crea un pago enviando solo `amount` + comprobante (sin `month` ni `extraordinaryIds`).
+- Al aprobarse: `OrganizationMember.balance` se incrementa en `+amount`. Si `balance >= 0`, se setea `isDebtor: false`.
+- El `breakdown` y `units` se dejan vacíos para no mostrar cuotas por unidad en el historial.
 
 ### Notice
 Tags: `info` | `warning` | `urgent`.

@@ -8,6 +8,9 @@ const { sendWelcome } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const XLSX    = require('xlsx');
 
+// Campos del User que son identidad global (no datos financieros por org)
+const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'phone', 'role', 'organization', 'createdBy', 'isActive']);
+
 // ── GET /api/owners — listar todos (admin) ────────────────────
 exports.getAllOwners = async (req, res, next) => {
   try {
@@ -129,12 +132,14 @@ exports.createOwner = async (req, res, next) => {
     if (initialDebtAmount < 0) {
       return res.status(400).json({ success: false, message: 'La deuda inicial no puede ser negativa.' });
     }
+    // Datos financieros van solo a OrganizationMember, no a User
     ownerData.balance  = initialDebtAmount > 0 ? -initialDebtAmount : 0;
     ownerData.isDebtor = initialDebtAmount > 0;
 
     const currentPeriod = formatYYYYMM(new Date());
     const chargeCurrentMonth = req.body.chargeCurrentMonth !== false;
     ownerData.startBillingPeriod = chargeCurrentMonth ? currentPeriod : getNextMonth(currentPeriod);
+
 
     const tempPassword = req.body.password;
 
@@ -154,8 +159,9 @@ exports.createOwner = async (req, res, next) => {
         if (membershipExists) {
           return res.status(400).json({ success: false, message: 'El usuario ya pertenece a esta organización.' });
         }
-        // Actualizar campos del User sin tocar la contraseña
-        const { password: _p, ...updateFields } = ownerData;
+        // Actualizar campos del User sin tocar la contraseña ni datos financieros por org
+        const { password: _p, ...rawUpdate } = ownerData;
+        const updateFields = Object.fromEntries(Object.entries(rawUpdate).filter(([k]) => USER_FIELDS.has(k)));
         owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
         sendWelcomeEmail = false;
         logger.info(`Propietario existente vinculado: ${owner.email} [org: ${req.orgId}]`);
@@ -163,7 +169,8 @@ exports.createOwner = async (req, res, next) => {
         // Usuario inactivo: reactivar
         const existingInactive = await User.findOne({ email: req.body.email, isActive: false }).select('+password');
         if (existingInactive) {
-          Object.assign(existingInactive, ownerData, { isActive: true });
+          const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
+          Object.assign(existingInactive, inactiveUpdate, { isActive: true });
           if (tempPassword) existingInactive.password = tempPassword;
           await existingInactive.save();
           existingInactive.password = undefined;
@@ -177,7 +184,8 @@ exports.createOwner = async (req, res, next) => {
       if (!req.body.password) {
         return res.status(400).json({ success: false, message: 'La contraseña es obligatoria para nuevos propietarios.' });
       }
-      owner = await User.create(ownerData);
+      const userCreateData = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
+      owner = await User.create(userCreateData);
       logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
       owner.password = undefined;
     }
@@ -400,15 +408,17 @@ exports.bulkCreateOwners = async (req, res, next) => {
             errors.push({ row: rowNum, email: ownerData.email, reason: 'El usuario ya pertenece a esta organización.' });
             continue;
           }
-          const { password: _p, ...updateFields } = ownerData;
-          owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
+          const { password: _p, ...rawBulkUpdate } = ownerData;
+          const bulkUpdateFields = Object.fromEntries(Object.entries(rawBulkUpdate).filter(([k]) => USER_FIELDS.has(k)));
+          owner = await User.findByIdAndUpdate(existingActive._id, bulkUpdateFields, { new: true, runValidators: false });
           sendEmail = false;
           logger.info(`Bulk: propietario existente vinculado ${owner.email} [org: ${req.orgId}]`);
         } else {
           const existingInactive = await User.findOne({ email: ownerData.email, isActive: false }).select('+password');
           if (existingInactive) {
             const rawPassword = ownerData.password;
-            Object.assign(existingInactive, ownerData, { isActive: true });
+            const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
+            Object.assign(existingInactive, inactiveUpdate, { isActive: true });
             if (rawPassword) existingInactive.password = rawPassword;
             await existingInactive.save();
             existingInactive.password = undefined;
@@ -420,7 +430,8 @@ exports.bulkCreateOwners = async (req, res, next) => {
               continue;
             }
             const rawPassword = ownerData.password;
-            owner = await User.create(ownerData);
+            const bulkCreateData = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
+            owner = await User.create(bulkCreateData);
             logger.info(`Bulk: propietario creado ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
             owner.password = undefined;
 
