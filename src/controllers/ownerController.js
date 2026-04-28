@@ -31,8 +31,11 @@ exports.getAllOwners = async (req, res, next) => {
       );
     }
 
+    // Descartar membresías con user eliminado (populate devuelve null)
+    memberships = memberships.filter(m => m.user != null);
+
     // Ordenar por unidad
-    memberships.sort((a, b) => (a.user?.unit || '').localeCompare(b.user?.unit || ''));
+    memberships.sort((a, b) => (a.user.unit || '').localeCompare(b.user.unit || ''));
 
     const total = memberships.length;
     const paged = memberships.slice((page - 1) * limit, page * limit);
