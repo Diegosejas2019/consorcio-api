@@ -486,8 +486,23 @@ exports.getDashboard = async (req, res, next) => {
 
     const [monthly, byStatus, expensesAgg] = await Promise.all([
       Payment.aggregate([
-        { $match: { ...orgFilter, month: { $gte: startMonth, $lte: endMonth } } },
-        { $group: { _id: { month: '$month', status: '$status' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        {
+          $match: {
+            ...orgFilter,
+            $or: [
+              { month: { $gte: startMonth, $lte: endMonth } },
+              { month: { $exists: false }, createdAt: { $gte: yearStart, $lte: yearEnd } },
+            ],
+          },
+        },
+        {
+          $addFields: {
+            effectiveMonth: {
+              $ifNull: ['$month', { $dateToString: { format: '%Y-%m', date: '$createdAt' } }],
+            },
+          },
+        },
+        { $group: { _id: { month: '$effectiveMonth', status: '$status' }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
         { $sort: { '_id.month': 1 } },
       ]),
       Payment.aggregate([
