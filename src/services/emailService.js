@@ -672,20 +672,148 @@ exports.sendReceiptEmail = async (owner, payment, receiptUrl) => {
 };
 
 exports.sendMonthlyReminder = async (owner, expenseMonth, amount, dueDay) => {
-  const html = baseTemplate(`
-    <p>Hola <strong>${owner.name}</strong>,</p>
-    <p>Te recordamos que las expensas del período <strong>${expenseMonth}</strong> vencen el día <strong>${dueDay}</strong>.</p>
-    <div class="highlight">
-      <p>Período: ${expenseMonth}</p>
-      <p>Importe: $${amount.toLocaleString('es-AR')}</p>
-      <p>Vencimiento: día ${dueDay} del mes en curso</p>
-    </div>
-    <p>Podés abonar fácilmente desde la aplicación subiendo tu comprobante o pagando online con MercadoPago.</p>
-    <a href="${process.env.APP_BASE_URL}" class="btn">Pagar ahora</a>
-  `);
+  const [year, mon] = expenseMonth.split('-');
+  const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const monthLabel = `${monthNames[parseInt(mon, 10) - 1]} ${year}`;
+  const amountFormatted = Number(amount).toLocaleString('es-AR');
+
+  const html = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>Recordatorio de pago · GestionAr</title>
+  <style>
+    body { margin:0 !important; padding:0 !important; width:100% !important; }
+    table { border-collapse: collapse !important; }
+    img { border:0; height:auto; line-height:100%; outline:none; text-decoration:none; }
+    @media only screen and (max-width: 620px) {
+      .wrap { width: 100% !important; }
+      .px-32 { padding-left: 20px !important; padding-right: 20px !important; }
+      .py-40 { padding-top: 28px !important; padding-bottom: 28px !important; }
+      .h1 { font-size: 22px !important; line-height: 28px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#0e1512; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#eef1ed;">
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0e1512;">
+    <tr>
+      <td align="center" style="padding: 32px 16px;">
+        <table role="presentation" class="wrap" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px; max-width:560px;">
+
+          <!-- LOGO -->
+          <tr>
+            <td align="left" class="px-32" style="padding: 8px 32px 24px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td valign="middle" style="padding-right:10px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" width="28" height="28" style="width:28px; height:28px; background-color:#9cf27b; border-radius:8px; color:#0e1512; font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:700; line-height:28px;">G</td>
+                      </tr>
+                    </table>
+                  </td>
+                  <td valign="middle" style="font-family:'Inter Tight', Arial, sans-serif; font-size:20px; font-weight:700; letter-spacing:-0.5px; color:#eef1ed;">
+                    Gestion<span style="color:#9cf27b;">Ar</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- MAIN CARD -->
+          <tr>
+            <td align="left" class="px-32 py-40" style="background-color:#18221d; border:1px solid rgba(255,255,255,0.08); border-radius:20px; padding: 36px 40px;">
+
+              <!-- BADGE -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">
+                <tr>
+                  <td style="background-color:rgba(251,191,36,0.12); border-radius:999px; padding:5px 12px; font-family:'Courier New', monospace; font-size:11px; font-weight:500; color:#fbbf24; letter-spacing:0.5px;">
+                    ⚠️&nbsp;&nbsp;RECORDATORIO DE PAGO
+                  </td>
+                </tr>
+              </table>
+
+              <!-- TITLE -->
+              <h1 class="h1" style="margin:0 0 16px 0; font-family:'Inter Tight', Arial, sans-serif; font-size:28px; line-height:34px; font-weight:700; letter-spacing:-0.6px; color:#eef1ed;">
+                Tu cuota vence hoy
+              </h1>
+
+              <p style="margin:0 0 24px 0; font-family:'Inter', Arial, sans-serif; font-size:15px; line-height:24px; color:#a8b3ac;">
+                Hola <strong style="color:#eef1ed;">${owner.name}</strong>, todavía no registramos tu pago del período <strong style="color:#eef1ed;">${monthLabel}</strong>. Recordá que el vencimiento es el día <strong style="color:#eef1ed;">${dueDay}</strong> de cada mes.
+              </p>
+
+              <!-- DETAIL BOX -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 28px 0;">
+                <tr>
+                  <td style="background-color:#0e1512; border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:20px 22px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06);">
+                          <div style="font-family:'Courier New', monospace; font-size:10px; color:#6b7870; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">PERÍODO</div>
+                          <div style="font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:600; color:#eef1ed;">${monthLabel}</div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-top:14px; padding-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.06);">
+                          <div style="font-family:'Courier New', monospace; font-size:10px; color:#6b7870; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">IMPORTE</div>
+                          <div style="font-family:'Inter Tight', Arial, sans-serif; font-size:22px; font-weight:700; color:#9cf27b; letter-spacing:-0.5px;">$${amountFormatted}</div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding-top:14px;">
+                          <div style="font-family:'Courier New', monospace; font-size:10px; color:#6b7870; text-transform:uppercase; letter-spacing:1px; margin-bottom:4px;">VENCIMIENTO</div>
+                          <div style="font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:600; color:#fbbf24;">Día ${dueDay} de cada mes</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:0 0 24px 0; font-family:'Inter', Arial, sans-serif; font-size:14px; line-height:22px; color:#a8b3ac;">
+                Podés abonar subiendo tu comprobante de transferencia o pagando online con MercadoPago directamente desde la aplicación.
+              </p>
+
+              <!-- CTA -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center" bgcolor="#9cf27b" style="background-color:#9cf27b; border-radius:999px;">
+                    <a href="https://gestionar-it.vercel.app/" target="_blank" style="display:inline-block; background-color:#9cf27b; color:#0e1512; font-family:'Inter Tight', Arial, sans-serif; font-size:14px; font-weight:700; line-height:44px; text-align:center; text-decoration:none; padding:0 32px; border-radius:999px;">
+                      Pagar ahora&nbsp;&nbsp;→
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td class="px-32" style="padding: 28px 32px 16px 32px;" align="center">
+              <p style="margin:0 0 6px 0; font-family:'Inter', Arial, sans-serif; font-size:12px; line-height:18px; color:#6b7870; text-align:center;">
+                Este mensaje fue enviado automáticamente. Por favor no respondas a este email.
+              </p>
+              <p style="margin:0; font-family:'Courier New', monospace; font-size:11px; line-height:18px; color:#6b7870; text-align:center; letter-spacing:0.5px;">
+                © 2026 GESTIONAR — ADMINISTRACIÓN DE BARRIOS PRIVADOS
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
   return sendEmail({
     to:      owner.email,
-    subject: `Recordatorio: Expensas ${expenseMonth} vencen el día ${dueDay}`,
+    subject: `⚠️ Recordatorio: tu cuota de ${monthLabel} vence hoy`,
     html,
   });
 };
