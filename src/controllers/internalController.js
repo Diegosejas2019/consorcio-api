@@ -2,6 +2,7 @@ const Organization        = require('../models/Organization');
 const OrganizationFeature = require('../models/OrganizationFeature');
 const User                = require('../models/User');
 const logger              = require('../config/logger');
+const { sendAdminWelcome } = require('../services/emailService');
 
 function currentYearPeriods() {
   const year = new Date().getFullYear();
@@ -62,6 +63,10 @@ exports.createOrganization = async (req, res, next) => {
     delete adminData.password;
 
     logger.info(`[internal] Organización "${org.name}" creada con admin ${email}`);
+
+    sendAdminWelcome(adminData, password, org.name).catch((err) =>
+      logger.error(`Error enviando email de bienvenida al admin ${email}: ${err.message}`)
+    );
 
     res.status(201).json({
       success: true,

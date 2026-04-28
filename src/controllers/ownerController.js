@@ -129,7 +129,8 @@ exports.createOwner = async (req, res, next) => {
       owner.password = undefined;
     }
 
-    sendWelcome(owner, tempPassword).catch((err) =>
+    const unitNames = owner.unit ? [owner.unit] : [];
+    sendWelcome(owner, tempPassword, unitNames).catch((err) =>
       logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
     );
 
@@ -273,7 +274,8 @@ exports.bulkCreateOwners = async (req, res, next) => {
         owner.password = undefined;
         created.push(owner);
 
-        sendWelcome(owner, rawPassword).catch((err) =>
+        const unitNames = owner.unit ? [owner.unit] : [];
+        sendWelcome(owner, rawPassword, unitNames).catch((err) =>
           logger.error(`Bulk: error enviando email de bienvenida a ${owner.email}: ${err.message}`)
         );
       } catch (err) {
