@@ -17,7 +17,8 @@ const excelUpload = multer({
 // Todas las rutas requieren auth
 router.use(protect);
 
-router.get('/stats', restrictTo('admin'), ctrl.getStats);
+router.get('/stats',       restrictTo('admin'), ctrl.getStats);
+router.get('/check-email', restrictTo('admin'), ctrl.checkEmail);
 router.get('/',      restrictTo('admin'), ctrl.getAllOwners);
 router.post('/',     restrictTo('admin'), ctrl.createOwner);
 router.get('/bulk/template', restrictTo('admin'), ctrl.downloadBulkTemplate);

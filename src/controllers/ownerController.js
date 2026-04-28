@@ -485,6 +485,54 @@ exports.bulkCreateOwners = async (req, res, next) => {
   }
 };
 
+// ── GET /api/owners/check-email — verificar si email existe (admin) ──
+exports.checkEmail = async (req, res, next) => {
+  try {
+    const { email } = req.query;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: 'Email inválido.' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim(), isActive: true }).select('_id');
+
+    if (!user) {
+      return res.json({
+        success: true,
+        exists: false,
+        belongsToCurrentOrganization: false,
+        canAddToCurrentOrganization: true,
+        message: 'El email no está registrado. Se creará un nuevo usuario.',
+      });
+    }
+
+    const membership = await OrganizationMember.findOne({
+      user: user._id,
+      organization: req.orgId,
+      isActive: true,
+    });
+
+    if (membership) {
+      return res.json({
+        success: true,
+        exists: true,
+        belongsToCurrentOrganization: true,
+        canAddToCurrentOrganization: false,
+        message: 'Este usuario ya pertenece a esta organización.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      exists: true,
+      belongsToCurrentOrganization: false,
+      canAddToCurrentOrganization: true,
+      message: 'Este usuario ya existe. Se asociará a esta organización y conservará su contraseña actual.',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── GET /api/owners/stats — estadísticas generales (admin) ────
 exports.getStats = async (req, res, next) => {
   try {
