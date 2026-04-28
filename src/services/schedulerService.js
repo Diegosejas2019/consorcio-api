@@ -8,7 +8,12 @@ const logger       = require('../config/logger');
 
 // ── Lógica central — reutilizable por cron y endpoint manual ─
 async function sendDueDateReminders(org) {
-  const month = org.feePeriodCode;
+  let month = org.feePeriodCode;
+  if (!month) {
+    // Fallback: usar el último período habilitado de paymentPeriods
+    const periods = org.paymentPeriods || [];
+    month = periods.length > 0 ? [...periods].sort().at(-1) : null;
+  }
   if (!month) {
     logger.warn(`[Scheduler] Org ${org._id} sin feePeriodCode configurado, se omite.`);
     return { sent: 0, noToken: 0, skipped: true };
