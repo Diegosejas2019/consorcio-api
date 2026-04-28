@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl   = require('../controllers/authController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, protectSelection } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 
 router.post('/login',
@@ -26,7 +26,7 @@ router.post('/register',
 );
 
 router.post('/select-organization',
-  protect,
+  protectSelection,
   [body('membershipId').notEmpty().withMessage('membershipId requerido')],
   validate,
   ctrl.selectOrganization

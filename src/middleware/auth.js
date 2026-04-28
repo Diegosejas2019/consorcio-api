@@ -30,7 +30,15 @@ exports.protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message });
     }
 
-    // 3. Verificar que el usuario siga existiendo (popular organización)
+    // 3. Rechazar selectionTokens — son solo para /select-organization
+    if (decoded.pendingOrgSelection) {
+      return res.status(401).json({
+        success: false,
+        message: 'Debe seleccionar una organización antes de continuar.',
+      });
+    }
+
+    // 4. Verificar que el usuario siga existiendo (popular organización)
     const user = await User.findById(decoded.id)
       .select('+passwordChangedAt')
       .populate('organization', '-mpPublicKey -mpAccessToken -mpWebhookSecret');
@@ -39,17 +47,17 @@ exports.protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'El usuario ya no existe.' });
     }
 
-    // 4. Verificar cuenta activa
+    // 5. Verificar cuenta activa
     if (!user.isActive) {
       return res.status(401).json({ success: false, message: 'Cuenta desactivada. Contactá al administrador.' });
     }
 
-    // 5. Verificar si la contraseña cambió después de emitir el JWT
+    // 6. Verificar si la contraseña cambió después de emitir el JWT
     if (user.changedPasswordAfter(decoded.iat)) {
       return res.status(401).json({ success: false, message: 'Contraseña cambiada recientemente. Iniciá sesión nuevamente.' });
     }
 
-    // 6. Actualizar lastLogin
+    // 7. Actualizar lastLogin
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
     req.user = user;
@@ -133,6 +141,41 @@ exports.signToken = (userId, orgContext = null) => {
 // ── Token temporal para selección de organización (10 min) ───
 exports.signSelectionToken = (userId) =>
   jwt.sign({ id: userId, pendingOrgSelection: true }, process.env.JWT_SECRET, { expiresIn: '10m' });
+
+// ── Middleware exclusivo para /select-organization ────────────
+// Acepta solo selectionTokens (pendingOrgSelection: true)
+exports.protectSelection = async (req, res, next) => {
+  try {
+    let token;
+    if (req.headers.authorization?.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'No autorizado. Iniciá sesión para continuar.' });
+    }
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      const message = err.name === 'TokenExpiredError'
+        ? 'El proceso de selección expiró. Iniciá sesión nuevamente.'
+        : 'Token inválido.';
+      return res.status(401).json({ success: false, message });
+    }
+    if (!decoded.pendingOrgSelection) {
+      return res.status(401).json({ success: false, message: 'Token no válido para esta operación.' });
+    }
+    const user = await User.findById(decoded.id);
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, message: 'El usuario ya no existe o está desactivado.' });
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    logger.error('Error en middleware auth.protectSelection:', err);
+    res.status(500).json({ success: false, message: 'Error interno del servidor.' });
+  }
+};
 
 // ── Respuesta con token ───────────────────────────────────────
 exports.sendTokenResponse = (user, statusCode, res) => {
