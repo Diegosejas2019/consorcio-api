@@ -1,5 +1,6 @@
 const Organization        = require('../models/Organization');
 const OrganizationFeature = require('../models/OrganizationFeature');
+const OrganizationMember  = require('../models/OrganizationMember');
 const User                = require('../models/User');
 const logger              = require('../config/logger');
 const { sendAdminWelcome } = require('../services/emailService');
@@ -14,10 +15,20 @@ exports.createOrganization = async (req, res, next) => {
   try {
     const { organizationName, businessType, adminName, email, password } = req.body;
 
-    if (!organizationName || !adminName || !email || !password) {
+    if (!organizationName || !adminName || !email) {
       return res.status(400).json({
         success: false,
-        message: 'Los campos organizationName, adminName, email y password son obligatorios.',
+        message: 'Los campos organizationName, adminName y email son obligatorios.',
+      });
+    }
+
+    // Determinar si el usuario ya existe
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+
+    if (!existingUser && !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'El campo password es obligatorio para nuevos administradores.',
       });
     }
 
@@ -50,23 +61,49 @@ exports.createOrganization = async (req, res, next) => {
       { organization: org._id, featureKey: 'reservations', enabled: false },
     ]);
 
-    const admin = await User.create({
-      name:         adminName,
-      email,
-      password,
-      role:         'admin',
+    let admin;
+    let isNewUser = false;
+
+    if (!existingUser) {
+      admin = await User.create({
+        name:  adminName,
+        email,
+        password,
+        role:  'admin',
+      });
+      isNewUser = true;
+    } else {
+      // Verificar que no sea ya admin de esta organización
+      const duplicate = await OrganizationMember.findOne({
+        user:         existingUser._id,
+        organization: org._id,
+        role:         'admin',
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          success: false,
+          message: 'El usuario ya es administrador de esta organización.',
+        });
+      }
+      admin = existingUser;
+    }
+
+    await OrganizationMember.create({
+      user:         admin._id,
       organization: org._id,
+      role:         'admin',
     });
 
-    // Nunca devolver el password
     const adminData = admin.toObject();
     delete adminData.password;
 
-    logger.info(`[internal] Organización "${org.name}" creada con admin ${email}`);
+    logger.info(`[internal] Organización "${org.name}" creada con admin ${email} (usuario ${isNewUser ? 'nuevo' : 'existente'})`);
 
-    sendAdminWelcome(adminData, password, org.name).catch((err) =>
-      logger.error(`Error enviando email de bienvenida al admin ${email}: ${err.message}`)
-    );
+    if (isNewUser) {
+      sendAdminWelcome(adminData, password, org.name).catch((err) =>
+        logger.error(`Error enviando email de bienvenida al admin ${email}: ${err.message}`)
+      );
+    }
 
     res.status(201).json({
       success: true,
