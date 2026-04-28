@@ -1,6 +1,7 @@
-const jwt    = require('jsonwebtoken');
-const User   = require('../models/User');
-const logger = require('../config/logger');
+const jwt                = require('jsonwebtoken');
+const User               = require('../models/User');
+const OrganizationMember = require('../models/OrganizationMember');
+const logger             = require('../config/logger');
 
 // ── Verificar JWT ─────────────────────────────────────────────
 exports.protect = async (req, res, next) => {
@@ -51,10 +52,22 @@ exports.protect = async (req, res, next) => {
     // 6. Actualizar lastLogin
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
-    req.user  = user;
-    // Contexto de organización: superadmin puede operar sin org
-    req.orgId = user.organization?._id ?? null;
-    req.org   = user.organization ?? null;
+    req.user = user;
+
+    // Contexto de organización: desde membershipId del token (nuevo) o user.organization (legacy)
+    if (decoded.membershipId) {
+      const membership = await OrganizationMember.findById(decoded.membershipId)
+        .populate('organization', '-mpPublicKey -mpAccessToken -mpWebhookSecret');
+      if (membership && membership.isActive) {
+        req.membership = membership;
+        req.orgId      = membership.organization._id;
+        req.org        = membership.organization;
+        req.user.role  = membership.role;
+      }
+    } else {
+      req.orgId = user.organization?._id ?? null;
+      req.org   = user.organization ?? null;
+    }
 
     next();
   } catch (err) {
@@ -105,11 +118,21 @@ exports.ownDataOnly = (paramField = 'id') => {
 };
 
 // ── Generar JWT ───────────────────────────────────────────────
-exports.signToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+exports.signToken = (userId, orgContext = null) => {
+  const payload = { id: userId };
+  if (orgContext) {
+    payload.organizationId = orgContext.organizationId;
+    payload.role           = orgContext.role;
+    payload.membershipId   = orgContext.membershipId;
+  }
+  return jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
+
+// ── Token temporal para selección de organización (10 min) ───
+exports.signSelectionToken = (userId) =>
+  jwt.sign({ id: userId, pendingOrgSelection: true }, process.env.JWT_SECRET, { expiresIn: '10m' });
 
 // ── Respuesta con token ───────────────────────────────────────
 exports.sendTokenResponse = (user, statusCode, res) => {

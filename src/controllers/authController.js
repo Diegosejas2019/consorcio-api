@@ -1,6 +1,7 @@
-const crypto = require('crypto');
-const User   = require('../models/User');
-const { signToken, sendTokenResponse } = require('../middleware/auth');
+const crypto             = require('crypto');
+const User               = require('../models/User');
+const OrganizationMember = require('../models/OrganizationMember');
+const { signToken, signSelectionToken, sendTokenResponse } = require('../middleware/auth');
 const { sendPasswordReset } = require('../services/emailService');
 const logger = require('../config/logger');
 
@@ -32,8 +33,43 @@ exports.login = async (req, res, next) => {
       await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
     }
 
-    logger.info(`Login exitoso: ${user.email} [${user.role}]`);
-    sendTokenResponse(user, 200, res);
+    // Buscar membresías activas del usuario
+    const memberships = await OrganizationMember.find({ user: user._id, isActive: true })
+      .populate('organization', 'name slug businessType');
+
+    // Sin membresías → superadmin u owner legacy sin OrganizationMember (backward compat)
+    if (memberships.length === 0) {
+      logger.info(`Login exitoso (sin membresía): ${user.email} [${user.role}]`);
+      return sendTokenResponse(user, 200, res);
+    }
+
+    if (memberships.length === 1) {
+      const m = memberships[0];
+      const token = signToken(user._id, {
+        organizationId: m.organization._id,
+        role:           m.role,
+        membershipId:   m._id,
+      });
+      user.password = undefined;
+      user.fcmToken = undefined;
+      logger.info(`Login exitoso: ${user.email} [${m.role}] org=${m.organization.name}`);
+      return res.json({ success: true, token, data: { user, membership: m } });
+    }
+
+    // Múltiples membresías → pedir selección de organización
+    const selectionToken = signSelectionToken(user._id);
+    logger.info(`Login multi-org: ${user.email} (${memberships.length} organizaciones)`);
+    return res.json({
+      success:                       true,
+      requiresOrganizationSelection: true,
+      selectionToken,
+      organizations: memberships.map(m => ({
+        membershipId:     m._id,
+        organizationId:   m.organization._id,
+        organizationName: m.organization.name,
+        role:             m.role,
+      })),
+    });
   } catch (err) {
     next(err);
   }
@@ -63,7 +99,11 @@ exports.register = async (req, res, next) => {
 // ── GET /api/auth/me ──────────────────────────────────────────
 exports.getMe = async (req, res) => {
   const user = await User.findById(req.user.id);
-  res.json({ success: true, data: { user } });
+  // Si hay membership activo (token nuevo), usar role del membership
+  if (req.membership) {
+    user.role = req.membership.role;
+  }
+  res.json({ success: true, data: { user, membership: req.membership || null } });
 };
 
 // ── PATCH /api/auth/update-password ──────────────────────────
@@ -158,6 +198,36 @@ exports.resetPassword = async (req, res, next) => {
 
     // Loguear automáticamente al usuario con un token nuevo
     sendTokenResponse(user, 200, res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/auth/select-organization ───────────────────────
+exports.selectOrganization = async (req, res, next) => {
+  try {
+    const { membershipId } = req.body;
+
+    const membership = await OrganizationMember.findOne({
+      _id:      membershipId,
+      user:     req.user._id,
+      isActive: true,
+    }).populate('organization', '-mpPublicKey -mpAccessToken -mpWebhookSecret');
+
+    if (!membership) {
+      return res.status(400).json({ success: false, message: 'Membresía no válida.' });
+    }
+
+    const token = signToken(req.user._id, {
+      organizationId: membership.organization._id,
+      role:           membership.role,
+      membershipId:   membership._id,
+    });
+
+    req.user.password = undefined;
+    req.user.fcmToken = undefined;
+    logger.info(`Organización seleccionada: ${req.user.email} [${membership.role}] org=${membership.organization.name}`);
+    res.json({ success: true, token, data: { user: req.user, membership } });
   } catch (err) {
     next(err);
   }

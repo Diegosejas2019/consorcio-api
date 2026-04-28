@@ -25,6 +25,13 @@ router.post('/register',
   ctrl.register
 );
 
+router.post('/select-organization',
+  protect,
+  [body('membershipId').notEmpty().withMessage('membershipId requerido')],
+  validate,
+  ctrl.selectOrganization
+);
+
 router.get('/me',            protect, ctrl.getMe);
 router.patch('/update-password', protect, ctrl.updatePassword);
 router.patch('/fcm-token',   protect, ctrl.updateFcmToken);
