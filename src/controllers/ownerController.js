@@ -1,4 +1,5 @@
-const User    = require('../models/User');
+const User               = require('../models/User');
+const OrganizationMember = require('../models/OrganizationMember');
 const Payment = require('../models/Payment');
 const Unit    = require('../models/Unit');
 const logger  = require('../config/logger');
@@ -103,36 +104,78 @@ exports.createOwner = async (req, res, next) => {
     ownerData.balance  = initialDebtAmount > 0 ? -initialDebtAmount : 0;
     ownerData.isDebtor = initialDebtAmount > 0;
 
-    // Calcular período de inicio de cobro
     const currentPeriod = formatYYYYMM(new Date());
     const chargeCurrentMonth = req.body.chargeCurrentMonth !== false;
     ownerData.startBillingPeriod = chargeCurrentMonth ? currentPeriod : getNextMonth(currentPeriod);
 
     const tempPassword = req.body.password;
 
-    // Si existe un propietario inactivo con ese email, reactivarlo en lugar de crear uno nuevo
-    const existing = req.body.email
-      ? await User.findOne({ email: req.body.email, isActive: false }).select('+password')
-      : null;
-
     let owner;
-    if (existing) {
-      Object.assign(existing, ownerData, { isActive: true });
-      if (tempPassword) existing.password = tempPassword; // el pre-save hashea
-      await existing.save();
-      existing.password = undefined;
-      owner = existing;
-      logger.info(`Propietario reactivado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
-    } else {
+    let sendWelcomeEmail = true;
+
+    if (req.body.email) {
+      const existingActive = await User.findOne({ email: req.body.email, isActive: true });
+
+      if (existingActive) {
+        // Si ya tiene membresía activa en esta org, rechazar
+        const membershipExists = await OrganizationMember.findOne({
+          user: existingActive._id,
+          organization: req.orgId,
+          isActive: true,
+        });
+        if (membershipExists) {
+          return res.status(400).json({ success: false, message: 'El usuario ya pertenece a esta organización.' });
+        }
+        // Actualizar campos del User sin tocar la contraseña
+        const { password: _p, ...updateFields } = ownerData;
+        owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
+        sendWelcomeEmail = false;
+        logger.info(`Propietario existente vinculado: ${owner.email} [org: ${req.orgId}]`);
+      } else {
+        // Usuario inactivo: reactivar
+        const existingInactive = await User.findOne({ email: req.body.email, isActive: false }).select('+password');
+        if (existingInactive) {
+          Object.assign(existingInactive, ownerData, { isActive: true });
+          if (tempPassword) existingInactive.password = tempPassword;
+          await existingInactive.save();
+          existingInactive.password = undefined;
+          owner = existingInactive;
+          logger.info(`Propietario reactivado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+        }
+      }
+    }
+
+    if (!owner) {
+      if (!req.body.password) {
+        return res.status(400).json({ success: false, message: 'La contraseña es obligatoria para nuevos propietarios.' });
+      }
       owner = await User.create(ownerData);
       logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
       owner.password = undefined;
     }
 
-    const unitNames = owner.unit ? [owner.unit] : [];
-    sendWelcome(owner, tempPassword, unitNames).catch((err) =>
-      logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
+    // Crear o actualizar OrganizationMember (upsert para idempotencia)
+    await OrganizationMember.findOneAndUpdate(
+      { user: owner._id, organization: req.orgId, role: 'owner' },
+      {
+        $set: {
+          balance:            ownerData.balance,
+          isDebtor:           ownerData.isDebtor,
+          startBillingPeriod: ownerData.startBillingPeriod,
+          percentage:         ownerData.percentage || 0,
+          isActive:           true,
+          createdBy:          req.user._id,
+        },
+      },
+      { upsert: true }
     );
+
+    if (sendWelcomeEmail) {
+      const unitNames = owner.unit ? [owner.unit] : [];
+      sendWelcome(owner, tempPassword, unitNames).catch((err) =>
+        logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
+      );
+    }
 
     res.status(201).json({ success: true, data: { owner } });
   } catch (err) {
@@ -262,25 +305,79 @@ exports.bulkCreateOwners = async (req, res, next) => {
         ownerData.isDebtor = v === 'true' || v === '1' || v === 'si' || v === 'sí';
       }
 
-      if (!ownerData.name || !ownerData.email || !ownerData.password) {
-        errors.push({ row: rowNum, email: ownerData.email || '', reason: 'name, email y password son obligatorios.' });
+      if (!ownerData.name || !ownerData.email) {
+        errors.push({ row: rowNum, email: ownerData.email || '', reason: 'nombre y email son obligatorios.' });
         continue;
       }
 
       try {
-        const rawPassword = ownerData.password;
-        const owner = await User.create(ownerData);
-        logger.info(`Bulk: propietario creado ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
-        owner.password = undefined;
-        created.push(owner);
+        let owner;
+        let sendEmail = true;
 
-        const unitNames = owner.unit ? [owner.unit] : [];
-        sendWelcome(owner, rawPassword, unitNames).catch((err) =>
-          logger.error(`Bulk: error enviando email de bienvenida a ${owner.email}: ${err.message}`)
+        const existingActive = await User.findOne({ email: ownerData.email, isActive: true });
+
+        if (existingActive) {
+          const membershipExists = await OrganizationMember.findOne({
+            user: existingActive._id,
+            organization: req.orgId,
+            isActive: true,
+          });
+          if (membershipExists) {
+            errors.push({ row: rowNum, email: ownerData.email, reason: 'El usuario ya pertenece a esta organización.' });
+            continue;
+          }
+          const { password: _p, ...updateFields } = ownerData;
+          owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
+          sendEmail = false;
+          logger.info(`Bulk: propietario existente vinculado ${owner.email} [org: ${req.orgId}]`);
+        } else {
+          const existingInactive = await User.findOne({ email: ownerData.email, isActive: false }).select('+password');
+          if (existingInactive) {
+            const rawPassword = ownerData.password;
+            Object.assign(existingInactive, ownerData, { isActive: true });
+            if (rawPassword) existingInactive.password = rawPassword;
+            await existingInactive.save();
+            existingInactive.password = undefined;
+            owner = existingInactive;
+            logger.info(`Bulk: propietario reactivado ${owner.email} [org: ${req.orgId}]`);
+          } else {
+            if (!ownerData.password) {
+              errors.push({ row: rowNum, email: ownerData.email, reason: 'La contraseña es obligatoria para nuevos propietarios.' });
+              continue;
+            }
+            const rawPassword = ownerData.password;
+            owner = await User.create(ownerData);
+            logger.info(`Bulk: propietario creado ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+            owner.password = undefined;
+
+            const unitNames = owner.unit ? [owner.unit] : [];
+            if (sendEmail) {
+              sendWelcome(owner, rawPassword, unitNames).catch((err) =>
+                logger.error(`Bulk: error enviando email a ${owner.email}: ${err.message}`)
+              );
+            }
+          }
+        }
+
+        await OrganizationMember.findOneAndUpdate(
+          { user: owner._id, organization: req.orgId, role: 'owner' },
+          {
+            $set: {
+              balance:            ownerData.balance ?? 0,
+              isDebtor:           ownerData.isDebtor ?? false,
+              startBillingPeriod: ownerData.startBillingPeriod,
+              percentage:         ownerData.percentage || 0,
+              isActive:           true,
+              createdBy:          req.user._id,
+            },
+          },
+          { upsert: true }
         );
+
+        created.push(owner);
       } catch (err) {
         let reason = 'Error al crear el propietario.';
-        if (err.code === 11000) reason = 'El email ya está registrado.';
+        if (err.code === 11000) reason = 'El email ya está registrado en esta organización.';
         else if (err.name === 'ValidationError') reason = Object.values(err.errors).map((e) => e.message).join(' ');
         errors.push({ row: rowNum, email: ownerData.email || '', reason });
       }
