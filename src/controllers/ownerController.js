@@ -13,25 +13,29 @@ exports.getAllOwners = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, search, isDebtor } = req.query;
 
-    const filter = { role: 'owner', isActive: true, organization: req.orgId };
-    if (search) filter.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { unit: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } },
-    ];
-    if (isDebtor !== undefined) filter.isDebtor = isDebtor === 'true';
+    const memberFilter = { organization: req.orgId, role: 'owner', isActive: true };
+    if (isDebtor !== undefined) memberFilter.isDebtor = isDebtor === 'true';
 
-    const [owners, total] = await Promise.all([
-      User.find(filter)
-        .select('-__v')
-        .sort({ unit: 1 })
-        .skip((page - 1) * limit)
-        .limit(Number(limit)),
-      User.countDocuments(filter),
-    ]);
+    let memberships = await OrganizationMember.find(memberFilter)
+      .populate('user', 'name email unit phone initials lastLogin createdAt isActive')
+      .lean();
 
-    // Enriquecer con último pago aprobado y unidades — queries únicas para todos los propietarios
-    const ownerIds = owners.map((o) => o._id);
+    // Filtrar por búsqueda sobre campos del User
+    if (search) {
+      const re = new RegExp(search, 'i');
+      memberships = memberships.filter(m =>
+        m.user && (re.test(m.user.name) || re.test(m.user.unit) || re.test(m.user.email))
+      );
+    }
+
+    // Ordenar por unidad
+    memberships.sort((a, b) => (a.user?.unit || '').localeCompare(b.user?.unit || ''));
+
+    const total = memberships.length;
+    const paged = memberships.slice((page - 1) * limit, page * limit);
+    const ownerIds = paged.map(m => m.user._id);
+
+    // Enriquecer con último pago aprobado y unidades
     const [lastPayments, allUnits] = await Promise.all([
       Payment.aggregate([
         { $match: { owner: { $in: ownerIds }, status: 'approved' } },
@@ -58,15 +62,21 @@ exports.getAllOwners = async (req, res, next) => {
       return map;
     }, {});
 
-    const enriched = owners.map((owner) => ({
-      ...owner.toJSON(),
-      lastPayment: lastPaymentByOwner[owner._id.toString()] ?? null,
-      units: unitsByOwner[owner._id.toString()] ?? [],
+    const owners = paged.map(m => ({
+      ...m.user,
+      balance:            m.balance,
+      isDebtor:           m.isDebtor,
+      percentage:         m.percentage,
+      startBillingPeriod: m.startBillingPeriod,
+      role:               m.role,
+      membershipId:       m._id,
+      lastPayment:        lastPaymentByOwner[m.user._id.toString()] ?? null,
+      units:              unitsByOwner[m.user._id.toString()] ?? [],
     }));
 
     res.json({
       success: true,
-      data: { owners: enriched },
+      data: { owners },
       pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -77,10 +87,28 @@ exports.getAllOwners = async (req, res, next) => {
 // ── GET /api/owners/:id — detalle de un propietario ───────────
 exports.getOwner = async (req, res, next) => {
   try {
-    const owner = await User.findOne({ _id: req.params.id, role: 'owner', organization: req.orgId });
-    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    const membership = await OrganizationMember.findOne({
+      user: req.params.id,
+      organization: req.orgId,
+      role: 'owner',
+      isActive: true,
+    }).populate('user', '-__v -password -fcmToken -passwordResetToken -passwordResetExpires');
 
-    const payments = await Payment.find({ owner: owner._id, organization: req.orgId })
+    if (!membership || !membership.user) {
+      return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    }
+
+    const owner = {
+      ...membership.user.toObject(),
+      balance:            membership.balance,
+      isDebtor:           membership.isDebtor,
+      percentage:         membership.percentage,
+      startBillingPeriod: membership.startBillingPeriod,
+      role:               membership.role,
+      membershipId:       membership._id,
+    };
+
+    const payments = await Payment.find({ owner: membership.user._id, organization: req.orgId })
       .sort({ createdAt: -1 })
       .select('-__v');
 
@@ -186,16 +214,47 @@ exports.createOwner = async (req, res, next) => {
 // ── PATCH /api/owners/:id — actualizar datos ──────────────────
 exports.updateOwner = async (req, res, next) => {
   try {
-    const allowed = ['name', 'unit', 'phone', 'isActive', 'isDebtor', 'balance', 'percentage', 'startBillingPeriod'];
-    const update  = {};
-    allowed.forEach((f) => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+    const memberFields = ['balance', 'isDebtor', 'percentage', 'startBillingPeriod'];
+    const userFields   = ['name', 'unit', 'phone', 'isActive'];
 
-    const owner = await User.findOneAndUpdate(
-      { _id: req.params.id, organization: req.orgId },
-      update,
-      { new: true, runValidators: true }
-    );
-    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    const userUpdate   = {};
+    const memberUpdate = {};
+    [...memberFields, ...userFields].forEach((f) => {
+      if (req.body[f] !== undefined) {
+        if (memberFields.includes(f)) memberUpdate[f] = req.body[f];
+        else userUpdate[f] = req.body[f];
+      }
+    });
+
+    // Verificar membresía en esta org
+    const membership = await OrganizationMember.findOne({
+      user: req.params.id,
+      organization: req.orgId,
+      isActive: true,
+    });
+    if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+
+    await Promise.all([
+      Object.keys(userUpdate).length > 0
+        ? User.findByIdAndUpdate(req.params.id, userUpdate, { runValidators: true })
+        : Promise.resolve(),
+      Object.keys(memberUpdate).length > 0
+        ? OrganizationMember.findByIdAndUpdate(membership._id, memberUpdate)
+        : Promise.resolve(),
+    ]);
+
+    const [updatedUser, updatedMember] = await Promise.all([
+      User.findById(req.params.id).select('-__v -password -fcmToken'),
+      OrganizationMember.findById(membership._id),
+    ]);
+
+    const owner = {
+      ...updatedUser.toObject(),
+      balance:            updatedMember.balance,
+      isDebtor:           updatedMember.isDebtor,
+      percentage:         updatedMember.percentage,
+      startBillingPeriod: updatedMember.startBillingPeriod,
+    };
 
     res.json({ success: true, data: { owner } });
   } catch (err) {
@@ -206,13 +265,23 @@ exports.updateOwner = async (req, res, next) => {
 // ── DELETE /api/owners/:id — desactivar (soft delete) ─────────
 exports.deleteOwner = async (req, res, next) => {
   try {
-    const owner = await User.findOneAndUpdate(
-      { _id: req.params.id, organization: req.orgId },
+    const membership = await OrganizationMember.findOneAndUpdate(
+      { user: req.params.id, organization: req.orgId, isActive: true },
       { isActive: false },
       { new: true }
     );
-    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
-    logger.info(`Propietario desactivado: ${owner.email}`);
+    if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+
+    // Desactivar User solo si no tiene otras membresías activas
+    const remaining = await OrganizationMember.countDocuments({
+      user: req.params.id,
+      isActive: true,
+    });
+    if (remaining === 0) {
+      await User.findByIdAndUpdate(req.params.id, { isActive: false });
+    }
+
+    logger.info(`Propietario desactivado: userId=${req.params.id} org=${req.orgId}`);
     res.json({ success: true, message: 'Propietario desactivado correctamente.' });
   } catch (err) {
     next(err);
@@ -225,11 +294,16 @@ exports.notifyOwner = async (req, res, next) => {
     const { title, body } = req.body;
     if (!title || !body) return res.status(400).json({ success: false, message: 'title y body son requeridos.' });
 
-    const owner = await User.findOne({ _id: req.params.id, organization: req.orgId, role: 'owner' });
-    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    const membership = await OrganizationMember.findOne({
+      user: req.params.id,
+      organization: req.orgId,
+      role: 'owner',
+      isActive: true,
+    }).populate('user', 'email');
+    if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
 
-    await sendToUser(owner._id, { title, body, data: { type: 'admin_message' } });
-    logger.info(`Push enviado a ${owner.email} por admin ${req.user.email}`);
+    await sendToUser(req.params.id, { title, body, data: { type: 'admin_message' } });
+    logger.info(`Push enviado a ${membership.user.email} por admin ${req.user.email}`);
     res.json({ success: true, message: 'Notificación enviada.' });
   } catch (err) {
     next(err);
@@ -403,8 +477,8 @@ exports.getStats = async (req, res, next) => {
     const orgFilter = { organization: req.orgId };
 
     const [totalOwners, debtors, payments] = await Promise.all([
-      User.countDocuments({ ...orgFilter, role: 'owner', isActive: true }),
-      User.countDocuments({ ...orgFilter, role: 'owner', isActive: true, isDebtor: true }),
+      OrganizationMember.countDocuments({ organization: req.orgId, role: 'owner', isActive: true }),
+      OrganizationMember.countDocuments({ organization: req.orgId, role: 'owner', isActive: true, isDebtor: true }),
       Payment.find({ ...orgFilter, status: 'approved' }).select('amount month'),
     ]);
 

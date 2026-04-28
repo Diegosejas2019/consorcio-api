@@ -5,6 +5,17 @@ const { signToken, signSelectionToken, sendTokenResponse } = require('../middlew
 const { sendPasswordReset } = require('../services/emailService');
 const logger = require('../config/logger');
 
+// Sobreescribe campos financieros del user con los valores por organización
+function overlayMembership(user, membership) {
+  if (!membership) return;
+  user.balance            = membership.balance;
+  user.isDebtor           = membership.isDebtor;
+  user.percentage         = membership.percentage;
+  if (membership.startBillingPeriod !== undefined) {
+    user.startBillingPeriod = membership.startBillingPeriod;
+  }
+}
+
 // ── POST /api/auth/login ──────────────────────────────────────
 exports.login = async (req, res, next) => {
   try {
@@ -52,6 +63,7 @@ exports.login = async (req, res, next) => {
       });
       user.password = undefined;
       user.fcmToken = undefined;
+      overlayMembership(user, m);
       logger.info(`Login exitoso: ${user.email} [${m.role}] org=${m.organization.name}`);
       return res.json({ success: true, token, data: { user, membership: m } });
     }
@@ -99,9 +111,9 @@ exports.register = async (req, res, next) => {
 // ── GET /api/auth/me ──────────────────────────────────────────
 exports.getMe = async (req, res) => {
   const user = await User.findById(req.user.id);
-  // Si hay membership activo (token nuevo), usar role del membership
   if (req.membership) {
     user.role = req.membership.role;
+    overlayMembership(user, req.membership);
   }
   res.json({ success: true, data: { user, membership: req.membership || null } });
 };
@@ -226,6 +238,7 @@ exports.selectOrganization = async (req, res, next) => {
 
     req.user.password = undefined;
     req.user.fcmToken = undefined;
+    overlayMembership(req.user, membership);
     logger.info(`Organización seleccionada: ${req.user.email} [${membership.role}] org=${membership.organization.name}`);
     res.json({ success: true, token, data: { user: req.user, membership } });
   } catch (err) {

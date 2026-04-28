@@ -1,8 +1,9 @@
-const Payment         = require('../models/Payment');
-const Expense         = require('../models/Expense');
-const User            = require('../models/User');
-const Unit            = require('../models/Unit');
-const Organization    = require('../models/Organization');
+const Payment            = require('../models/Payment');
+const Expense            = require('../models/Expense');
+const User               = require('../models/User');
+const OrganizationMember = require('../models/OrganizationMember');
+const Unit               = require('../models/Unit');
+const Organization       = require('../models/Organization');
 const { calcUnitFee } = require('./unitController');
 const { cloudinary }  = require('../config/cloudinary');
 const emailService    = require('../services/emailService');
@@ -93,7 +94,7 @@ exports.getAvailableItems = async (req, res, next) => {
       activePayments.flatMap(p => (p.extraordinaryItems || []).map(e => e.expense.toString()))
     );
 
-    const startBilling = owner.startBillingPeriod;
+    const startBilling = req.membership?.startBillingPeriod ?? owner.startBillingPeriod;
     const periods = (org.paymentPeriods || [])
       .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling));
 
@@ -136,10 +137,10 @@ exports.createPayment = async (req, res, next) => {
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
     // Cargar unidades activas del propietario para calcular monto y breakdown
-    const [org, activeUnits, ownerDoc] = await Promise.all([
+    const [org, activeUnits, ownerMembership] = await Promise.all([
       Organization.findById(req.orgId).select('monthlyFee feePeriodCode'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
-      User.findById(ownerId).select('startBillingPeriod'),
+      OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner' }).select('startBillingPeriod'),
     ]);
 
     if (!month && extraordinaryIds.length === 0) {
@@ -153,7 +154,7 @@ exports.createPayment = async (req, res, next) => {
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
     if (month) {
-      const startBilling = ownerDoc?.startBillingPeriod;
+      const startBilling = ownerMembership?.startBillingPeriod;
       if (startBilling && month < startBilling) {
         return res.status(400).json({
           success: false,
@@ -286,16 +287,22 @@ exports.approvePayment = async (req, res, next) => {
     await payment.save();
 
     if (payment.type === 'balance') {
-      const updated = await User.findByIdAndUpdate(
-        payment.owner._id,
+      const updatedMember = await OrganizationMember.findOneAndUpdate(
+        { user: payment.owner._id, organization: payment.organization, role: 'owner' },
         { $inc: { balance: payment.amount } },
         { new: true }
-      ).select('balance');
-      if ((updated?.balance ?? -1) >= 0) {
-        await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false });
+      );
+      if ((updatedMember?.balance ?? -1) >= 0) {
+        await OrganizationMember.updateOne(
+          { user: payment.owner._id, organization: payment.organization, role: 'owner' },
+          { isDebtor: false }
+        );
       }
     } else {
-      await User.findByIdAndUpdate(payment.owner._id, { isDebtor: false, balance: 0 });
+      await OrganizationMember.updateOne(
+        { user: payment.owner._id, organization: payment.organization, role: 'owner' },
+        { isDebtor: false, balance: 0 }
+      );
     }
 
     // Generar recibo del sistema de forma asíncrona (no bloquea la aprobación)

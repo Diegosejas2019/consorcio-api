@@ -1,9 +1,9 @@
-const puppeteer    = require('puppeteer');
-const Payment      = require('../models/Payment');
-const Expense      = require('../models/Expense');
-const Organization = require('../models/Organization');
-const User         = require('../models/User');
-const logger       = require('../config/logger');
+const puppeteer          = require('puppeteer');
+const Payment            = require('../models/Payment');
+const Expense            = require('../models/Expense');
+const Organization       = require('../models/Organization');
+const OrganizationMember = require('../models/OrganizationMember');
+const logger             = require('../config/logger');
 
 const CATEGORIES = ['cleaning', 'security', 'maintenance', 'utilities', 'administration', 'other'];
 
@@ -388,7 +388,7 @@ exports.getExpensasPdf = async (req, res, next) => {
     const monthStart  = new Date(year, mon - 1, 1);
     const monthEnd    = new Date(year, mon, 0, 23, 59, 59, 999);
 
-    const [org, expenses, owners, monthPayments] = await Promise.all([
+    const [org, expenses, rawMembers, monthPayments] = await Promise.all([
       Organization.findById(orgId).select('name address cuit dueDayOfMonth lateFeePercent bankName bankAccount bankCbu bankHolder'),
       Expense.find({
         organization: orgId,
@@ -398,9 +398,8 @@ exports.getExpensasPdf = async (req, res, next) => {
         .populate('provider', 'name cuit')
         .sort({ expenseType: 1, category: 1, date: 1 })
         .lean(),
-      User.find({ organization: orgId, role: 'owner', isActive: true })
-        .select('name unit balance percentage')
-        .sort({ unit: 1 })
+      OrganizationMember.find({ organization: orgId, role: 'owner', isActive: true })
+        .populate('user', 'name unit')
         .lean(),
       Payment.find({ organization: orgId, status: 'approved', month })
         .select('owner amount')
@@ -410,6 +409,18 @@ exports.getExpensasPdf = async (req, res, next) => {
     if (!org) {
       return res.status(404).json({ success: false, message: 'Organización no encontrada.' });
     }
+
+    // Construir lista de propietarios desde OrganizationMember con datos financieros por org
+    const owners = rawMembers
+      .filter(m => m.user)
+      .map(m => ({
+        _id:        m.user._id,
+        name:       m.user.name,
+        unit:       m.user.unit,
+        balance:    m.balance,
+        percentage: m.percentage,
+      }))
+      .sort((a, b) => (a.unit || '').localeCompare(b.unit || ''));
 
     // Agrupar pagos por propietario
     const paymentsByOwner = {};

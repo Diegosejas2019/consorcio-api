@@ -1,8 +1,9 @@
 const { MercadoPagoConfig, Preference, Payment: MPPayment } = require('mercadopago');
 const crypto       = require('crypto');
-const Payment      = require('../models/Payment');
-const User         = require('../models/User');
-const Unit         = require('../models/Unit');
+const Payment            = require('../models/Payment');
+const User               = require('../models/User');
+const OrganizationMember = require('../models/OrganizationMember');
+const Unit               = require('../models/Unit');
 const Organization = require('../models/Organization');
 const { calcUnitFee } = require('./unitController');
 const emailService   = require('../services/emailService');
@@ -264,7 +265,10 @@ exports.webhook = async (req, res) => {
       const totalAmount   = paymentList.reduce((sum, p) => sum + p.amount, 0);
 
       if (mpData.status === 'approved') {
-        await User.findByIdAndUpdate(ownerDoc._id, { isDebtor: false, balance: 0 });
+        await OrganizationMember.updateOne(
+          { user: ownerDoc._id, organization: firstPayment.organization, role: 'owner' },
+          { isDebtor: false, balance: 0 }
+        );
 
         const periodsSummary = paymentList.length === 1
           ? firstPayment.monthFormatted

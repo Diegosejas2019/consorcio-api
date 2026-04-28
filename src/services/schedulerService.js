@@ -1,7 +1,7 @@
-const cron         = require('node-cron');
-const Organization = require('../models/Organization');
-const Payment      = require('../models/Payment');
-const User         = require('../models/User');
+const cron               = require('node-cron');
+const Organization       = require('../models/Organization');
+const OrganizationMember = require('../models/OrganizationMember');
+const Payment            = require('../models/Payment');
 const firebase     = require('./firebaseService');
 const emailService = require('./emailService');
 const logger       = require('../config/logger');
@@ -21,53 +21,56 @@ async function sendDueDateReminders(org) {
     status: 'approved',
   })).map(p => p.owner.toString());
 
-  // Owners activos sin pago aprobado (respeta startBillingPeriod)
-  const unpaid = await User.find({
+  // Membresías activas sin pago aprobado (respeta startBillingPeriod)
+  const unpaidMembers = await OrganizationMember.find({
     organization: org._id,
     role: 'owner',
     isActive: true,
-    _id: { $nin: paidIds },
+    user: { $nin: paidIds },
     $or: [
       { startBillingPeriod: { $exists: false } },
       { startBillingPeriod: { $lte: month } },
     ],
-  }).select('+fcmToken');
+  }).populate({ path: 'user', select: '+fcmToken name email' });
 
-  if (unpaid.length > 0) {
-    const unpaidIds = unpaid.map(u => u._id);
-    await User.updateMany({ _id: { $in: unpaidIds } }, { isDebtor: true });
-    logger.info(`[Scheduler] Org ${org._id}: ${unpaid.length} propietario(s) marcados como deudores`);
+  if (unpaidMembers.length > 0) {
+    const memberIds = unpaidMembers.map(m => m._id);
+    await OrganizationMember.updateMany({ _id: { $in: memberIds } }, { isDebtor: true });
+    logger.info(`[Scheduler] Org ${org._id}: ${unpaidMembers.length} propietario(s) marcados como deudores`);
   }
 
-  const tokens = unpaid.map(u => u.fcmToken).filter(Boolean);
-  logger.info(`[Scheduler] Org ${org._id}: ${unpaid.length} sin pago, ${tokens.length} token(s) FCM`);
+  const tokens    = unpaidMembers.map(m => m.user?.fcmToken).filter(Boolean);
+  const unpaidUsers = unpaidMembers.map(m => m.user).filter(Boolean);
+  logger.info(`[Scheduler] Org ${org._id}: ${unpaidMembers.length} sin pago, ${tokens.length} token(s) FCM`);
 
-  if (tokens.length === 0) return { sent: 0, noToken: unpaid.length };
+  if (tokens.length === 0 && unpaidUsers.length === 0) return { sent: 0, noToken: unpaidMembers.length };
 
   const feeLabel = org.feeLabel || 'Expensa';
   const amount   = org.monthlyFee ?? 0;
   const amountFormatted = amount.toLocaleString('es-AR');
 
-  await firebase.sendMulticast(tokens, {
-    title: `Vencimiento de ${feeLabel}`,
-    body:  `Tu ${feeLabel} de $${amountFormatted} vence hoy. Podés pagar desde la app.`,
-    data:  { type: 'due_date_reminder', month },
-  });
+  if (tokens.length > 0) {
+    await firebase.sendMulticast(tokens, {
+      title: `Vencimiento de ${feeLabel}`,
+      body:  `Tu ${feeLabel} de $${amountFormatted} vence hoy. Podés pagar desde la app.`,
+      data:  { type: 'due_date_reminder', month },
+    });
+  }
 
   // Enviar email de recordatorio a cada propietario sin pago
   const emailResults = await Promise.allSettled(
-    unpaid.map((owner) =>
+    unpaidUsers.map((owner) =>
       emailService.sendMonthlyReminder(owner, month, amount, org.dueDayOfMonth)
     )
   );
-  const emailSent  = emailResults.filter((r) => r.status === 'fulfilled').length;
+  const emailSent   = emailResults.filter((r) => r.status === 'fulfilled').length;
   const emailFailed = emailResults.filter((r) => r.status === 'rejected').length;
   if (emailFailed > 0) {
     logger.warn(`[Scheduler] Org ${org._id}: ${emailFailed} email(s) de recordatorio fallaron`);
   }
   logger.info(`[Scheduler] Org ${org._id}: ${emailSent} email(s) de recordatorio enviados`);
 
-  return { sent: tokens.length, noToken: unpaid.length - tokens.length, emailSent, emailFailed };
+  return { sent: tokens.length, noToken: unpaidMembers.length - tokens.length, emailSent, emailFailed };
 }
 
 // ── Cron: diario a las 09:00 UTC ─────────────────────────────
