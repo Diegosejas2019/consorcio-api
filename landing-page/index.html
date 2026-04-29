@@ -1,0 +1,1736 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GestionAr — Administración de consorcios para barrios privados</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #0e1512;
+    --bg-2: #131b17;
+    --bg-3: #1a241f;
+    --surface: #18221d;
+    --border: rgba(255,255,255,0.08);
+    --border-strong: rgba(255,255,255,0.14);
+    --text: #eef1ed;
+    --text-dim: #a8b3ac;
+    --text-faint: #6b7870;
+    --green: #9cf27b;
+    --green-2: #7de05b;
+    --green-deep: #2f5a3a;
+    --green-soft: rgba(156, 242, 123, 0.12);
+    --cream: #f4f0e8;
+    --radius: 18px;
+    --radius-lg: 28px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: 'Inter Tight', system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    text-wrap: balance;
+  }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .container {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+
+  /* ============ NAV ============ */
+  .nav {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 32px);
+    max-width: 1200px;
+    z-index: 100;
+    background: rgba(14, 21, 18, 0.72);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 10px 10px 10px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.3s ease;
+  }
+  .nav.scrolled {
+    background: rgba(14, 21, 18, 0.92);
+    border-color: var(--border-strong);
+  }
+  .logo {
+    font-family: 'Inter Tight', sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: -0.03em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .logo-mark {
+    width: 26px; height: 26px;
+    border-radius: 8px;
+    background: var(--green);
+    display: grid;
+    place-items: center;
+    color: var(--bg);
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .logo-mark::before {
+    content: 'G';
+  }
+  .logo .ar { color: var(--green); }
+
+  .nav-links {
+    display: flex;
+    gap: 4px;
+    list-style: none;
+  }
+  .nav-links a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px 14px;
+    border-radius: 999px;
+    transition: all 0.2s ease;
+  }
+  .nav-links a:hover {
+    color: var(--text);
+    background: rgba(255,255,255,0.04);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 11px 20px;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--green);
+    color: #0e1512;
+  }
+  .btn-primary:hover {
+    background: var(--green-2);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 30px -10px rgba(156, 242, 123, 0.5);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+  }
+  .btn-ghost:hover {
+    background: rgba(255,255,255,0.04);
+    border-color: rgba(255,255,255,0.25);
+  }
+  .btn-lg { padding: 14px 26px; font-size: 15px; }
+
+  .arrow {
+    display: inline-block;
+    transition: transform 0.2s ease;
+  }
+  .btn:hover .arrow { transform: translateX(3px); }
+
+  @media (max-width: 860px) {
+    .nav-links { display: none; }
+  }
+
+  /* ============ HERO ============ */
+  .hero {
+    padding: 160px 0 100px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 900px;
+    height: 900px;
+    background: radial-gradient(circle, rgba(156, 242, 123, 0.08) 0%, transparent 60%);
+    pointer-events: none;
+  }
+  .hero-inner {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 80px;
+    align-items: center;
+  }
+  @media (max-width: 960px) {
+    .hero-inner { grid-template-columns: 1fr; gap: 60px; }
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 8px;
+    background: var(--green-soft);
+    border: 1px solid rgba(156, 242, 123, 0.2);
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--green);
+    margin-bottom: 24px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(156, 242, 123, 0.2);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  h1.display {
+    font-size: clamp(40px, 6vw, 72px);
+    margin-bottom: 24px;
+  }
+  h1.display .accent {
+    color: var(--green);
+    font-style: italic;
+    font-weight: 500;
+  }
+  .hero p.lead {
+    font-size: 18px;
+    color: var(--text-dim);
+    max-width: 520px;
+    margin-bottom: 36px;
+    text-wrap: pretty;
+  }
+  .hero-cta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 48px;
+  }
+
+  .trust {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-size: 13px;
+    color: var(--text-faint);
+  }
+  .avatars {
+    display: flex;
+  }
+  .avatars span {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 2px solid var(--bg);
+    margin-left: -8px;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .avatars span:first-child { margin-left: 0; }
+  .avatars span:nth-child(1) { background: #e8c88e; color: #5c3c10; }
+  .avatars span:nth-child(2) { background: #b5dfb0; color: #1e4a20; }
+  .avatars span:nth-child(3) { background: #d4b5df; color: #4a2060; }
+  .avatars span:nth-child(4) { background: #8ecae6; color: #0a3a5c; }
+
+  /* Hero visual — mock dashboard */
+  .hero-visual {
+    position: relative;
+    aspect-ratio: 1 / 1.05;
+  }
+  .dash {
+    position: absolute;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 22px;
+    box-shadow: 0 30px 80px -20px rgba(0,0,0,0.5);
+  }
+  .dash-main {
+    inset: 0 40px 80px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .dash-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .dash-title {
+    font-family: 'Inter Tight', sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .dash-sub {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .dash-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: var(--bg);
+    border-radius: 999px;
+    font-size: 11px;
+  }
+  .dash-tabs span {
+    padding: 5px 10px;
+    border-radius: 999px;
+    color: var(--text-faint);
+  }
+  .dash-tabs span.active {
+    background: var(--green);
+    color: var(--bg);
+    font-weight: 600;
+  }
+  .dash-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+  .stat-card {
+    background: var(--bg);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .stat-card .label {
+    font-size: 10px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .stat-card .val {
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 22px;
+    font-weight: 600;
+  }
+  .stat-card .delta {
+    font-size: 10px;
+    color: var(--green);
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 4px;
+  }
+  .dash-chart {
+    flex: 1;
+    background: var(--bg);
+    border-radius: 14px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 160px;
+  }
+  .chart-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .chart-head .t { font-size: 12px; font-weight: 500; }
+  .chart-legend {
+    display: flex;
+    gap: 12px;
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+  .chart-legend span { display: flex; align-items: center; gap: 5px; }
+  .chart-legend .sw { width: 8px; height: 8px; border-radius: 2px; }
+  .chart-svg { flex: 1; width: 100%; }
+
+  .dash-floater {
+    right: 0;
+    bottom: 0;
+    width: 260px;
+    padding: 18px;
+  }
+  .float-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .float-icon {
+    width: 36px; height: 36px;
+    background: var(--green-soft);
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    color: var(--green);
+  }
+  .float-title { font-size: 13px; font-weight: 600; }
+  .float-sub { font-size: 11px; color: var(--text-faint); }
+  .float-list { display: flex; flex-direction: column; gap: 8px; }
+  .float-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border-radius: 8px;
+  }
+  .float-item .name { color: var(--text); }
+  .float-item .amt { font-family: 'JetBrains Mono', monospace; color: var(--green); }
+
+  .dash-ticket {
+    top: -20px;
+    right: -30px;
+    width: 220px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transform: rotate(3deg);
+  }
+  .dash-ticket .dot-g {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 4px var(--green-soft);
+  }
+  .dash-ticket .t { font-size: 12px; font-weight: 500; }
+  .dash-ticket .s { font-size: 10px; color: var(--text-faint); font-family: 'JetBrains Mono', monospace; }
+
+  /* ============ LOGOS STRIP ============ */
+  .logos-strip {
+    padding: 40px 0 20px;
+    border-top: 1px solid var(--border);
+  }
+  .logos-strip .label {
+    text-align: center;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 32px;
+  }
+  .logos-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 40px;
+    align-items: center;
+  }
+  @media (max-width: 860px) {
+    .logos-grid { grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  }
+  .logo-item {
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-faint);
+    text-align: center;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+    letter-spacing: -0.02em;
+  }
+  .logo-item:hover { opacity: 1; color: var(--text); }
+
+  /* ============ SECTION ============ */
+  .section {
+    padding: 120px 0;
+    position: relative;
+  }
+  .section-head {
+    text-align: center;
+    margin-bottom: 72px;
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .section-head .eyebrow { margin-bottom: 20px; }
+  .section-head h2 {
+    font-size: clamp(32px, 4.5vw, 52px);
+    margin-bottom: 20px;
+  }
+  .section-head p {
+    color: var(--text-dim);
+    font-size: 17px;
+    text-wrap: pretty;
+  }
+
+  /* ============ BENEFICIOS ============ */
+  .benefits-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 860px) {
+    .benefits-grid { grid-template-columns: 1fr; }
+  }
+  .benefit {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .benefit:hover {
+    border-color: rgba(156, 242, 123, 0.25);
+    transform: translateY(-4px);
+  }
+  .benefit::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 0% 0%, rgba(156, 242, 123, 0.08), transparent 60%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+  .benefit:hover::before { opacity: 1; }
+  .benefit-icon {
+    width: 48px; height: 48px;
+    background: var(--green-soft);
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    color: var(--green);
+    margin-bottom: 24px;
+  }
+  .benefit h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
+  }
+  .benefit p {
+    color: var(--text-dim);
+    font-size: 15px;
+  }
+  .benefit .num {
+    position: absolute;
+    top: 24px; right: 28px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+
+  /* ============ SERVICIOS (bento) ============ */
+  .bento {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    grid-auto-rows: 220px;
+    gap: 16px;
+  }
+  @media (max-width: 860px) {
+    .bento { grid-template-columns: 1fr; grid-auto-rows: auto; }
+  }
+  .bento-cell {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  @media (max-width: 860px) {
+    .bento-cell { min-height: 240px; }
+  }
+  .bento-cell:hover {
+    border-color: rgba(156, 242, 123, 0.3);
+  }
+  .cell-1 { grid-column: span 3; grid-row: span 2; }
+  .cell-2 { grid-column: span 3; }
+  .cell-3 { grid-column: span 2; }
+  .cell-4 { grid-column: span 2; }
+  .cell-5 { grid-column: span 2; }
+  @media (max-width: 860px) {
+    .cell-1, .cell-2, .cell-3, .cell-4, .cell-5 { grid-column: 1; grid-row: auto; }
+  }
+  .bento-cell .tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--green);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .bento-cell h3 {
+    font-size: 22px;
+    margin: 14px 0 8px;
+  }
+  .bento-cell p {
+    font-size: 14px;
+    color: var(--text-dim);
+    max-width: 380px;
+  }
+  .cell-1 h3 { font-size: 32px; }
+  .cell-1 p { font-size: 16px; }
+
+  .viz {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.95;
+  }
+  .viz-bars {
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-around;
+    height: 55%;
+    padding: 0 8%;
+  }
+  .viz-bars div {
+    width: 10px;
+    background: linear-gradient(to top, var(--green), rgba(156, 242, 123, 0.1));
+    border-radius: 4px 4px 0 0;
+    transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .bento-cell:hover .viz-bars div { animation: pulse-bar 2s ease-in-out infinite; }
+  @keyframes pulse-bar {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(1.1); }
+  }
+
+  /* ============ PROCESO ============ */
+  .process {
+    background: var(--bg-2);
+    border-radius: var(--radius-lg);
+    padding: 72px 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  @media (max-width: 720px) {
+    .process { padding: 48px 24px; }
+  }
+  .process-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+  @media (max-width: 860px) {
+    .process-grid { grid-template-columns: 1fr; gap: 40px; }
+  }
+  .steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .step {
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: 1px solid transparent;
+  }
+  .step.active {
+    background: var(--surface);
+    border-color: rgba(156, 242, 123, 0.2);
+  }
+  .step:hover:not(.active) {
+    background: rgba(255,255,255,0.02);
+  }
+  .step-num {
+    width: 36px; height: 36px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    background: var(--bg-3);
+    display: grid;
+    place-items: center;
+    font-family: 'Inter Tight', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-dim);
+    transition: all 0.2s ease;
+  }
+  .step.active .step-num {
+    background: var(--green);
+    color: var(--bg);
+  }
+  .step-body h4 {
+    font-size: 17px;
+    margin-bottom: 6px;
+  }
+  .step-body p {
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+
+  .process-visual {
+    background: var(--bg);
+    border-radius: var(--radius);
+    padding: 32px;
+    aspect-ratio: 1 / 1.1;
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .pv-content {
+    position: absolute;
+    inset: 32px;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .pv-content.active { opacity: 1; }
+  .pv-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--green);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .pv-title {
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .pv-mock {
+    flex: 1;
+    background: var(--surface);
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .pv-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--bg);
+    border-radius: 8px;
+  }
+  .pv-row .c1 { color: var(--text); }
+  .pv-row .c2 { color: var(--text-faint); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .pv-row .check {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--green-soft);
+    color: var(--green);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+  }
+
+  /* ============ PLANES ============ */
+  .plans-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 860px) {
+    .plans-grid { grid-template-columns: 1fr; }
+  }
+  .plan {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s ease;
+  }
+  .plan:hover { transform: translateY(-4px); }
+  .plan.featured {
+    background: linear-gradient(180deg, rgba(156, 242, 123, 0.06), var(--surface));
+    border-color: rgba(156, 242, 123, 0.3);
+    position: relative;
+  }
+  .plan.featured::after {
+    content: 'MÁS ELEGIDO';
+    position: absolute;
+    top: 16px; right: 16px;
+    background: var(--green);
+    color: var(--bg);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 999px;
+    letter-spacing: 0.05em;
+  }
+  .plan-name {
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--green);
+    margin-bottom: 8px;
+  }
+  .plan-tagline {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 28px;
+    min-height: 40px;
+  }
+  .plan-price {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .plan-price .amt {
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 44px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+  }
+  .plan-price .cur {
+    font-size: 16px;
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+  .plan-per {
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-bottom: 28px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .plan ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 32px;
+    flex: 1;
+  }
+  .plan li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  .plan li::before {
+    content: '';
+    width: 16px; height: 16px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    background: var(--green-soft);
+    border-radius: 50%;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none'%3E%3Cpath d='M2 5l2 2 4-4' stroke='%239cf27b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+  }
+  .plan .btn { width: 100%; }
+
+  /* ============ FAQ ============ */
+  .faq-grid {
+    max-width: 820px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .faq {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: all 0.2s ease;
+  }
+  .faq:hover { border-color: var(--border-strong); }
+  .faq summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 22px 26px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    font-family: 'Inter Tight', sans-serif;
+    font-weight: 500;
+    font-size: 17px;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after {
+    content: '';
+    width: 14px; height: 14px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3 6l4 4 4-4' stroke='%239cf27b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+  }
+  .faq[open] summary::after { transform: rotate(180deg); }
+  .faq .ans {
+    padding: 0 26px 24px;
+    color: var(--text-dim);
+    font-size: 15px;
+    max-width: 620px;
+    text-wrap: pretty;
+  }
+
+  /* ============ CONTACTO / CTA ============ */
+  .contact {
+    background: linear-gradient(135deg, #18221d, #0e1512);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 72px 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  @media (max-width: 720px) {
+    .contact { padding: 48px 24px; }
+  }
+  .contact::before {
+    content: '';
+    position: absolute;
+    top: -100px; right: -100px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(156, 242, 123, 0.1), transparent 70%);
+    pointer-events: none;
+  }
+  .contact-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    position: relative;
+  }
+  @media (max-width: 860px) {
+    .contact-grid { grid-template-columns: 1fr; gap: 40px; }
+  }
+  .contact h2 {
+    font-size: clamp(30px, 4vw, 44px);
+    margin-bottom: 16px;
+  }
+  .contact .lead {
+    color: var(--text-dim);
+    font-size: 16px;
+    margin-bottom: 32px;
+    max-width: 440px;
+  }
+  .contact-items {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .contact-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 14px;
+  }
+  .contact-item .i {
+    width: 38px; height: 38px;
+    background: var(--green-soft);
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    color: var(--green);
+  }
+  .contact-item .lb { font-size: 11px; color: var(--text-faint); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.08em; }
+  .contact-item .v { color: var(--text); font-weight: 500; }
+
+  .form {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 500px) {
+    .form-row { grid-template-columns: 1fr; }
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .field input, .field select, .field textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 14px;
+    transition: all 0.15s ease;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--green);
+    box-shadow: 0 0 0 3px var(--green-soft);
+  }
+  .field textarea { resize: vertical; min-height: 90px; }
+  .form-ok {
+    background: var(--green-soft);
+    border: 1px solid rgba(156,242,123,0.3);
+    color: var(--green);
+    padding: 14px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    text-align: center;
+    display: none;
+  }
+  .form.submitted .form-content { display: none; }
+  .form.submitted .form-ok { display: block; }
+
+  /* ============ FOOTER ============ */
+  footer {
+    padding: 72px 0 32px;
+    border-top: 1px solid var(--border);
+  }
+  .footer-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 40px;
+    margin-bottom: 48px;
+  }
+  @media (max-width: 720px) {
+    .footer-grid { grid-template-columns: 1fr 1fr; }
+  }
+  .footer-brand .logo { margin-bottom: 16px; }
+  .footer-brand p {
+    font-size: 14px;
+    color: var(--text-dim);
+    max-width: 320px;
+  }
+  .footer-col h5 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 16px;
+    font-weight: 500;
+  }
+  .footer-col ul { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+  .footer-col a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 14px;
+    transition: color 0.15s ease;
+  }
+  .footer-col a:hover { color: var(--green); }
+  .footer-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-faint);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ============ ANIMATIONS ============ */
+  .reveal {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .reveal.in {
+    opacity: 1;
+    transform: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav" id="nav">
+  <a href="#" class="logo">
+    <span class="logo-mark"></span>
+    Gestion<span class="ar">Ar</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#beneficios">Beneficios</a></li>
+    <li><a href="#servicios">Servicios</a></li>
+    <li><a href="#proceso">Cómo trabajamos</a></li>
+    <li><a href="#planes">Planes</a></li>
+    <li><a href="#faq">FAQ</a></li>
+  </ul>
+  <a href="#contacto" class="btn btn-primary">Pedir propuesta <span class="arrow">→</span></a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="container hero-inner">
+    <div class="hero-copy">
+      <div class="eyebrow"><span class="dot"></span> ADMINISTRACIÓN DE CONSORCIOS · ARGENTINA</div>
+      <h1 class="display">
+        La administración <span class="accent">transparente</span> que tu barrio privado necesita.
+      </h1>
+      <p class="lead">
+        Simplificamos expensas, mantenimiento y comunicación en countries, barrios cerrados y clubes de campo. Todo en una plataforma, con respuesta humana de lunes a sábado.
+      </p>
+      <div class="hero-cta">
+        <a href="#contacto" class="btn btn-primary btn-lg">Agendar diagnóstico gratuito <span class="arrow">→</span></a>
+        <a href="#servicios" class="btn btn-ghost btn-lg">Ver servicios</a>
+      </div>
+      <div class="trust">
+        <div class="avatars">
+          <span>MP</span><span>LT</span><span>RC</span><span>+</span>
+        </div>
+        <div>+34 barrios confían en nosotros este año</div>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <!-- Main dash -->
+      <div class="dash dash-main">
+        <div class="dash-head">
+          <div>
+            <div class="dash-title">Panel del consorcio</div>
+            <div class="dash-sub">BARRIO LAS ACACIAS · ABR 2026</div>
+          </div>
+          <div class="dash-tabs">
+            <span class="active">Mes</span>
+            <span>Trim.</span>
+            <span>Año</span>
+          </div>
+        </div>
+        <div class="dash-stats">
+          <div class="stat-card">
+            <div class="label">Cobrado</div>
+            <div class="val">96%</div>
+            <div class="delta">↑ 4.2</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Tickets</div>
+            <div class="val">12</div>
+            <div class="delta">↓ 21%</div>
+          </div>
+          <div class="stat-card">
+            <div class="label">Reservas</div>
+            <div class="val">87</div>
+            <div class="delta">↑ 8</div>
+          </div>
+        </div>
+        <div class="dash-chart">
+          <div class="chart-head">
+            <div class="t">Ingresos vs. gastos</div>
+            <div class="chart-legend">
+              <span><span class="sw" style="background:#9cf27b"></span>Ingresos</span>
+              <span><span class="sw" style="background:#3a5a48"></span>Gastos</span>
+            </div>
+          </div>
+          <svg class="chart-svg" viewBox="0 0 280 100" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="grad-in" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#9cf27b" stop-opacity="0.45"/>
+                <stop offset="1" stop-color="#9cf27b" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path d="M0,70 L40,55 L80,62 L120,40 L160,48 L200,28 L240,35 L280,20 L280,100 L0,100 Z" fill="url(#grad-in)"/>
+            <path d="M0,70 L40,55 L80,62 L120,40 L160,48 L200,28 L240,35 L280,20" fill="none" stroke="#9cf27b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M0,82 L40,78 L80,80 L120,72 L160,76 L200,70 L240,68 L280,64" fill="none" stroke="#3a5a48" stroke-width="2" stroke-dasharray="3 3" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Ticket floater -->
+      <div class="dash dash-ticket">
+        <div class="dot-g"></div>
+        <div>
+          <div class="t">Poda sector oeste</div>
+          <div class="s">RESUELTO · 4h</div>
+        </div>
+      </div>
+
+      <!-- Expensas floater -->
+      <div class="dash dash-floater">
+        <div class="float-head">
+          <div class="float-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>
+          </div>
+          <div>
+            <div class="float-title">Expensas pagas</div>
+            <div class="float-sub">Últimas 24 h</div>
+          </div>
+        </div>
+        <div class="float-list">
+          <div class="float-item"><span class="name">Lote 142 · Pérez</span><span class="amt">$ 184.500</span></div>
+          <div class="float-item"><span class="name">Lote 087 · Morales</span><span class="amt">$ 184.500</span></div>
+          <div class="float-item"><span class="name">Lote 031 · Sosa</span><span class="amt">$ 184.500</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- LOGOS -->
+<div class="container">
+  <div class="logos-strip">
+    <div class="label">Administramos barrios en GBA Norte, Zona Oeste y Pilar</div>
+    <div class="logos-grid">
+      <div class="logo-item">Las&nbsp;Acacias</div>
+      <div class="logo-item">San&nbsp;Isidro&nbsp;Park</div>
+      <div class="logo-item">El&nbsp;Ombú</div>
+      <div class="logo-item">Arroyo&nbsp;Verde</div>
+      <div class="logo-item">Pilar&nbsp;Golf</div>
+      <div class="logo-item">Haras&nbsp;del&nbsp;Sur</div>
+    </div>
+  </div>
+</div>
+
+<!-- BENEFICIOS -->
+<section class="section" id="beneficios">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow"><span class="dot"></span> POR QUÉ GESTIONAR</div>
+      <h2>Nueve de cada diez vecinos no saben dónde va su expensa. Nosotros sí, y te lo mostramos.</h2>
+      <p>Transparencia radical, tecnología que le saca el peso al administrador y trato humano con cada propietario. Una combinación rara en este rubro.</p>
+    </div>
+
+    <div class="benefits-grid">
+      <div class="benefit reveal">
+        <span class="num">01</span>
+        <div class="benefit-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+        <h3>Transparencia total</h3>
+        <p>Cada gasto con comprobante digital. Los propietarios ven adónde va cada peso, en tiempo real, desde el celular.</p>
+      </div>
+
+      <div class="benefit reveal">
+        <span class="num">02</span>
+        <div class="benefit-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <h3>Respuesta en menos de 4 h</h3>
+        <p>Cada reclamo tiene un responsable y un tiempo. Podés seguir el estado del pedido como si fuera un envío.</p>
+      </div>
+
+      <div class="benefit reveal">
+        <span class="num">03</span>
+        <div class="benefit-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        </div>
+        <h3>Liquidación mensual clara</h3>
+        <p>Un PDF que se entiende sin un contador al lado. Capítulos, comparativos y reserva técnica calculada al día.</p>
+      </div>
+
+      <div class="benefit reveal">
+        <span class="num">04</span>
+        <div class="benefit-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </div>
+        <h3>Un contacto humano</h3>
+        <p>No sos un ticket. Tenés un administrador asignado que conoce tu barrio, con nombre y celular directo.</p>
+      </div>
+
+      <div class="benefit reveal">
+        <span class="num">05</span>
+        <div class="benefit-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        </div>
+        <h3>Proveedores auditados</h3>
+        <p>Tres presupuestos por obra y un panel de rendimiento por proveedor. Chau compadre del administrador.</p>
+      </div>
+
+      <div class="benefit reveal">
+        <span class="num">06</span>
+        <div class="benefit-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h3>Asesoría legal incluida</h3>
+        <p>Reglamentos, morosos, cocheras, mascotas. Tenés respaldo de un estudio socio, sin costo extra.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SERVICIOS -->
+<section class="section" id="servicios" style="padding-top:0;">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow"><span class="dot"></span> SERVICIOS</div>
+      <h2>Todo lo que un barrio privado necesita, en un solo lugar.</h2>
+      <p>Desde la gestión contable hasta el portón de entrada. Nos encargamos de lo operativo para que la comisión directiva pueda dedicarse a vivir.</p>
+    </div>
+
+    <div class="bento reveal">
+      <div class="bento-cell cell-1">
+        <div>
+          <span class="tag">CORE</span>
+          <h3>Gestión integral del consorcio</h3>
+          <p>Expensas, cobranzas, proveedores, liquidaciones, reserva técnica y auditoría mensual. Todo operado por un equipo dedicado con un panel en vivo para la comisión.</p>
+        </div>
+        <div class="viz viz-bars" id="heroBars">
+          <div style="height:40%"></div>
+          <div style="height:55%"></div>
+          <div style="height:70%"></div>
+          <div style="height:50%"></div>
+          <div style="height:85%"></div>
+          <div style="height:65%"></div>
+          <div style="height:92%"></div>
+          <div style="height:78%"></div>
+          <div style="height:60%"></div>
+          <div style="height:88%"></div>
+        </div>
+      </div>
+
+      <div class="bento-cell cell-2">
+        <div>
+          <span class="tag">TECNOLOGÍA</span>
+          <h3>App para propietarios</h3>
+          <p>Expensas, reclamos, reservas de SUM y QR de invitados en un toque.</p>
+        </div>
+        <svg viewBox="0 0 220 80" style="width:100%; margin-top:auto;">
+          <rect x="4" y="6" width="60" height="68" rx="10" fill="#1a241f" stroke="rgba(255,255,255,0.08)"/>
+          <rect x="12" y="16" width="44" height="6" rx="2" fill="#9cf27b"/>
+          <rect x="12" y="28" width="32" height="4" rx="2" fill="#3a5a48"/>
+          <rect x="12" y="38" width="44" height="26" rx="4" fill="#0e1512"/>
+          <rect x="78" y="6" width="60" height="68" rx="10" fill="#1a241f" stroke="rgba(255,255,255,0.08)"/>
+          <circle cx="108" cy="30" r="10" fill="#9cf27b" fill-opacity="0.2"/>
+          <circle cx="108" cy="30" r="5" fill="#9cf27b"/>
+          <rect x="86" y="48" width="44" height="4" rx="2" fill="#3a5a48"/>
+          <rect x="86" y="56" width="32" height="4" rx="2" fill="#3a5a48"/>
+          <rect x="152" y="6" width="60" height="68" rx="10" fill="#1a241f" stroke="rgba(255,255,255,0.08)"/>
+          <rect x="160" y="16" width="44" height="12" rx="3" fill="#9cf27b" fill-opacity="0.15"/>
+          <rect x="160" y="34" width="44" height="12" rx="3" fill="#9cf27b" fill-opacity="0.3"/>
+          <rect x="160" y="52" width="44" height="12" rx="3" fill="#9cf27b"/>
+        </svg>
+      </div>
+
+      <div class="bento-cell cell-3">
+        <span class="tag">OPERACIONES</span>
+        <div>
+          <h3>Seguridad y portería</h3>
+          <p>Gestión del personal, rondas digitales y control de accesos integrado.</p>
+        </div>
+      </div>
+
+      <div class="bento-cell cell-4">
+        <span class="tag">INFRAESTRUCTURA</span>
+        <div>
+          <h3>Mantenimiento edilicio</h3>
+          <p>Plan preventivo por rubro con historial y recordatorios automáticos.</p>
+        </div>
+      </div>
+
+      <div class="bento-cell cell-5">
+        <span class="tag">LEGAL &amp; RRHH</span>
+        <div>
+          <h3>Empleados del barrio</h3>
+          <p>Liquidación de sueldos, ART y contratos al día, sin sorpresas.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PROCESO -->
+<section class="section" id="proceso" style="padding-top:0;">
+  <div class="container">
+    <div class="process reveal">
+      <div class="process-grid">
+        <div>
+          <div class="eyebrow"><span class="dot"></span> CÓMO TRABAJAMOS</div>
+          <h2 style="font-size:clamp(28px, 3.5vw, 42px); margin:20px 0 40px;">Transición sin fricciones en 30 días.</h2>
+
+          <div class="steps-list">
+            <div class="step active" data-step="1">
+              <div class="step-num">01</div>
+              <div class="step-body">
+                <h4>Diagnóstico del barrio</h4>
+                <p>Reunión con la comisión, auditoría del estado actual y propuesta cerrada.</p>
+              </div>
+            </div>
+            <div class="step" data-step="2">
+              <div class="step-num">02</div>
+              <div class="step-body">
+                <h4>Traspaso y onboarding</h4>
+                <p>Migramos la información del administrador anterior y damos de alta a los propietarios.</p>
+              </div>
+            </div>
+            <div class="step" data-step="3">
+              <div class="step-num">03</div>
+              <div class="step-body">
+                <h4>Primer mes en paralelo</h4>
+                <p>Acompañamos la primera liquidación codo a codo con la comisión directiva.</p>
+              </div>
+            </div>
+            <div class="step" data-step="4">
+              <div class="step-num">04</div>
+              <div class="step-body">
+                <h4>Operación continua</h4>
+                <p>Revisiones trimestrales, mejoras en proveedores y reporte ejecutivo cada mes.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="process-visual">
+          <div class="pv-content active" data-pv="1">
+            <div class="pv-label">PASO 01 · DIAGNÓSTICO</div>
+            <div class="pv-title">Auditoría sin costo</div>
+            <div class="pv-mock">
+              <div class="pv-row"><span class="c1">Estado financiero</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Morosidad histórica</span><span class="c2">23%</span></div>
+              <div class="pv-row"><span class="c1">Proveedores activos</span><span class="c2">14</span></div>
+              <div class="pv-row"><span class="c1">Empleados en relación</span><span class="c2">8</span></div>
+              <div class="pv-row"><span class="c1">Plan de transición</span><span class="check">✓</span></div>
+            </div>
+          </div>
+          <div class="pv-content" data-pv="2">
+            <div class="pv-label">PASO 02 · TRASPASO</div>
+            <div class="pv-title">Migración ordenada</div>
+            <div class="pv-mock">
+              <div class="pv-row"><span class="c1">Padrón de propietarios</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Alta en app</span><span class="c2">347 / 347</span></div>
+              <div class="pv-row"><span class="c1">Contratos vigentes</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Expediente legal</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Apertura de cuenta</span><span class="check">✓</span></div>
+            </div>
+          </div>
+          <div class="pv-content" data-pv="3">
+            <div class="pv-label">PASO 03 · PRIMER MES</div>
+            <div class="pv-title">Acompañamiento directo</div>
+            <div class="pv-mock">
+              <div class="pv-row"><span class="c1">Primera liquidación</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Asamblea virtual</span><span class="c2">AGENDADA</span></div>
+              <div class="pv-row"><span class="c1">Cobrabilidad mes 1</span><span class="c2">94%</span></div>
+              <div class="pv-row"><span class="c1">Tickets resueltos</span><span class="c2">28 / 31</span></div>
+            </div>
+          </div>
+          <div class="pv-content" data-pv="4">
+            <div class="pv-label">PASO 04 · CONTINUIDAD</div>
+            <div class="pv-title">Ritmo mensual</div>
+            <div class="pv-mock">
+              <div class="pv-row"><span class="c1">Liquidación mensual</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Reporte a comisión</span><span class="check">✓</span></div>
+              <div class="pv-row"><span class="c1">Revisión de proveedores</span><span class="c2">TRIM.</span></div>
+              <div class="pv-row"><span class="c1">Plan de obras</span><span class="check">✓</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PLANES -->
+<section class="section" id="planes" style="padding-top:0;">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow"><span class="dot"></span> PLANES</div>
+      <h2>Precios transparentes, por tamaño del barrio.</h2>
+      <p>Sin comisiones ocultas sobre expensas ni contratos de permanencia. Si no te sirve, te devolvemos el mes.</p>
+    </div>
+
+    <div class="plans-grid">
+      <div class="plan reveal">
+        <div class="plan-name">ESENCIAL</div>
+        <div class="plan-tagline">Barrios chicos hasta 80 lotes.</div>
+        <div class="plan-price"><span class="cur">$</span><span class="amt">380K</span></div>
+        <div class="plan-per">mensuales · IVA incl.</div>
+        <ul>
+          <li>Gestión contable y cobranzas</li>
+          <li>App móvil para propietarios</li>
+          <li>1 reunión mensual con comisión</li>
+          <li>Respuesta en 24 h hábiles</li>
+          <li>Soporte de lunes a viernes</li>
+        </ul>
+        <a href="#contacto" class="btn btn-ghost">Empezar</a>
+      </div>
+
+      <div class="plan featured reveal">
+        <div class="plan-name">GESTIÓN PLUS</div>
+        <div class="plan-tagline">El plan que elige el 70% de los barrios.</div>
+        <div class="plan-price"><span class="cur">$</span><span class="amt">680K</span></div>
+        <div class="plan-per">mensuales · IVA incl.</div>
+        <ul>
+          <li>Todo lo de Esencial</li>
+          <li>Administrador dedicado al barrio</li>
+          <li>Respuesta en &lt; 4 h · lunes a sábado</li>
+          <li>Gestión de personal y proveedores</li>
+          <li>Asesoría legal incluida</li>
+          <li>Panel ejecutivo en vivo</li>
+        </ul>
+        <a href="#contacto" class="btn btn-primary">Pedir propuesta</a>
+      </div>
+
+      <div class="plan reveal">
+        <div class="plan-name">PREMIUM</div>
+        <div class="plan-tagline">Barrios +300 lotes o con club house.</div>
+        <div class="plan-price"><span class="cur">$</span><span class="amt">A&nbsp;medida</span></div>
+        <div class="plan-per">según alcance</div>
+        <ul>
+          <li>Todo lo de Gestión Plus</li>
+          <li>Equipo multidisciplinario asignado</li>
+          <li>Gerente de barrio en sitio</li>
+          <li>Auditoría externa trimestral</li>
+          <li>Proyectos de obra y licitaciones</li>
+          <li>SLA contractual garantizado</li>
+        </ul>
+        <a href="#contacto" class="btn btn-ghost">Hablar con ventas</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="section" id="faq" style="padding-top:0;">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow"><span class="dot"></span> PREGUNTAS FRECUENTES</div>
+      <h2>Lo que siempre te preguntaste antes de cambiar de administrador.</h2>
+    </div>
+
+    <div class="faq-grid reveal">
+      <details class="faq">
+        <summary>¿Cómo es el proceso para cambiar de administrador?</summary>
+        <div class="ans">La comisión directiva convoca a asamblea, se aprueba el cambio y nosotros coordinamos el traspaso con el administrador saliente. Nos hacemos cargo de la migración de datos, el alta de propietarios en la app y la apertura de cuenta bancaria del consorcio. Todo el proceso lleva entre 20 y 30 días.</div>
+      </details>
+      <details class="faq">
+        <summary>¿Cobran comisión sobre las expensas o los proveedores?</summary>
+        <div class="ans">No. Cobramos únicamente el abono mensual del plan contratado. No recibimos comisiones de proveedores, bancos ni aseguradoras. Esto lo firmamos por contrato y queda a disposición de la comisión.</div>
+      </details>
+      <details class="faq">
+        <summary>¿Qué pasa si tenemos alta morosidad?</summary>
+        <div class="ans">Trabajamos con un protocolo de cobranza amigable: recordatorios automáticos, contacto telefónico y acuerdos de pago. Cuando hace falta, derivamos al estudio jurídico asociado. En promedio bajamos la morosidad de los barrios que administramos en un 40% durante los primeros seis meses.</div>
+      </details>
+      <details class="faq">
+        <summary>¿La app tiene costo adicional para los propietarios?</summary>
+        <div class="ans">No, está incluida en todos los planes para el barrio. Los propietarios la descargan gratis en iOS y Android y acceden con su DNI y código de lote.</div>
+      </details>
+      <details class="faq">
+        <summary>¿Atienden barrios fuera del AMBA?</summary>
+        <div class="ans">Sí, trabajamos con barrios en Pilar, Escobar, La Plata, Córdoba y Rosario. El modelo es híbrido: tenemos equipo en territorio y operación centralizada. En ubicaciones nuevas evaluamos factibilidad en la reunión de diagnóstico.</div>
+      </details>
+      <details class="faq">
+        <summary>¿Firmamos un contrato de permanencia?</summary>
+        <div class="ans">El contrato estándar es anual y se renueva automáticamente, pero podés salir en cualquier momento con 60 días de preaviso sin penalidades. Creemos en retenerte por resultados, no por letra chica.</div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- CONTACTO -->
+<section class="section" id="contacto" style="padding-top:0;">
+  <div class="container">
+    <div class="contact reveal">
+      <div class="contact-grid">
+        <div>
+          <div class="eyebrow"><span class="dot"></span> HABLEMOS</div>
+          <h2>Contanos sobre tu barrio y te enviamos una propuesta en 24 h.</h2>
+          <p class="lead">Agendamos una reunión de diagnóstico sin costo, con o sin miembros de tu comisión directiva.</p>
+
+          <div class="contact-items">
+            <div class="contact-item">
+              <div class="i"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></div>
+              <div>
+                <div class="lb">Teléfono</div>
+                <div class="v">+54 11 4893-2210</div>
+              </div>
+            </div>
+            <div class="contact-item">
+              <div class="i"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
+              <div>
+                <div class="lb">Email</div>
+                <div class="v">hola@gestionar.com.ar</div>
+              </div>
+            </div>
+            <div class="contact-item">
+              <div class="i"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></div>
+              <div>
+                <div class="lb">Oficina</div>
+                <div class="v">Av. del Libertador 5480 · CABA</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <form class="form" id="contactForm">
+          <div class="form-content" style="display:flex; flex-direction:column; gap:14px;">
+            <div class="form-row">
+              <div class="field">
+                <label for="nombre">Nombre</label>
+                <input type="text" id="nombre" required placeholder="Tu nombre">
+              </div>
+              <div class="field">
+                <label for="rol">Cargo</label>
+                <select id="rol" required>
+                  <option value="">Seleccionar…</option>
+                  <option>Presidente de CD</option>
+                  <option>Tesorero</option>
+                  <option>Vocal</option>
+                  <option>Propietario</option>
+                  <option>Otro</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="barrio">Barrio o proyecto</label>
+              <input type="text" id="barrio" required placeholder="Ej. Barrio Las Acacias, Pilar">
+            </div>
+            <div class="form-row">
+              <div class="field">
+                <label for="lotes">Cantidad de lotes</label>
+                <select id="lotes" required>
+                  <option value="">Seleccionar…</option>
+                  <option>Hasta 80</option>
+                  <option>80 – 200</option>
+                  <option>200 – 400</option>
+                  <option>Más de 400</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="tel">Teléfono</label>
+                <input type="tel" id="tel" required placeholder="+54 9 11 ...">
+              </div>
+            </div>
+            <div class="field">
+              <label for="msg">Comentarios</label>
+              <textarea id="msg" placeholder="Contanos brevemente la situación actual..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">Enviar solicitud <span class="arrow">→</span></button>
+          </div>
+          <div class="form-ok">
+            ✓ ¡Recibimos tu mensaje! Te contactamos en menos de 48 h.
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="#" class="logo"><span class="logo-mark"></span> Gestion<span class="ar">Ar</span></a>
+        <p>Administración profesional de consorcios y barrios privados. Transparencia, tecnología y trato humano.</p>
+      </div>
+      <div class="footer-col">
+        <h5>Empresa</h5>
+        <ul>
+          <li><a href="#beneficios">Beneficios</a></li>
+          <li><a href="#servicios">Servicios</a></li>
+          <li><a href="#proceso">Cómo trabajamos</a></li>
+          <li><a href="#planes">Planes</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>Recursos</h5>
+        <ul>
+          <li><a href="#faq">Preguntas frecuentes</a></li>
+          <li><a href="#">Guía para CD</a></li>
+          <li><a href="#">Blog</a></li>
+          <li><a href="#">Prensa</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>Contacto</h5>
+        <ul>
+          <li><a href="#contacto">Pedir propuesta</a></li>
+          <li><a href="mailto:hola@gestionar.com.ar">hola@gestionar.com.ar</a></li>
+          <li><a href="tel:+541148932210">+54 11 4893-2210</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <div>© 2026 GESTIONAR S.A.S. · CUIT 30-71728930-4</div>
+      <div>HECHO EN BUENOS AIRES</div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Nav scroll state
+  const nav = document.getElementById('nav');
+  window.addEventListener('scroll', () => {
+    nav.classList.toggle('scrolled', window.scrollY > 30);
+  });
+
+  // Reveal on scroll
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('in');
+        io.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  // Proceso interactivo
+  const steps = document.querySelectorAll('.step');
+  const pvs = document.querySelectorAll('.pv-content');
+  steps.forEach(s => {
+    s.addEventListener('click', () => {
+      const n = s.dataset.step;
+      steps.forEach(x => x.classList.remove('active'));
+      pvs.forEach(x => x.classList.remove('active'));
+      s.classList.add('active');
+      document.querySelector(`.pv-content[data-pv="${n}"]`).classList.add('active');
+    });
+  });
+
+  // Auto-rotate proceso
+  let curStep = 1;
+  const stepCount = steps.length;
+  setInterval(() => {
+    curStep = (curStep % stepCount) + 1;
+    const stepEl = document.querySelector(`.step[data-step="${curStep}"]`);
+    if (stepEl && !document.querySelector('#proceso:hover')) {
+      stepEl.click();
+    }
+  }, 5000);
+
+  // Form
+  document.getElementById('contactForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    e.target.classList.add('submitted');
+  });
+</script>
+
+</body>
+</html>
