@@ -1,6 +1,7 @@
 const crypto             = require('crypto');
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
+const Unit               = require('../models/Unit');
 const { signToken, signSelectionToken, sendTokenResponse } = require('../middleware/auth');
 const { sendPasswordReset } = require('../services/emailService');
 const logger = require('../config/logger');
@@ -104,7 +105,17 @@ exports.getMe = async (req, res) => {
   if (req.membership) {
     user.role = req.membership.role;
   }
-  res.json({ success: true, data: { user, membership: req.membership || null } });
+
+  let units = [];
+  if (req.membership && req.membership.role === 'owner' && req.membership.organization) {
+    units = await Unit.find({
+      organization: req.membership.organization,
+      owner: req.user.id,
+      active: true,
+    }).select('name coefficient customFee');
+  }
+
+  res.json({ success: true, data: { user, membership: req.membership || null, units } });
 };
 
 // ── PATCH /api/auth/update-password ──────────────────────────
