@@ -10,7 +10,62 @@ const emailService    = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
+const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
 const logger          = require('../config/logger');
+
+const buildAvailablePaymentItems = async ({ organizationId, owner, membership }) => {
+  const [org, activePayments, ownerUnits, allOrgUnits] = await Promise.all([
+    Organization.findById(organizationId).select('paymentPeriods feePeriodCode monthlyFee'),
+    Payment.find({
+      organization: organizationId,
+      owner:        owner._id,
+      status:       { $in: ['pending', 'approved'] },
+    }).select('month extraordinaryItems'),
+    Unit.find({ owner: owner._id, organization: organizationId, active: true }).lean(),
+    Unit.find({ organization: organizationId, active: true }).lean(),
+  ]);
+
+  const paidMonths = new Set(activePayments.map(p => p.month).filter(Boolean));
+  const paidExtraIds = new Set(
+    activePayments.flatMap(p => (p.extraordinaryItems || [])
+      .map(e => e.expense?.toString())
+      .filter(Boolean))
+  );
+
+  const startBilling = membership?.startBillingPeriod ?? owner.startBillingPeriod;
+  const periods = (org?.paymentPeriods || [])
+    .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling));
+
+  const extras = await Expense.find({
+    organization: organizationId,
+    expenseType:  'extraordinary',
+    isChargeable: true,
+    isActive:     { $ne: false },
+  }).select('_id description amount date extraordinaryBillingMode unitAmount appliesToAllOwners targetUnits').sort({ date: -1, createdAt: -1 }).lean();
+
+  const extraordinary = extras
+    .filter(e => !paidExtraIds.has(e._id.toString()))
+    .map(e => {
+      const { amountForOwner } = calculateExtraordinaryAmountForOwner(e, ownerUnits, allOrgUnits);
+      // Omitir si el owner no tiene unidades aplicables (solo en modos que requieren unidades)
+      if (amountForOwner === 0 && (e.extraordinaryBillingMode === 'per_unit' || e.extraordinaryBillingMode === 'by_coefficient')) {
+        return null;
+      }
+      return {
+        id:                      e._id,
+        _id:                     e._id,
+        title:                   e.description,
+        description:             e.description,
+        amount:                  amountForOwner,
+        extraordinaryBillingMode: e.extraordinaryBillingMode || 'fixed_total',
+        period:                  e.date ? e.date.toISOString().slice(0, 7) : null,
+        date:                    e.date,
+      };
+    })
+    .filter(Boolean);
+
+  return { periods, extraordinary };
+};
 
 // ── GET /api/payments — listar (admin: todos; owner: los suyos) ─
 exports.getPayments = async (req, res, next) => {
@@ -45,9 +100,22 @@ exports.getPayments = async (req, res, next) => {
       Payment.countDocuments(filter),
     ]);
 
+    const data = { payments };
+    if (req.user.role === 'owner') {
+      const availableItems = await buildAvailablePaymentItems({
+        organizationId: req.orgId,
+        owner:          req.user,
+        membership:     req.membership,
+      });
+      data.availableItems = availableItems;
+      data.periods = availableItems.periods;
+      data.extraordinary = availableItems.extraordinary;
+      data.extraordinaryExpenses = availableItems.extraordinary;
+    }
+
     res.json({
       success: true,
-      data: { payments },
+      data,
       pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -78,42 +146,11 @@ exports.getPayment = async (req, res, next) => {
 // ── GET /api/payments/available-items — períodos y extraordinarios disponibles ─
 exports.getAvailableItems = async (req, res, next) => {
   try {
-    const owner = req.user;
-
-    const [org, activePayments] = await Promise.all([
-      Organization.findById(req.orgId).select('paymentPeriods feePeriodCode monthlyFee'),
-      Payment.find({
-        organization: req.orgId,
-        owner:        owner._id,
-        status:       { $in: ['pending', 'approved'] },
-      }).select('month extraordinaryItems'),
-    ]);
-
-    const paidMonths    = new Set(activePayments.map(p => p.month));
-    const paidExtraIds  = new Set(
-      activePayments.flatMap(p => (p.extraordinaryItems || []).map(e => e.expense.toString()))
-    );
-
-    const startBilling = req.membership?.startBillingPeriod ?? owner.startBillingPeriod;
-    const periods = (org.paymentPeriods || [])
-      .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling));
-
-    const extras = await Expense.find({
-      organization: req.orgId,
-      expenseType:  'extraordinary',
-      isChargeable: true,
-      isActive:     { $ne: false },
-    }).select('_id description amount date').lean();
-
-    const extraordinary = extras
-      .filter(e => !paidExtraIds.has(e._id.toString()))
-      .map(e => ({
-        id:     e._id,
-        title:  e.description,
-        amount: e.amount,
-        period: e.date ? e.date.toISOString().slice(0, 7) : null,
-      }));
-
+    const { periods, extraordinary } = await buildAvailablePaymentItems({
+      organizationId: req.orgId,
+      owner:          req.user,
+      membership:     req.membership,
+    });
     res.json({ success: true, data: { periods, extraordinary } });
   } catch (err) {
     next(err);
@@ -137,10 +174,11 @@ exports.createPayment = async (req, res, next) => {
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
     // Cargar unidades activas del propietario para calcular monto y breakdown
-    const [org, activeUnits, ownerMembership] = await Promise.all([
+    const [org, activeUnits, ownerMembership, allOrgUnits] = await Promise.all([
       Organization.findById(req.orgId).select('monthlyFee feePeriodCode'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
       OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner' }).select('startBillingPeriod'),
+      Unit.find({ organization: req.orgId, active: true }).lean(),
     ]);
 
     if (!month && extraordinaryIds.length === 0) {
@@ -183,7 +221,7 @@ exports.createPayment = async (req, res, next) => {
         expenseType:  'extraordinary',
         isChargeable: true,
         isActive:     { $ne: false },
-      }).select('_id amount').lean();
+      }).select('_id amount extraordinaryBillingMode unitAmount appliesToAllOwners targetUnits').lean();
 
       if (expenses.length !== extraordinaryIds.length) {
         return res.status(400).json({ success: false, message: 'Uno o más conceptos extraordinarios no son válidos.' });
@@ -200,8 +238,11 @@ exports.createPayment = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Uno o más conceptos extraordinarios ya tienen un pago activo.' });
       }
 
-      extraordinaryItems = expenses.map(e => ({ expense: e._id, amount: e.amount }));
-      amount = Number(amount) + expenses.reduce((s, e) => s + e.amount, 0);
+      extraordinaryItems = expenses.map(e => {
+        const { amountForOwner } = calculateExtraordinaryAmountForOwner(e, activeUnits, allOrgUnits);
+        return { expense: e._id, amount: amountForOwner };
+      });
+      amount = Number(amount) + extraordinaryItems.reduce((s, e) => s + e.amount, 0);
     }
 
     if (month) {

@@ -74,13 +74,31 @@ exports.getExpenses = async (req, res, next) => {
 // ── POST /api/expenses ────────────────────────────────────────
 exports.createExpense = async (req, res, next) => {
   try {
-    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'isChargeable', 'appliesToAllOwners', 'invoiceNumber', 'invoiceCuit'];
+    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'isChargeable', 'appliesToAllOwners', 'invoiceNumber', 'invoiceCuit', 'extraordinaryBillingMode', 'unitAmount', 'totalChargeAmount', 'targetUnits'];
     const data    = { organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
 
     if (req.body.provider) {
       const prov = await Provider.findOne({ _id: req.body.provider, organization: req.orgId });
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
+    }
+
+    // Validaciones para gastos extraordinarios cobrables
+    if (data.expenseType === 'extraordinary' && data.isChargeable) {
+      const mode = data.extraordinaryBillingMode || 'fixed_total';
+      if (mode === 'per_unit') {
+        if (!(Number(data.unitAmount) > 0)) {
+          return res.status(400).json({ success: false, message: 'El monto por unidad debe ser mayor a 0.' });
+        }
+      } else if (!(Number(data.amount) > 0)) {
+        return res.status(400).json({ success: false, message: 'El importe debe ser mayor a 0.' });
+      }
+      if (data.appliesToAllOwners === false || data.appliesToAllOwners === 'false') {
+        const targets = Array.isArray(data.targetUnits) ? data.targetUnits : [];
+        if (!targets.length) {
+          return res.status(400).json({ success: false, message: 'Debe especificar al menos una unidad destino cuando el gasto no aplica a todos.' });
+        }
+      }
     }
 
     if (req.files?.length) {
@@ -106,13 +124,30 @@ exports.createExpense = async (req, res, next) => {
 // ── PATCH /api/expenses/:id ───────────────────────────────────
 exports.updateExpense = async (req, res, next) => {
   try {
-    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'isChargeable', 'appliesToAllOwners', 'invoiceNumber', 'invoiceCuit'];
+    const allowed = ['description', 'category', 'amount', 'date', 'provider', 'paymentMethod', 'expenseType', 'isChargeable', 'appliesToAllOwners', 'invoiceNumber', 'invoiceCuit', 'extraordinaryBillingMode', 'unitAmount', 'totalChargeAmount', 'targetUnits'];
     const setFields = { updatedBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
 
     if (req.body.provider) {
       const prov = await Provider.findOne({ _id: req.body.provider, organization: req.orgId });
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
+    }
+
+    // Validaciones para gastos extraordinarios cobrables (solo cuando se cambia el modo)
+    if (setFields.expenseType === 'extraordinary' && setFields.isChargeable) {
+      const mode = setFields.extraordinaryBillingMode || 'fixed_total';
+      if (mode === 'per_unit') {
+        if (setFields.unitAmount !== undefined && !(Number(setFields.unitAmount) > 0)) {
+          return res.status(400).json({ success: false, message: 'El monto por unidad debe ser mayor a 0.' });
+        }
+      }
+      const appliesToAll = setFields.appliesToAllOwners;
+      if (appliesToAll === false || appliesToAll === 'false') {
+        const targets = Array.isArray(setFields.targetUnits) ? setFields.targetUnits : [];
+        if (!targets.length) {
+          return res.status(400).json({ success: false, message: 'Debe especificar al menos una unidad destino cuando el gasto no aplica a todos.' });
+        }
+      }
     }
 
     const updateQuery = { $set: setFields };

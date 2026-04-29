@@ -21,7 +21,7 @@ const expenseSchema = new mongoose.Schema(
     amount: {
       type: Number,
       required: [true, 'El importe es obligatorio'],
-      min: [0.01, 'El importe debe ser mayor a 0'],
+      min: [0, 'El importe no puede ser negativo'],
     },
     date: {
       type: Date,
@@ -69,6 +69,17 @@ const expenseSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+
+    // ── Modo de cobro para gastos extraordinarios cobrables ───────
+    extraordinaryBillingMode: {
+      type: String,
+      enum: ['fixed_total', 'per_unit', 'by_coefficient'],
+      default: 'fixed_total',
+    },
+    unitAmount:        { type: Number, default: 0 },
+    totalChargeAmount: { type: Number, default: 0 },
+    targetUnits: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Unit' }],
+
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
