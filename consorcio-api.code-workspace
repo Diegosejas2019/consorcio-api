@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../qa-agent"
+		},
+		{
+			"path": "../landing-page"
 		}
 	]
 }

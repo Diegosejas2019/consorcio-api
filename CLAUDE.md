@@ -286,7 +286,19 @@ Los errores de envío se loguean pero **no interrumpen** el flujo principal (`.c
 ### firebaseService
 `sendToUser(userId, {title, body, data})` — busca el FCM token del usuario y envía.
 `sendMulticast(tokens[], {title, body, data})` — envío en lotes de 500.
+`sendMonthlyReminders(orgId, expenseMonth, amount)` — busca owners deudores (`isDebtor: true`) de la org, extrae sus FCM tokens y llama a `sendMulticast`.
 Tokens inválidos se limpian automáticamente. Mensajes data-only para compatibilidad Android 14+.
+
+**Inicialización:** Lee `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` (reemplaza `\\n` → `\n` en la key). Si faltan credenciales, push queda deshabilitado pero la app continúa sin errores.
+
+**Estructura del mensaje FCM:**
+- `data`: `{ ...data, title, body, click_action: 'FLUTTER_NOTIFICATION_CLICK' }` — siempre data-only, sin campo `notification` top-level.
+- `android.priority: 'high'` — entrega inmediata en Android.
+- `apns.payload.aps.contentAvailable: true` — wake-up en iOS background.
+- `webpush.notification: { title, body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png' }` — específico para Chrome/web; no afecta Android.
+- `webpush.headers.Urgency: 'high'` — prioridad para el browser.
+
+**Limpieza de tokens:** Error `messaging/registration-token-not-registered` → `User.fcmToken = null` (automático en `sendToUser` y `sendMulticast`). `sendMulticast` usa `sendEachForMulticast`; loguea errores individuales por token.
 
 ## Manejo de errores
 

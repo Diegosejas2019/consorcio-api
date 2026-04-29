@@ -102,6 +102,7 @@ app.use('/api/units',         require('./routes/units'));
 app.use('/api/visits',        require('./routes/visits'));
 app.use('/api/spaces',        require('./routes/spaces'));
 app.use('/api/reservations',  require('./routes/reservations'));
+app.use('/api/support-tickets', require('./routes/supportTickets'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
@@ -121,6 +122,7 @@ app.get('/api', (req, res) => {
       mercadopago:   '/api/mercadopago',
       providers:     '/api/providers',
       expenses:      '/api/expenses',
+      supportTickets: '/api/support-tickets',
     },
   });
 });

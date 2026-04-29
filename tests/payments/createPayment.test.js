@@ -1,11 +1,17 @@
 // Mocks deben ir ANTES de require() del app
 jest.mock('../../src/config/cloudinary', () => {
   const multer = require('multer');
+  const memoryUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
   return {
-    upload:    multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }),
+    upload: memoryUpload,
+    uploadProvider: memoryUpload,
+    uploadClaim: memoryUpload,
+    uploadNotice: memoryUpload,
+    deleteCloudinaryAttachments: jest.fn().mockResolvedValue(null),
     cloudinary: { uploader: { destroy: jest.fn().mockResolvedValue({}) } },
   };
 });
+
 jest.mock('../../src/services/firebaseService', () => ({
   sendToUser:     jest.fn().mockResolvedValue(null),
   sendMulticast:  jest.fn().mockResolvedValue([]),
