@@ -68,15 +68,32 @@ exports.protect = async (req, res, next) => {
     if (decoded.membershipId) {
       const membership = await OrganizationMember.findById(decoded.membershipId)
         .populate('organization', '-mpPublicKey -mpAccessToken -mpWebhookSecret');
-      if (membership && membership.isActive) {
-        req.membership = membership;
-        req.orgId      = membership.organization._id;
-        req.org        = membership.organization;
-        req.user.role  = normalizeRole(membership.role);
+      if (!membership) {
+        return res.status(403).json({ success: false, message: 'No tenes acceso a esta organizacion.' });
       }
+      if (membership.organization?.isActive === false || membership.deactivatedByOrganization) {
+        return res.status(403).json({
+          success: false,
+          message: 'La organizacion se encuentra desactivada.',
+        });
+      }
+      if (!membership.isActive) {
+        return res.status(403).json({ success: false, message: 'No tenes acceso activo a esta organizacion.' });
+      }
+      req.membership = membership;
+      req.orgId      = membership.organization._id;
+      req.org        = membership.organization;
+      req.user.role  = normalizeRole(membership.role);
     } else {
       req.orgId = isSuperAdminRole(req.user.role) ? null : (user.organization?._id ?? null);
       req.org   = isSuperAdminRole(req.user.role) ? null : (user.organization ?? null);
+    }
+
+    if (req.org?.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'La organizacion se encuentra desactivada.',
+      });
     }
 
     next();

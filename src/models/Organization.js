@@ -89,6 +89,21 @@ const organizationSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    deactivatedAt: Date,
+    deactivatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    deactivationReason: {
+      type: String,
+      trim: true,
+      maxlength: [1000, 'El motivo no puede superar 1000 caracteres'],
+    },
+    reactivatedAt: Date,
+    reactivatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
 
     // ── Configuración de cobros ───────────────────────────────────
     // Monto mensual por defecto (se usa como importe base en pagos)

@@ -20,7 +20,9 @@ exports.login = async (req, res, next) => {
     }
 
     // Buscar usuario con password (normalmente excluido)
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+password +fcmToken');
+    const user = await User.findOne({ email: email.toLowerCase() })
+      .select('+password +fcmToken')
+      .populate('organization', 'isActive');
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ success: false, message: 'Credenciales incorrectas.' });
     }
@@ -45,11 +47,18 @@ exports.login = async (req, res, next) => {
       return sendTokenResponse(user, 200, res);
     }
 
-    const memberships = await OrganizationMember.find({ user: user._id, isActive: true })
-      .populate('organization', 'name slug businessType');
+    const allMemberships = await OrganizationMember.find({ user: user._id })
+      .populate('organization', 'name slug businessType isActive');
+    const memberships = allMemberships.filter(m => m.isActive && m.organization?.isActive !== false);
 
     // Sin membresías → superadmin u owner legacy sin OrganizationMember (backward compat)
     if (memberships.length === 0) {
+      if (allMemberships.some(m => m.organization?.isActive === false) || user.organization?.isActive === false) {
+        return res.status(403).json({
+          success: false,
+          message: 'Tu organizacion se encuentra desactivada. Contacta al soporte de Gestionar.',
+        });
+      }
       logger.info(`Login exitoso (sin membresía): ${user.email} [${user.role}]`);
       return sendTokenResponse(user, 200, res);
     }
@@ -245,6 +254,13 @@ exports.selectOrganization = async (req, res, next) => {
 
     if (!membership) {
       return res.status(400).json({ success: false, message: 'Membresía no válida.' });
+    }
+
+    if (membership.organization?.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Tu organizacion se encuentra desactivada. Contacta al soporte de Gestionar.',
+      });
     }
 
     const token = signToken(req.user._id, {

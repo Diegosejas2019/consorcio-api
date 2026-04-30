@@ -42,6 +42,12 @@ const organizationMemberSchema = new Schema(
       type: Boolean,
       default: true,
     },
+    deactivatedByOrganization: {
+      type: Boolean,
+      default: false,
+    },
+    deactivatedAt: Date,
+    reactivatedAt: Date,
     createdBy: {
       type: ObjectId,
       ref: 'User',
