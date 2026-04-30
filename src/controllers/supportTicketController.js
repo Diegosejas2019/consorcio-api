@@ -2,6 +2,7 @@ const SupportTicket = require('../models/SupportTicket');
 const { sanitizeContext, buildTicketFilters } = require('../services/supportTicketService');
 const supportNotificationService = require('../services/supportNotificationService');
 const logger = require('../config/logger');
+const { isSuperAdminRole } = require('../utils/roles');
 
 const allowedUpdateFields = ['status', 'priority', 'adminResponse'];
 
@@ -44,8 +45,9 @@ exports.createTicket = async (req, res, next) => {
 
 exports.getTickets = async (req, res, next) => {
   try {
-    const tickets = await SupportTicket.find(buildTicketFilters(req.query, req.orgId))
+    const tickets = await SupportTicket.find(buildTicketFilters(req.query, isSuperAdminRole(req.user.role) ? null : req.orgId))
       .populate('userId', 'name email unit role')
+      .populate('organizationId', 'name slug')
       .sort({ createdAt: -1 })
       .select('-__v');
 
@@ -73,11 +75,13 @@ exports.getMyTickets = async (req, res, next) => {
 
 exports.updateTicket = async (req, res, next) => {
   try {
-    const ticket = await SupportTicket.findOne({
+    const filter = {
       _id: req.params.id,
-      organizationId: req.orgId,
       isActive: { $ne: false },
-    });
+    };
+    if (!isSuperAdminRole(req.user.role)) filter.organizationId = req.orgId;
+
+    const ticket = await SupportTicket.findOne(filter);
 
     if (!ticket) {
       return res.status(404).json({ success: false, message: 'Ticket de soporte no encontrado.' });
@@ -107,11 +111,13 @@ exports.updateTicket = async (req, res, next) => {
 
 exports.deleteTicket = async (req, res, next) => {
   try {
-    const ticket = await SupportTicket.findOne({
+    const filter = {
       _id: req.params.id,
-      organizationId: req.orgId,
       isActive: { $ne: false },
-    });
+    };
+    if (!isSuperAdminRole(req.user.role)) filter.organizationId = req.orgId;
+
+    const ticket = await SupportTicket.findOne(filter);
 
     if (!ticket) {
       return res.status(404).json({ success: false, message: 'Ticket de soporte no encontrado.' });

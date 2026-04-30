@@ -9,7 +9,7 @@ const {
   SUPPORT_TICKET_PRIORITIES,
 } = require('../models/SupportTicket');
 
-router.use(protect, requireOrg);
+router.use(protect);
 
 const createValidators = [
   body('type').isIn(SUPPORT_TICKET_TYPES).withMessage('Selecciona un tipo de reporte valido.'),
@@ -25,6 +25,7 @@ const createValidators = [
 ];
 
 const listValidators = [
+  query('organizationId').optional().isMongoId().withMessage('La organizacion no es valida.'),
   query('status').optional().isIn(SUPPORT_TICKET_STATUSES).withMessage('El estado no es valido.'),
   query('type').optional().isIn(SUPPORT_TICKET_TYPES).withMessage('El tipo no es valido.'),
   query('priority').optional().isIn(SUPPORT_TICKET_PRIORITIES).withMessage('La prioridad no es valida.'),
@@ -44,10 +45,10 @@ const updateValidators = [
     .withMessage('Debes enviar al menos un campo para actualizar.'),
 ];
 
-router.post('/', createValidators, validate, ctrl.createTicket);
-router.get('/', restrictTo('admin'), listValidators, validate, ctrl.getTickets);
-router.get('/my', ctrl.getMyTickets);
-router.patch('/:id', restrictTo('admin'), updateValidators, validate, ctrl.updateTicket);
-router.delete('/:id', restrictTo('admin'), ctrl.deleteTicket);
+router.post('/', requireOrg, createValidators, validate, ctrl.createTicket);
+router.get('/', restrictTo('superadmin'), listValidators, validate, ctrl.getTickets);
+router.get('/my', requireOrg, ctrl.getMyTickets);
+router.patch('/:id', restrictTo('superadmin'), updateValidators, validate, ctrl.updateTicket);
+router.delete('/:id', restrictTo('superadmin'), ctrl.deleteTicket);
 
 module.exports = router;

@@ -66,8 +66,10 @@ function sanitizeContext(context = {}) {
   return sanitized;
 }
 
-function buildTicketFilters(query, organizationId) {
-  const filter = { organizationId, isActive: { $ne: false } };
+function buildTicketFilters(query, organizationId = null) {
+  const filter = { isActive: { $ne: false } };
+  if (organizationId) filter.organizationId = organizationId;
+  if (query.organizationId) filter.organizationId = query.organizationId;
 
   if (query.status) filter.status = query.status;
   if (query.type) filter.type = query.type;

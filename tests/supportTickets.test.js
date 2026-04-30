@@ -1,12 +1,25 @@
 const request = require('supertest');
 const app = require('../src/app');
 const dbHelper = require('./helpers/dbHelper');
+const { signToken } = require('../src/middleware/auth');
 const { createOwnerWithToken, createAdminWithToken } = require('./helpers/factories');
+const User = require('../src/models/User');
 const SupportTicket = require('../src/models/SupportTicket');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
 afterEach(() => dbHelper.clear());
+
+async function createSuperAdminToken() {
+  const user = await User.create({
+    name: 'Support Root',
+    email: `support-root-${Date.now()}@test.com`,
+    password: 'Admin2025!',
+    role: 'super_admin',
+    isActive: true,
+  });
+  return { user, token: signToken(user._id) };
+}
 
 describe('Support tickets', () => {
   test('owner crea ticket con userId y organizationId del token', async () => {
@@ -84,8 +97,19 @@ describe('Support tickets', () => {
     expect(res.body.data.tickets[0].title).toBe('Mi consulta');
   });
 
-  test('admin ve solo tickets de su organizacion y puede filtrar', async () => {
-    const { token, orgId } = await createAdminWithToken();
+  test('admin no puede listar tickets de soporte interno', async () => {
+    const { token } = await createAdminWithToken();
+
+    const res = await request(app)
+      .get('/api/support-tickets')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  test('super_admin ve tickets globales y puede filtrar', async () => {
+    const { token } = await createSuperAdminToken();
+    const { orgId } = await createAdminWithToken();
     const other = await createAdminWithToken();
 
     await SupportTicket.create([
@@ -117,8 +141,9 @@ describe('Support tickets', () => {
     expect(res.body.data.tickets[0].title).toBe('Pago duplicado');
   });
 
-  test('admin actualiza estado y prioridad dentro de su organizacion', async () => {
-    const { user, token, orgId } = await createAdminWithToken();
+  test('super_admin actualiza estado y prioridad de cualquier organizacion', async () => {
+    const { token } = await createSuperAdminToken();
+    const { user, orgId } = await createAdminWithToken();
     const ticket = await SupportTicket.create({
       organizationId: orgId,
       userId: user._id,
