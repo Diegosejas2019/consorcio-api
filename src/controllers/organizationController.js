@@ -4,6 +4,7 @@ const User                = require('../models/User');
 const OrganizationMember  = require('../models/OrganizationMember');
 const logger              = require('../config/logger');
 const { isSuperAdminRole } = require('../utils/roles');
+const { defaultFeatureRecords } = require('../utils/features');
 
 function currentYearPeriods() {
   const year = new Date().getFullYear();
@@ -100,10 +101,7 @@ exports.createOrganization = async (req, res, next) => {
       paymentPeriods: currentYearPeriods(),
     });
 
-    await OrganizationFeature.insertMany([
-      { organization: org._id, featureKey: 'visits',       enabled: false },
-      { organization: org._id, featureKey: 'reservations', enabled: false },
-    ]);
+    await OrganizationFeature.insertMany(defaultFeatureRecords(org._id));
 
     // Si el creador es admin, vincularlo a la nueva org automáticamente
     if (req.user.role === 'admin') {

@@ -14,9 +14,9 @@ router.get('/',    restrictTo('admin', 'superadmin'), ctrl.getOrganizations);
 router.get('/:id', restrictTo('admin', 'superadmin'), ctrl.getOrganization);
 // Miembros de una org
 router.get('/:id/members', restrictTo('admin', 'superadmin'), ctrl.getMembers);
-// Features — GET: cualquier miembro de la org; PUT: solo admin/superadmin
+// Features — GET: cualquier miembro de la org; PUT: solo superadmin
 router.get('/:id/features', featureCtrl.getFeatures);
-router.put('/:id/features', restrictTo('admin', 'superadmin'), featureCtrl.updateFeatures);
+router.put('/:id/features', restrictTo('superadmin'), featureCtrl.updateFeatures);
 // Crear — superadmin crea cualquiera; admin puede crear la propia si aún no tiene
 router.post('/',   restrictTo('admin', 'superadmin'), ctrl.createOrganization);
 // Actualizar — admin puede actualizar la propia; superadmin cualquiera

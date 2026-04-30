@@ -4,6 +4,7 @@ const OrganizationMember  = require('../models/OrganizationMember');
 const User                = require('../models/User');
 const logger              = require('../config/logger');
 const { sendAdminWelcome } = require('../services/emailService');
+const { defaultFeatureRecords } = require('../utils/features');
 
 function currentYearPeriods() {
   const year = new Date().getFullYear();
@@ -56,10 +57,7 @@ exports.createOrganization = async (req, res, next) => {
       paymentPeriods: currentYearPeriods(),
     });
 
-    await OrganizationFeature.insertMany([
-      { organization: org._id, featureKey: 'visits',       enabled: false },
-      { organization: org._id, featureKey: 'reservations', enabled: false },
-    ]);
+    await OrganizationFeature.insertMany(defaultFeatureRecords(org._id));
 
     let admin;
     let isNewUser = false;
