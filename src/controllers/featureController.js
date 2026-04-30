@@ -1,5 +1,6 @@
 const OrganizationFeature = require('../models/OrganizationFeature');
 const logger              = require('../config/logger');
+const { isSuperAdminRole } = require('../utils/roles');
 
 const KNOWN_FEATURES = ['visits', 'reservations', 'votes', 'expenses', 'providers'];
 
@@ -9,7 +10,7 @@ exports.getFeatures = async (req, res, next) => {
     const orgId = req.params.id;
 
     // Verificar que el usuario pertenece a esta org (o es superadmin)
-    if (req.user.role !== 'superadmin' && req.orgId?.toString() !== orgId) {
+    if (!isSuperAdminRole(req.user.role) && req.orgId?.toString() !== orgId) {
       return res.status(403).json({ success: false, message: 'No tenés permisos para ver estas configuraciones.' });
     }
 

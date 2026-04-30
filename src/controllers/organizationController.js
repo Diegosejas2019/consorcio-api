@@ -1,7 +1,9 @@
 const Organization        = require('../models/Organization');
 const OrganizationFeature = require('../models/OrganizationFeature');
 const User                = require('../models/User');
+const OrganizationMember  = require('../models/OrganizationMember');
 const logger              = require('../config/logger');
+const { isSuperAdminRole } = require('../utils/roles');
 
 function currentYearPeriods() {
   const year = new Date().getFullYear();
@@ -11,7 +13,7 @@ function currentYearPeriods() {
 // ── GET /api/organizations — listar (superadmin: todas; admin: la propia) ─
 exports.getOrganizations = async (req, res, next) => {
   try {
-    const filter = req.user.role === 'superadmin' ? {} : { _id: req.orgId };
+    const filter = isSuperAdminRole(req.user.role) ? {} : { _id: req.orgId };
 
     const orgs = await Organization.find(filter).sort({ createdAt: -1 });
     res.json({ success: true, data: { organizations: orgs } });
@@ -33,7 +35,7 @@ exports.getOrganization = async (req, res, next) => {
 
     // Admin puede ver su mpPublicKey
     let data = org.toObject();
-    if (req.user.role !== 'admin' && req.user.role !== 'superadmin') {
+    if (req.user.role !== 'admin' && !isSuperAdminRole(req.user.role)) {
       delete data.mpPublicKey;
     }
     delete data.mpAccessToken;
@@ -134,7 +136,7 @@ exports.updateOrganization = async (req, res, next) => {
     ];
 
     // Superadmin también puede cambiar el slug
-    if (req.user.role === 'superadmin') allowed.push('slug');
+    if (isSuperAdminRole(req.user.role)) allowed.push('slug');
 
     const update = {};
     allowed.forEach(f => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
@@ -185,7 +187,25 @@ exports.getMembers = async (req, res, next) => {
     if (role)     filter.role     = role;
     if (isActive) filter.isActive = isActive === 'true';
 
-    const members = await User.find(filter).select('-__v').sort({ name: 1 });
+    const memberships = await OrganizationMember.find(filter)
+      .populate('user', 'name email unit phone role isActive lastLogin createdAt')
+      .select('-__v')
+      .sort({ role: 1, createdAt: -1 })
+      .lean();
+
+    const members = memberships
+      .filter(m => m.user)
+      .map(m => ({
+        ...m.user,
+        role: m.role,
+        membershipId: m._id,
+        organization: m.organization,
+        isActive: m.isActive,
+        balance: m.balance,
+        isDebtor: m.isDebtor,
+        startBillingPeriod: m.startBillingPeriod,
+        percentage: m.percentage,
+      }));
     res.json({ success: true, data: { members } });
   } catch (err) {
     next(err);

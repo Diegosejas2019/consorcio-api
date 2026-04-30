@@ -4,6 +4,7 @@ const OrganizationMember = require('../models/OrganizationMember');
 const Unit               = require('../models/Unit');
 const { signToken, signSelectionToken, sendTokenResponse } = require('../middleware/auth');
 const { sendPasswordReset } = require('../services/emailService');
+const { normalizeRole, isSuperAdminRole } = require('../utils/roles');
 const logger = require('../config/logger');
 
 
@@ -36,6 +37,14 @@ exports.login = async (req, res, next) => {
     }
 
     // Buscar membresías activas del usuario
+    user.role = normalizeRole(user.role);
+
+    // SuperAdmin es global: no selecciona organizacion ni usa memberships.
+    if (isSuperAdminRole(user.role)) {
+      logger.info(`Login exitoso global: ${user.email} [${user.role}]`);
+      return sendTokenResponse(user, 200, res);
+    }
+
     const memberships = await OrganizationMember.find({ user: user._id, isActive: true })
       .populate('organization', 'name slug businessType');
 
@@ -54,7 +63,7 @@ exports.login = async (req, res, next) => {
       });
       user.password = undefined;
       user.fcmToken = undefined;
-      user.role     = m.role;
+      user.role     = normalizeRole(m.role);
       logger.info(`Login exitoso: ${user.email} [${m.role}] org=${m.organization.name}`);
       return res.json({ success: true, token, data: { user, membership: m } });
     }
@@ -70,7 +79,7 @@ exports.login = async (req, res, next) => {
         membershipId:     m._id,
         organizationId:   m.organization._id,
         organizationName: m.organization.name,
-        role:             m.role,
+        role:             normalizeRole(m.role),
       })),
     });
   } catch (err) {
@@ -102,8 +111,9 @@ exports.register = async (req, res, next) => {
 // ── GET /api/auth/me ──────────────────────────────────────────
 exports.getMe = async (req, res) => {
   const user = await User.findById(req.user.id);
+  user.role = normalizeRole(user.role);
   if (req.membership) {
-    user.role = req.membership.role;
+    user.role = normalizeRole(req.membership.role);
   }
 
   let units = [];
@@ -220,6 +230,13 @@ exports.selectOrganization = async (req, res, next) => {
   try {
     const { membershipId } = req.body;
 
+    if (isSuperAdminRole(req.user.role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'El SuperAdmin es global y no selecciona organizacion.',
+      });
+    }
+
     const membership = await OrganizationMember.findOne({
       _id:      membershipId,
       user:     req.user._id,
@@ -238,7 +255,7 @@ exports.selectOrganization = async (req, res, next) => {
 
     req.user.password = undefined;
     req.user.fcmToken = undefined;
-    req.user.role     = membership.role;
+    req.user.role     = normalizeRole(membership.role);
     logger.info(`Organización seleccionada: ${req.user.email} [${membership.role}] org=${membership.organization.name}`);
     res.json({ success: true, token, data: { user: req.user, membership } });
   } catch (err) {

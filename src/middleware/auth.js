@@ -2,6 +2,7 @@ const jwt                = require('jsonwebtoken');
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const logger             = require('../config/logger');
+const { normalizeRole, isSuperAdminRole, expandRoles } = require('../utils/roles');
 
 // ── Verificar JWT ─────────────────────────────────────────────
 exports.protect = async (req, res, next) => {
@@ -61,6 +62,7 @@ exports.protect = async (req, res, next) => {
     await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
 
     req.user = user;
+    req.user.role = normalizeRole(req.user.role);
 
     // Contexto de organización: desde membershipId del token (nuevo) o user.organization (legacy)
     if (decoded.membershipId) {
@@ -70,11 +72,11 @@ exports.protect = async (req, res, next) => {
         req.membership = membership;
         req.orgId      = membership.organization._id;
         req.org        = membership.organization;
-        req.user.role  = membership.role;
+        req.user.role  = normalizeRole(membership.role);
       }
     } else {
-      req.orgId = user.organization?._id ?? null;
-      req.org   = user.organization ?? null;
+      req.orgId = isSuperAdminRole(req.user.role) ? null : (user.organization?._id ?? null);
+      req.org   = isSuperAdminRole(req.user.role) ? null : (user.organization ?? null);
     }
 
     next();
@@ -86,8 +88,9 @@ exports.protect = async (req, res, next) => {
 
 // ── Restricción por rol ───────────────────────────────────────
 exports.restrictTo = (...roles) => {
+  const allowedRoles = expandRoles(roles);
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    if (!allowedRoles.includes(normalizeRole(req.user.role))) {
       return res.status(403).json({
         success: false,
         message: 'No tenés permisos para realizar esta acción.',
@@ -113,7 +116,7 @@ exports.requireOrg = (req, res, next) => {
 // ── Propietario solo accede a sus propios datos ───────────────
 exports.ownDataOnly = (paramField = 'id') => {
   return (req, res, next) => {
-    if (req.user.role === 'admin' || req.user.role === 'superadmin') return next();
+    if (req.user.role === 'admin' || isSuperAdminRole(req.user.role)) return next();
     const targetId = req.params[paramField];
     if (targetId && targetId !== req.user.id) {
       return res.status(403).json({
@@ -184,6 +187,7 @@ exports.sendTokenResponse = (user, statusCode, res) => {
   // Remover campos sensibles de la respuesta
   user.password = undefined;
   user.fcmToken = undefined;
+  user.role = normalizeRole(user.role);
 
   res.status(statusCode).json({
     success: true,

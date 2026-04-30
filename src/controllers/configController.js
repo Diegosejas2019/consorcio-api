@@ -1,4 +1,5 @@
 const Organization = require('../models/Organization');
+const { isSuperAdminRole } = require('../utils/roles');
 
 // ── Helpers de recargo ────────────────────────────────────────
 /**
@@ -105,7 +106,7 @@ exports.getConfig = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Organización no configurada.' });
     }
 
-    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'superadmin';
+    const isAdmin = req.user?.role === 'admin' || isSuperAdminRole(req.user?.role);
     res.json({ success: true, data: { config: orgToConfigView(org, isAdmin) } });
   } catch (err) {
     next(err);
