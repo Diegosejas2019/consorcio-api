@@ -15,7 +15,7 @@ const expenseSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: ['cleaning', 'security', 'maintenance', 'utilities', 'administration', 'other'],
+      enum: ['cleaning', 'security', 'maintenance', 'utilities', 'administration', 'salaries', 'other'],
       required: [true, 'La categoría es obligatoria'],
     },
     amount: {

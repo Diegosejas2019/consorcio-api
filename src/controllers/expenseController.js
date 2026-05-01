@@ -10,6 +10,7 @@ const CATEGORY_LABELS = {
   maintenance:    'Mantenimiento',
   utilities:      'Servicios',
   administration: 'Administración',
+  salaries:       'Sueldos',
   other:          'Otros',
 };
 
