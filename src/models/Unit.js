@@ -11,7 +11,12 @@ const unitSchema = new mongoose.Schema(
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: [true, 'El propietario es obligatorio'],
+      default: null,
+    },
+    status: {
+      type: String,
+      enum: ['available', 'occupied', 'inactive'],
+      default: 'available',
     },
     name: {
       type: String,
@@ -42,8 +47,9 @@ const unitSchema = new mongoose.Schema(
   }
 );
 
-// ── Índice compuesto para queries por org + owner ─────────────
+// ── Índices ───────────────────────────────────────────────────
 unitSchema.index({ organization: 1, owner: 1 });
 unitSchema.index({ organization: 1, active: 1 });
+unitSchema.index({ organization: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('Unit', unitSchema);

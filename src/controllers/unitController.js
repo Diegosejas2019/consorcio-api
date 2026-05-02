@@ -46,25 +46,31 @@ exports.createUnit = async (req, res, next) => {
   try {
     const { ownerId, name, coefficient, customFee } = req.body;
 
-    if (!ownerId) return res.status(400).json({ success: false, message: 'El propietario es obligatorio.' });
     if (!name?.trim()) return res.status(400).json({ success: false, message: 'El nombre de la unidad es obligatorio.' });
 
-    // Verificar que el owner pertenezca a la organización
-    const owner = await User.findOne({ _id: ownerId, organization: req.orgId, role: 'owner', isActive: true });
-    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    let owner = null;
+    if (ownerId) {
+      owner = await User.findOne({ _id: ownerId, organization: req.orgId, role: 'owner', isActive: true });
+      if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    }
 
     const unit = await Unit.create({
       organization: req.orgId,
-      owner:        ownerId,
+      owner:        ownerId || null,
+      status:       ownerId ? 'occupied' : 'available',
       name:         name.trim(),
       coefficient:  coefficient != null ? Number(coefficient) : 1,
       customFee:    customFee != null && customFee !== '' ? Number(customFee) : null,
     });
 
+    if (owner) {
+      await User.findByIdAndUpdate(owner._id, { unitId: unit._id });
+    }
+
     const org = await Organization.findById(req.orgId).select('monthlyFee');
     const finalFee = calcUnitFee(unit, org?.monthlyFee ?? 0);
 
-    logger.info(`Unidad creada: ${unit._id} — ${unit.name} — owner: ${owner.email}`);
+    logger.info(`Unidad creada: ${unit._id} — ${unit.name}${owner ? ` — owner: ${owner.email}` : ' (sin propietario)'}`);
     res.status(201).json({ success: true, data: { unit: { ...unit.toJSON(), finalFee } } });
   } catch (err) {
     next(err);
@@ -105,13 +111,71 @@ exports.deleteUnit = async (req, res, next) => {
   try {
     const unit = await Unit.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },
-      { active: false },
+      { active: false, status: 'inactive' },
       { new: true }
     );
     if (!unit) return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
 
+    // Liberar al propietario si tenía asignada esta unidad
+    if (unit.owner) {
+      await User.findByIdAndUpdate(unit.owner, { unitId: null });
+    }
+
     logger.info(`Unidad desactivada: ${unit._id} — ${unit.name}`);
     res.json({ success: true, message: 'Unidad eliminada correctamente.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/units/:id/assign-owner — asignar propietario ──
+exports.assignOwner = async (req, res, next) => {
+  try {
+    const { ownerId } = req.body;
+    if (!ownerId) return res.status(400).json({ success: false, message: 'ownerId es obligatorio.' });
+
+    const [unit, owner] = await Promise.all([
+      Unit.findOne({ _id: req.params.id, organization: req.orgId, active: true }),
+      User.findOne({ _id: ownerId, organization: req.orgId, role: 'owner', isActive: true }),
+    ]);
+
+    if (!unit)  return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
+    if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+    if (unit.status === 'occupied') {
+      return res.status(400).json({ success: false, message: 'La unidad ya está ocupada.' });
+    }
+
+    // Liberar unidad anterior del owner si tenía una
+    if (owner.unitId) {
+      await Unit.findByIdAndUpdate(owner.unitId, { owner: null, status: 'available' });
+    }
+
+    await Promise.all([
+      Unit.findByIdAndUpdate(unit._id, { owner: ownerId, status: 'occupied' }),
+      User.findByIdAndUpdate(ownerId, { unitId: unit._id }),
+    ]);
+
+    logger.info(`Unidad ${unit.name} asignada a ${owner.email}`);
+    res.json({ success: true, message: 'Propietario asignado correctamente.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/units/:id/release-owner — liberar propietario ──
+exports.releaseOwner = async (req, res, next) => {
+  try {
+    const unit = await Unit.findOne({ _id: req.params.id, organization: req.orgId, active: true });
+    if (!unit) return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
+    if (!unit.owner) return res.status(400).json({ success: false, message: 'La unidad no tiene propietario asignado.' });
+
+    await Promise.all([
+      User.findByIdAndUpdate(unit.owner, { unitId: null }),
+      Unit.findByIdAndUpdate(unit._id, { owner: null, status: 'available' }),
+    ]);
+
+    logger.info(`Unidad ${unit.name} liberada`);
+    res.json({ success: true, message: 'Propietario liberado correctamente.' });
   } catch (err) {
     next(err);
   }

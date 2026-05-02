@@ -6,12 +6,16 @@ const {
   createUnit,
   updateUnit,
   deleteUnit,
+  assignOwner,
+  releaseOwner,
 } = require('../controllers/unitController');
 
 router.use(protect, requireOrg);
 
 router.get('/',     getUnits);
 router.post('/',    restrictTo('admin', 'superadmin'), createUnit);
+router.patch('/:id/assign-owner',  restrictTo('admin', 'superadmin'), assignOwner);
+router.patch('/:id/release-owner', restrictTo('admin', 'superadmin'), releaseOwner);
 router.patch('/:id', restrictTo('admin', 'superadmin'), updateUnit);
 router.delete('/:id', restrictTo('admin', 'superadmin'), deleteUnit);
 
