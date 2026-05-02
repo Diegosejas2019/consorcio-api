@@ -37,11 +37,6 @@ const userSchema = new mongoose.Schema(
     },
 
     // — Datos del propietario —
-    unit: {
-      type: String,
-      trim: true,
-      // Ej: "Lote 12", "Casa 5A" — legacy string, reemplazado por unitId
-    },
     unitId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Unit',

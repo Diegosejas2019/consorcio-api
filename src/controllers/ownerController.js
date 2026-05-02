@@ -9,63 +9,7 @@ const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const XLSX    = require('xlsx');
 
 // Campos del User que son identidad global (no datos financieros por org)
-const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'phone', 'role', 'organization', 'createdBy', 'isActive']);
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function normalizeUnitName(unit) {
-  return String(unit || '').trim();
-}
-
-async function findUnitAssignmentConflict(organizationId, unit, ownerIdToIgnore = null) {
-  const unitName = normalizeUnitName(unit);
-  if (!unitName) return null;
-
-  const sameName = new RegExp(`^${escapeRegExp(unitName)}$`, 'i');
-  const ignoreId = ownerIdToIgnore?.toString();
-
-  const assignedUnit = await Unit.findOne({
-    organization: organizationId,
-    active: true,
-    name: sameName,
-  }).populate('owner', 'name email');
-
-  if (assignedUnit && assignedUnit.owner?._id?.toString() !== ignoreId) {
-    return {
-      source: 'unit',
-      unitName: assignedUnit.name,
-      ownerName: assignedUnit.owner?.name,
-      ownerEmail: assignedUnit.owner?.email,
-    };
-  }
-
-  const memberships = await OrganizationMember.find({
-    organization: organizationId,
-    role: 'owner',
-    isActive: true,
-  }).populate({
-    path: 'user',
-    match: { unit: sameName, isActive: true },
-    select: 'name email unit',
-  });
-
-  const conflict = memberships.find(m => m.user && m.user._id.toString() !== ignoreId);
-  if (!conflict) return null;
-
-  return {
-    source: 'legacy',
-    unitName: conflict.user.unit,
-    ownerName: conflict.user.name,
-    ownerEmail: conflict.user.email,
-  };
-}
-
-function unitConflictMessage(conflict) {
-  const owner = conflict.ownerName || conflict.ownerEmail || 'otro propietario';
-  return `La unidad/lote "${conflict.unitName}" ya estÃ¡ asociada a ${owner}.`;
-}
+const USER_FIELDS = new Set(['name', 'email', 'password', 'unitId', 'phone', 'role', 'organization', 'createdBy', 'isActive']);
 
 // ── GET /api/owners — listar todos (admin) ────────────────────
 exports.getAllOwners = async (req, res, next) => {
@@ -76,51 +20,55 @@ exports.getAllOwners = async (req, res, next) => {
     if (isDebtor !== undefined) memberFilter.isDebtor = isDebtor === 'true';
 
     let memberships = await OrganizationMember.find(memberFilter)
-      .populate('user', 'name email unit phone initials lastLogin createdAt isActive')
+      .populate('user', 'name email unitId phone initials lastLogin createdAt isActive')
       .lean();
 
-    // Filtrar por búsqueda sobre campos del User
-    if (search) {
-      const re = new RegExp(search, 'i');
-      memberships = memberships.filter(m =>
-        m.user && (re.test(m.user.name) || re.test(m.user.unit) || re.test(m.user.email))
-      );
-    }
-
-    // Descartar membresías con user eliminado (populate devuelve null)
     memberships = memberships.filter(m => m.user != null);
 
-    // Ordenar por unidad
-    memberships.sort((a, b) => (a.user.unit || '').localeCompare(b.user.unit || ''));
+    // Cargar todas las unidades de la org para sort + search
+    const allUnits = await Unit.find({ organization: req.orgId, active: true })
+      .select('owner name')
+      .lean();
+
+    const unitsByOwner = allUnits.reduce((map, u) => {
+      if (u.owner) (map[u.owner.toString()] ||= []).push(u.name);
+      return map;
+    }, {});
+
+    if (search) {
+      const re = new RegExp(search, 'i');
+      memberships = memberships.filter(m => {
+        const unitNames = unitsByOwner[m.user._id.toString()] ?? [];
+        return re.test(m.user.name) || re.test(m.user.email) || unitNames.some(n => re.test(n));
+      });
+    }
+
+    // Ordenar por nombre de unidad
+    memberships.sort((a, b) => {
+      const ua = (unitsByOwner[a.user._id.toString()] ?? [])[0] ?? '';
+      const ub = (unitsByOwner[b.user._id.toString()] ?? [])[0] ?? '';
+      return ua.localeCompare(ub);
+    });
 
     const total = memberships.length;
     const paged = memberships.slice((page - 1) * limit, page * limit);
     const ownerIds = paged.map(m => m.user._id);
 
-    // Enriquecer con último pago aprobado y unidades
-    const [lastPayments, allUnits] = await Promise.all([
-      Payment.aggregate([
-        { $match: { owner: { $in: ownerIds }, status: 'approved' } },
-        { $sort: { createdAt: -1 } },
-        {
-          $group: {
-            _id: '$owner',
-            month:     { $first: '$month' },
-            amount:    { $first: '$amount' },
-            createdAt: { $first: '$createdAt' },
-          },
+    const lastPayments = await Payment.aggregate([
+      { $match: { owner: { $in: ownerIds }, status: 'approved' } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: '$owner',
+          month:     { $first: '$month' },
+          amount:    { $first: '$amount' },
+          createdAt: { $first: '$createdAt' },
         },
-      ]),
-      Unit.find({ organization: req.orgId, active: true }).select('owner name'),
+      },
     ]);
 
     const lastPaymentByOwner = lastPayments.reduce((map, p) => {
       map[p._id.toString()] = { month: p.month, amount: p.amount, createdAt: p.createdAt };
-      return map;
-    }, {});
-
-    const unitsByOwner = allUnits.reduce((map, u) => {
-      (map[u.owner.toString()] ||= []).push(u.name);
       return map;
     }, {});
 
@@ -183,16 +131,14 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'percentage'];
+    const allowed  = ['name', 'email', 'password', 'phone', 'percentage'];
     const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
-    if (ownerData.unit !== undefined) ownerData.unit = normalizeUnitName(ownerData.unit);
 
     const initialDebtAmount = Number(req.body.initialDebtAmount ?? 0);
     if (initialDebtAmount < 0) {
       return res.status(400).json({ success: false, message: 'La deuda inicial no puede ser negativa.' });
     }
-    // Datos financieros van solo a OrganizationMember, no a User
     ownerData.balance  = initialDebtAmount > 0 ? -initialDebtAmount : 0;
     ownerData.isDebtor = initialDebtAmount > 0;
 
@@ -209,7 +155,6 @@ exports.createOwner = async (req, res, next) => {
       const existingActive = await User.findOne({ email: req.body.email, isActive: true });
 
       if (existingActive) {
-        // Si ya tiene membresía activa en esta org, rechazar
         const membershipExists = await OrganizationMember.findOne({
           user: existingActive._id,
           organization: req.orgId,
@@ -218,33 +163,21 @@ exports.createOwner = async (req, res, next) => {
         if (membershipExists) {
           return res.status(400).json({ success: false, message: 'El usuario ya pertenece a esta organización.' });
         }
-        // Actualizar campos del User sin tocar la contraseña ni datos financieros por org
-        const effectiveUnit = ownerData.unit !== undefined ? ownerData.unit : existingActive.unit;
-        const unitConflict = await findUnitAssignmentConflict(req.orgId, effectiveUnit, existingActive._id);
-        if (unitConflict) {
-          return res.status(400).json({ success: false, message: unitConflictMessage(unitConflict) });
-        }
         const { password: _p, ...rawUpdate } = ownerData;
         const updateFields = Object.fromEntries(Object.entries(rawUpdate).filter(([k]) => USER_FIELDS.has(k)));
         owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
         sendWelcomeEmail = false;
         logger.info(`Propietario existente vinculado: ${owner.email} [org: ${req.orgId}]`);
       } else {
-        // Usuario inactivo: reactivar
         const existingInactive = await User.findOne({ email: req.body.email, isActive: false }).select('+password');
         if (existingInactive) {
-          const effectiveUnit = ownerData.unit !== undefined ? ownerData.unit : existingInactive.unit;
-          const unitConflict = await findUnitAssignmentConflict(req.orgId, effectiveUnit, existingInactive._id);
-          if (unitConflict) {
-            return res.status(400).json({ success: false, message: unitConflictMessage(unitConflict) });
-          }
           const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
           Object.assign(existingInactive, inactiveUpdate, { isActive: true });
           if (tempPassword) existingInactive.password = tempPassword;
           await existingInactive.save();
           existingInactive.password = undefined;
           owner = existingInactive;
-          logger.info(`Propietario reactivado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+          logger.info(`Propietario reactivado: ${owner.email} [org: ${req.orgId}]`);
         }
       }
     }
@@ -253,17 +186,12 @@ exports.createOwner = async (req, res, next) => {
       if (!req.body.password) {
         return res.status(400).json({ success: false, message: 'La contraseña es obligatoria para nuevos propietarios.' });
       }
-      const unitConflict = await findUnitAssignmentConflict(req.orgId, ownerData.unit);
-      if (unitConflict) {
-        return res.status(400).json({ success: false, message: unitConflictMessage(unitConflict) });
-      }
       const userCreateData = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
       owner = await User.create(userCreateData);
-      logger.info(`Propietario creado: ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+      logger.info(`Propietario creado: ${owner.email} [org: ${req.orgId}]`);
       owner.password = undefined;
     }
 
-    // Crear o actualizar OrganizationMember (upsert para idempotencia)
     await OrganizationMember.findOneAndUpdate(
       { user: owner._id, organization: req.orgId, role: 'owner' },
       {
@@ -294,8 +222,7 @@ exports.createOwner = async (req, res, next) => {
     }
 
     if (sendWelcomeEmail) {
-      const unitNames = owner.unit ? [owner.unit] : [];
-      sendWelcome(owner, tempPassword, unitNames).catch((err) =>
+      sendWelcome(owner, tempPassword, []).catch((err) =>
         logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
       );
     }
@@ -310,7 +237,7 @@ exports.createOwner = async (req, res, next) => {
 exports.updateOwner = async (req, res, next) => {
   try {
     const memberFields = ['balance', 'isDebtor', 'percentage', 'startBillingPeriod'];
-    const userFields   = ['name', 'unit', 'phone', 'isActive'];
+    const userFields   = ['name', 'phone', 'isActive'];
 
     const userUpdate   = {};
     const memberUpdate = {};
@@ -321,7 +248,6 @@ exports.updateOwner = async (req, res, next) => {
       }
     });
 
-    // Verificar membresía en esta org
     const membership = await OrganizationMember.findOne({
       user: req.params.id,
       organization: req.orgId,
@@ -336,11 +262,9 @@ exports.updateOwner = async (req, res, next) => {
       const newUnitId   = req.body.unitId || null;
 
       if (prevUnitId !== (newUnitId?.toString() ?? null)) {
-        // Liberar unidad anterior
         if (prevUnitId) {
           await Unit.findByIdAndUpdate(prevUnitId, { owner: null, status: 'available' });
         }
-        // Asignar nueva unidad
         if (newUnitId) {
           const newUnit = await Unit.findOne({ _id: newUnitId, organization: req.orgId, active: true });
           if (!newUnit) return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
@@ -442,9 +366,9 @@ exports.notifyOwner = async (req, res, next) => {
 exports.downloadBulkTemplate = (_req, res) => {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([
-    ['nombre', 'email', 'contraseña', 'unidad', 'telefono', 'saldo', 'moroso'],
-    ['María García', 'maria@mail.com', 'clave123', 'Lote 12', '1122334455', '0', 'no'],
-    ['Juan Pérez',   'juan@mail.com',  'clave456', 'Casa 5A', '',           '0', 'no'],
+    ['nombre', 'email', 'contraseña', 'telefono', 'saldo', 'moroso'],
+    ['María García', 'maria@mail.com', 'clave123', '1122334455', '0', 'no'],
+    ['Juan Pérez',   'juan@mail.com',  'clave456', '',           '0', 'no'],
   ]);
   XLSX.utils.book_append_sheet(wb, ws, 'Propietarios');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -474,17 +398,14 @@ exports.bulkCreateOwners = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'El archivo está vacío o no tiene filas de datos.' });
     }
 
-    // Mapeo columnas español → campo del modelo
     const COL_MAP = {
-      nombre:     'name',
-      email:      'email',
+      nombre:       'name',
+      email:        'email',
       'contraseña': 'password',
-      unidad:     'unit',
-      telefono:   'phone',
-      saldo:      'balance',
-      moroso:     'isDebtor',
-      // también aceptar inglés por compatibilidad
-      name: 'name', password: 'password', unit: 'unit', phone: 'phone',
+      telefono:     'phone',
+      saldo:        'balance',
+      moroso:       'isDebtor',
+      name: 'name', password: 'password', phone: 'phone',
       balance: 'balance', isDebtor: 'isDebtor',
     };
     const created = [];
@@ -492,16 +413,14 @@ exports.bulkCreateOwners = async (req, res, next) => {
 
     for (let i = 0; i < rows.length; i++) {
       const row    = rows[i];
-      const rowNum = i + 2; // fila Excel (1 = encabezados)
+      const rowNum = i + 2;
 
       const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id, startBillingPeriod: formatYYYYMM(new Date()) };
       Object.entries(row).forEach(([col, val]) => {
         const field = COL_MAP[col.trim().toLowerCase()] || COL_MAP[col.trim()];
         if (field && val !== undefined && val !== '') ownerData[field] = val;
       });
-      if (ownerData.unit !== undefined) ownerData.unit = normalizeUnitName(ownerData.unit);
 
-      // Convertir tipos
       if (ownerData.balance !== undefined) ownerData.balance = Number(ownerData.balance);
       if (ownerData.isDebtor !== undefined) {
         const v = String(ownerData.isDebtor).toLowerCase();
@@ -529,12 +448,6 @@ exports.bulkCreateOwners = async (req, res, next) => {
             errors.push({ row: rowNum, email: ownerData.email, reason: 'El usuario ya pertenece a esta organización.' });
             continue;
           }
-          const effectiveUnit = ownerData.unit !== undefined ? ownerData.unit : existingActive.unit;
-          const unitConflict = await findUnitAssignmentConflict(req.orgId, effectiveUnit, existingActive._id);
-          if (unitConflict) {
-            errors.push({ row: rowNum, email: ownerData.email, reason: unitConflictMessage(unitConflict) });
-            continue;
-          }
           const { password: _p, ...rawBulkUpdate } = ownerData;
           const bulkUpdateFields = Object.fromEntries(Object.entries(rawBulkUpdate).filter(([k]) => USER_FIELDS.has(k)));
           owner = await User.findByIdAndUpdate(existingActive._id, bulkUpdateFields, { new: true, runValidators: false });
@@ -543,12 +456,6 @@ exports.bulkCreateOwners = async (req, res, next) => {
         } else {
           const existingInactive = await User.findOne({ email: ownerData.email, isActive: false }).select('+password');
           if (existingInactive) {
-            const effectiveUnit = ownerData.unit !== undefined ? ownerData.unit : existingInactive.unit;
-            const unitConflict = await findUnitAssignmentConflict(req.orgId, effectiveUnit, existingInactive._id);
-            if (unitConflict) {
-              errors.push({ row: rowNum, email: ownerData.email, reason: unitConflictMessage(unitConflict) });
-              continue;
-            }
             const rawPassword = ownerData.password;
             const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
             Object.assign(existingInactive, inactiveUpdate, { isActive: true });
@@ -563,19 +470,13 @@ exports.bulkCreateOwners = async (req, res, next) => {
               continue;
             }
             const rawPassword = ownerData.password;
-            const unitConflict = await findUnitAssignmentConflict(req.orgId, ownerData.unit);
-            if (unitConflict) {
-              errors.push({ row: rowNum, email: ownerData.email, reason: unitConflictMessage(unitConflict) });
-              continue;
-            }
             const bulkCreateData = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
             owner = await User.create(bulkCreateData);
-            logger.info(`Bulk: propietario creado ${owner.email} — ${owner.unit} [org: ${req.orgId}]`);
+            logger.info(`Bulk: propietario creado ${owner.email} [org: ${req.orgId}]`);
             owner.password = undefined;
 
-            const unitNames = owner.unit ? [owner.unit] : [];
             if (sendEmail) {
-              sendWelcome(owner, rawPassword, unitNames).catch((err) =>
+              sendWelcome(owner, rawPassword, []).catch((err) =>
                 logger.error(`Bulk: error enviando email a ${owner.email}: ${err.message}`)
               );
             }
