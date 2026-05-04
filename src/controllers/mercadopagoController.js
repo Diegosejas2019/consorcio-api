@@ -39,18 +39,23 @@ exports.createPreference = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Formato de período inválido.' });
     }
 
-    // Excluir períodos ya aprobados
-    const existingApproved = await Payment.find({
+    // Excluir períodos con pago activo
+    const currentPeriod = org.feePeriodCode || new Date().toISOString().slice(0, 7);
+    if (periods.some(p => p > currentPeriod)) {
+      return res.status(400).json({ success: false, message: 'No se pueden pagar períodos futuros.' });
+    }
+
+    const existingActive = await Payment.find({
       organization: req.orgId,
       owner: owner._id,
       month: { $in: periods },
-      status: 'approved',
+      status: { $in: ['pending', 'approved'] },
     }).select('month');
-    const approvedSet = new Set(existingApproved.map(p => p.month));
-    const payablePeriods = periods.filter(p => !approvedSet.has(p));
+    const activeSet = new Set(existingActive.map(p => p.month));
+    const payablePeriods = periods.filter(p => !activeSet.has(p));
 
     if (payablePeriods.length === 0) {
-      return res.status(400).json({ success: false, message: 'Todos los períodos seleccionados ya están pagados.' });
+      return res.status(400).json({ success: false, message: 'Todos los períodos seleccionados ya tienen un pago activo.' });
     }
 
     // Calcular monto desde unidades activas del propietario

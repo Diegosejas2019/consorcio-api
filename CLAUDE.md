@@ -124,9 +124,26 @@ Campos: `name`, `serviceType` (mismas categorías que Expense), `cuit`, `phone`,
 Soft-delete: `active: false`.
 
 ### Unit
-Unidades funcionales de la organización (lotes, departamentos, membresías, etc.), asignadas a un propietario.
-Campos: `organization`, `owner` (ref User), `name`, `coefficient` (default 1, para prorrateo), `customFee` (monto fijo personalizado; prevalece sobre `organization.monthlyFee * coefficient`), `active`.
+Unidades funcionales de la organización (lotes, departamentos, membresías, etc.). Pueden existir sin propietario asignado.
+Campos: `organization`, `owner` (ref User, opcional), `name`, `coefficient` (default 1, para prorrateo), `customFee` (monto fijo personalizado; prevalece sobre `organization.monthlyFee * coefficient`), `active`.
 Índices: `{organization, owner}`, `{organization, active}`.
+`PATCH /:id/assign-owner` — asigna un propietario a la unidad. `PATCH /:id/release-owner` — libera la unidad (owner → null). `POST /bulk` — crea múltiples unidades a la vez.
+
+### Employee
+Empleados/colaboradores de la organización. Solo admin gestiona. Scope: `organization`.
+- `role`: `security` | `cleaning` | `admin` | `maintenance` | `other`
+- `customRole`: texto libre cuando `role === 'other'`
+- `isActive`: soft-delete. `startDate`, `endDate`, `documentNumber`, `phone`, `email`, `notes`.
+- `createdBy`, `updatedBy`: ref User (auditoría).
+
+### Salary
+Sueldos de empleados. Un sueldo por empleado por período (`{organization, employee, period}` único).
+- `period`: formato `YYYY-MM`
+- `baseAmount`, `extraAmount` (default 0), `deductions` (default 0), `totalAmount`
+- `status`: `pending` | `paid` | `cancelled`
+- `paymentDate`, `paymentMethod`: `cash` | `transfer`
+- `expenseId`: ref Expense — al crear un sueldo se genera automáticamente un `Expense` de categoría `administration` ligado a este sueldo. Si cambia el monto, se actualiza el gasto. Si se marca `paid`, el gasto se marca `paid`. Si se cancela, el gasto se desactiva.
+- `createdBy`, `updatedBy`: ref User (auditoría).
 
 ### Visit
 Visitas autorizadas por propietarios para ingreso al complejo.
@@ -191,8 +208,21 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | POST | `/api/owners/:id/notify` | admin |
 | GET | `/api/units` | autenticado + requireOrg |
 | POST | `/api/units` | admin, superadmin |
+| POST | `/api/units/bulk` | admin, superadmin |
 | PATCH | `/api/units/:id` | admin, superadmin |
+| PATCH | `/api/units/:id/assign-owner` | admin, superadmin |
+| PATCH | `/api/units/:id/release-owner` | admin, superadmin |
 | DELETE | `/api/units/:id` | admin, superadmin |
+| GET | `/api/employees` | admin |
+| POST | `/api/employees` | admin |
+| GET | `/api/employees/:id` | admin |
+| PATCH | `/api/employees/:id` | admin |
+| DELETE | `/api/employees/:id` | admin |
+| GET | `/api/salaries` | admin |
+| POST | `/api/salaries` | admin |
+| GET | `/api/salaries/:id` | admin |
+| PATCH | `/api/salaries/:id` | admin |
+| DELETE | `/api/salaries/:id` | admin |
 | GET | `/api/payments` | autenticado (owner: los suyos) |
 | POST | `/api/payments` | autenticado (con upload comprobante) |
 | GET | `/api/payments/dashboard` | admin |

@@ -7,6 +7,7 @@ jest.mock('../../src/config/cloudinary', () => {
     uploadProvider: memoryUpload,
     uploadClaim: memoryUpload,
     uploadNotice: memoryUpload,
+    uploadEmployee: memoryUpload,
     deleteCloudinaryAttachments: jest.fn().mockResolvedValue(null),
     cloudinary: { uploader: { destroy: jest.fn().mockResolvedValue({}) } },
   };
@@ -35,6 +36,21 @@ afterAll(() => dbHelper.disconnect());
 afterEach(() => dbHelper.clear());
 
 describe('POST /api/payments — subida de comprobante', () => {
+  test('rechaza pagos de periodos futuros', async () => {
+    const { token, orgId } = await createOwnerWithToken();
+    const Organization = require('../../src/models/Organization');
+    await Organization.findByIdAndUpdate(orgId, { feePeriodCode: '2025-04' });
+
+    const res = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('month', '2025-05')
+      .field('amount', '15000')
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('futuros');
+  });
 
   test('1. PDF válido → 201, paymentMethod: manual', async () => {
     const { token } = await createOwnerWithToken();

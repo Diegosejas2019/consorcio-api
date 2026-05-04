@@ -7,6 +7,7 @@ jest.mock('../../src/config/cloudinary', () => {
     uploadProvider: memoryUpload,
     uploadClaim: memoryUpload,
     uploadNotice: memoryUpload,
+    uploadEmployee: memoryUpload,
     deleteCloudinaryAttachments: jest.fn().mockResolvedValue(null),
     cloudinary: { uploader: { destroy: jest.fn().mockResolvedValue({}) } },
   };
@@ -34,6 +35,21 @@ afterAll(() => dbHelper.disconnect());
 afterEach(() => dbHelper.clear());
 
 describe('GET /api/payments - items disponibles para pagar', () => {
+  test('no devuelve periodos futuros aunque esten configurados', async () => {
+    const { token, orgId } = await createOwnerWithToken();
+    await Organization.findByIdAndUpdate(orgId, {
+      feePeriodCode:  '2025-04',
+      paymentPeriods: ['2025-03', '2025-04', '2025-05'],
+    });
+
+    const res = await request(app)
+      .get('/api/payments/available-items')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.periods).toEqual(['2025-03', '2025-04']);
+  });
+
   test('devuelve gastos extraordinarios cobrables disponibles para el owner', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
     await Organization.findByIdAndUpdate(orgId, { paymentPeriods: ['2025-04'] });

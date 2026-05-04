@@ -104,6 +104,7 @@ function makeUploader(folder, prefix) {
 
 const uploadClaim  = makeUploader('consorcio/reclamos', 'claim');
 const uploadNotice = makeUploader('consorcio/avisos',   'aviso');
+const uploadEmployee = makeUploader('consorcio/empleados', 'emp');
 
 async function deleteCloudinaryAttachments(attachments = []) {
   await Promise.all(
@@ -116,4 +117,4 @@ async function deleteCloudinaryAttachments(attachments = []) {
   );
 }
 
-module.exports = { upload, uploadProvider, uploadClaim, uploadNotice, deleteCloudinaryAttachments, cloudinary };
+module.exports = { upload, uploadProvider, uploadClaim, uploadNotice, uploadEmployee, deleteCloudinaryAttachments, cloudinary };

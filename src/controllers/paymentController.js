@@ -32,9 +32,10 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
       .filter(Boolean))
   );
 
-  const startBilling = membership?.startBillingPeriod ?? owner.startBillingPeriod;
+  const startBilling  = membership?.startBillingPeriod ?? owner.startBillingPeriod;
+  const currentPeriod = org?.feePeriodCode || new Date().toISOString().slice(0, 7);
   const periods = (org?.paymentPeriods || [])
-    .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling));
+    .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
 
   const extras = await Expense.find({
     organization: organizationId,
@@ -192,6 +193,14 @@ exports.createPayment = async (req, res, next) => {
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
     if (month) {
+      const currentPeriod = org?.feePeriodCode || new Date().toISOString().slice(0, 7);
+      if (month > currentPeriod) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se pueden registrar pagos de períodos futuros.',
+        });
+      }
+
       const startBilling = ownerMembership?.startBillingPeriod;
       if (startBilling && month < startBilling) {
         return res.status(400).json({
