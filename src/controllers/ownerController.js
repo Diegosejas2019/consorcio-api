@@ -15,13 +15,61 @@ function normalizeUnitName(raw) {
   return String(raw || '').trim().replace(/\s+/g, ' ');
 }
 
-async function findAssignableUnit(unitId, orgId, ownerId) {
-  const unit = await Unit.findOne({ _id: unitId, organization: orgId, active: true });
-  if (!unit) return { error: { status: 404, message: 'Unidad no encontrada.' } };
-  if (unit.status === 'occupied' && unit.owner?.toString() !== ownerId.toString()) {
-    return { error: { status: 400, message: 'La unidad ya está ocupada.' } };
+function getRequestedUnitIds(body) {
+  const values = [];
+  if (body.unitIds !== undefined) {
+    values.push(...(Array.isArray(body.unitIds) ? body.unitIds : [body.unitIds]));
   }
-  return { unit };
+  if (body.unitId !== undefined && body.unitId !== null && body.unitId !== '') {
+    values.push(body.unitId);
+  }
+  return [...new Set(values.map(id => String(id)).filter(Boolean))];
+}
+
+async function findAssignableUnits(unitIds, orgId, ownerId) {
+  if (!unitIds.length) return { units: [] };
+
+  const units = await Unit.find({
+    _id: { $in: unitIds },
+    organization: orgId,
+    active: true,
+  });
+  const foundIds = new Set(units.map(u => u._id.toString()));
+  const missing = unitIds.find(id => !foundIds.has(id));
+  if (missing) return { error: { status: 404, message: 'Unidad no encontrada.' } };
+
+  const occupied = units.find(unit =>
+    unit.status === 'occupied' &&
+    (!ownerId || unit.owner?.toString() !== ownerId.toString())
+  );
+  if (occupied) {
+    return { error: { status: 400, message: `La unidad ${occupied.name} ya estÃ¡ ocupada.` } };
+  }
+
+  return { units };
+}
+
+async function syncOwnerUnits(ownerId, orgId, requestedUnitIds) {
+  const { units, error } = await findAssignableUnits(requestedUnitIds, orgId, ownerId);
+  if (error) return { error };
+
+  const requestedSet = new Set(requestedUnitIds);
+  const currentUnits = await Unit.find({ owner: ownerId, organization: orgId, active: true }).select('_id');
+  const releaseIds = currentUnits
+    .map(u => u._id)
+    .filter(id => !requestedSet.has(id.toString()));
+
+  await Promise.all([
+    releaseIds.length
+      ? Unit.updateMany({ _id: { $in: releaseIds } }, { owner: null, status: 'available' })
+      : Promise.resolve(),
+    requestedUnitIds.length
+      ? Unit.updateMany({ _id: { $in: requestedUnitIds } }, { owner: ownerId, status: 'occupied' })
+      : Promise.resolve(),
+    User.findByIdAndUpdate(ownerId, { unitId: requestedUnitIds[0] || null }),
+  ]);
+
+  return { units };
 }
 
 async function validateLegacyUnitAvailable(orgId, unitName, ownerId = null) {
@@ -198,6 +246,7 @@ exports.createOwner = async (req, res, next) => {
     ownerData.startBillingPeriod = chargeCurrentMonth ? currentPeriod : getNextMonth(currentPeriod);
 
     const tempPassword = req.body.password;
+    const requestedUnitIds = getRequestedUnitIds(req.body);
 
     let owner;
     let sendWelcomeEmail = true;
@@ -250,6 +299,9 @@ exports.createOwner = async (req, res, next) => {
     }
 
     if (!owner) {
+      const { error } = await findAssignableUnits(requestedUnitIds, req.orgId, null);
+      if (error) return res.status(error.status).json({ success: false, message: error.message });
+
       if (!req.body.password) {
         return res.status(400).json({ success: false, message: 'La contraseña es obligatoria para nuevos propietarios.' });
       }
@@ -258,6 +310,9 @@ exports.createOwner = async (req, res, next) => {
       logger.info(`Propietario creado: ${owner.email} [org: ${req.orgId}]`);
       owner.password = undefined;
     }
+
+    const { error: unitError } = await findAssignableUnits(requestedUnitIds, req.orgId, owner._id);
+    if (unitError) return res.status(unitError.status).json({ success: false, message: unitError.message });
 
     await OrganizationMember.findOneAndUpdate(
       { user: owner._id, organization: req.orgId, role: 'owner' },
@@ -275,23 +330,21 @@ exports.createOwner = async (req, res, next) => {
     );
 
     // Asignar unidad si se proveyó unitId
-    if (req.body.unitId) {
-      const { unit, error } = await findAssignableUnit(req.body.unitId, req.orgId, owner._id);
+    let assignedUnits = [];
+    if (req.body.unitIds !== undefined || req.body.unitId !== undefined) {
+      const { units, error } = await syncOwnerUnits(owner._id, req.orgId, requestedUnitIds);
       if (error) return res.status(error.status).json({ success: false, message: error.message });
-      await Promise.all([
-        Unit.findByIdAndUpdate(unit._id, { owner: owner._id, status: 'occupied' }),
-        User.findByIdAndUpdate(owner._id, { unitId: unit._id }),
-      ]);
+      assignedUnits = units;
       owner = await User.findById(owner._id).select('-password -fcmToken');
     }
 
     if (sendWelcomeEmail) {
-      sendWelcome(owner, tempPassword, []).catch((err) =>
+      sendWelcome(owner, tempPassword, assignedUnits.map(unit => unit.name)).catch((err) =>
         logger.error(`Error enviando email de bienvenida a ${owner.email}: ${err.message}`)
       );
     }
 
-    res.status(201).json({ success: true, data: { owner } });
+    res.status(201).json({ success: true, data: { owner: { ...owner.toObject(), units: assignedUnits } } });
   } catch (err) {
     next(err);
   }
@@ -320,22 +373,12 @@ exports.updateOwner = async (req, res, next) => {
     if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
 
     // Cambio de unidad
-    if (req.body.unitId !== undefined) {
-      const currentUser = await User.findById(req.params.id).select('unitId');
-      const prevUnitId  = currentUser?.unitId?.toString();
-      const newUnitId   = req.body.unitId || null;
-
-      if (prevUnitId !== (newUnitId?.toString() ?? null)) {
-        if (prevUnitId) {
-          await Unit.findByIdAndUpdate(prevUnitId, { owner: null, status: 'available' });
-        }
-        if (newUnitId) {
-          const { error } = await findAssignableUnit(newUnitId, req.orgId, req.params.id);
-          if (error) return res.status(error.status).json({ success: false, message: error.message });
-          await Unit.findByIdAndUpdate(newUnitId, { owner: req.params.id, status: 'occupied' });
-        }
-        userUpdate.unitId = newUnitId;
-      }
+    let assignedUnits = null;
+    if (req.body.unitIds !== undefined || req.body.unitId !== undefined) {
+      const requestedUnitIds = getRequestedUnitIds(req.body);
+      const { units, error } = await syncOwnerUnits(req.params.id, req.orgId, requestedUnitIds);
+      if (error) return res.status(error.status).json({ success: false, message: error.message });
+      assignedUnits = units;
     }
 
     await Promise.all([
@@ -358,6 +401,7 @@ exports.updateOwner = async (req, res, next) => {
       isDebtor:           updatedMember.isDebtor,
       percentage:         updatedMember.percentage,
       startBillingPeriod: updatedMember.startBillingPeriod,
+      ...(assignedUnits ? { units: assignedUnits } : {}),
     };
 
     res.json({ success: true, data: { owner } });
