@@ -47,6 +47,18 @@ afterEach(async () => {
 });
 
 describe('GET /api/payments/:id/system-receipt', () => {
+  test('rechaza ids de pago invalidos sin consultar Mongo', async () => {
+    const { token } = await createOwnerWithToken();
+
+    const res = await request(app)
+      .get('/api/payments/69f930635e30caf')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toContain('identificador');
+  });
+
   test('devuelve el recibo generado de un pago aprobado', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
     const payment = await Payment.create({
