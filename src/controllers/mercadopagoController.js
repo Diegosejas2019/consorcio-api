@@ -122,7 +122,13 @@ exports.webhook = async (req, res) => {
   res.sendStatus(200);
 
   try {
-    const { type, data } = req.body;
+    const body = parseWebhookBody(req.body);
+    if (!body) {
+      logger.warn('Webhook MP: body inválido');
+      return;
+    }
+
+    const { type, data } = body;
     const xSignature = req.headers['x-signature'];
     const xRequestId = req.headers['x-request-id'];
 
@@ -256,8 +262,7 @@ exports.webhook = async (req, res) => {
         payment.mpDetail    = mpData.status_detail;
 
         if (mpData.status === 'approved') {
-          payment.status    = 'approved';
-          payment.reviewedAt = new Date();
+          payment.status = 'pending';
         } else if (['rejected', 'cancelled'].includes(mpData.status)) {
           payment.status        = 'rejected';
           payment.rejectionNote = `Rechazado por MercadoPago: ${mpData.status_detail}`;
@@ -271,25 +276,19 @@ exports.webhook = async (req, res) => {
       const totalAmount   = paymentList.reduce((sum, p) => sum + p.amount, 0);
 
       if (mpData.status === 'approved') {
-        await OrganizationMember.updateOne(
-          { user: ownerDoc._id, organization: firstPayment.organization, role: 'owner' },
-          { isDebtor: false, balance: 0 }
-        );
-
         const periodsSummary = paymentList.length === 1
           ? firstPayment.monthFormatted
           : `${paymentList.length} períodos`;
 
         Promise.allSettled([
-          emailService.sendPaymentApproved(ownerDoc, firstPayment),
           firebaseService.sendToUser(ownerDoc._id, {
-            title: '¡Pago recibido! ✓',
-            body:  `Tu pago de ${periodsSummary} por $${totalAmount.toLocaleString('es-AR')} fue confirmado.`,
-            data:  { type: 'payment_approved', paymentId: firstPayment._id.toString() },
+            title: 'Pago recibido',
+            body:  `Recibimos tu pago de ${periodsSummary} por $${totalAmount.toLocaleString('es-AR')}. Quedó pendiente de aprobación.`,
+            data:  { type: 'payment_pending_approval', paymentId: firstPayment._id.toString() },
           }),
         ]);
 
-        logger.info(`Pago MP aprobado: ${paymentList.length} período(s) — ${ownerDoc?.name}`);
+        logger.info(`Pago MP recibido pendiente de aprobación: ${paymentList.length} período(s) — ${ownerDoc?.name}`);
 
       } else if (['rejected', 'cancelled'].includes(mpData.status)) {
         Promise.allSettled([
@@ -306,6 +305,26 @@ exports.webhook = async (req, res) => {
     logger.error(`Error procesando webhook MP: ${err.message}`, err);
   }
 };
+
+function parseWebhookBody(body) {
+  if (Buffer.isBuffer(body)) {
+    try {
+      return JSON.parse(body.toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return null;
+    }
+  }
+
+  return body && typeof body === 'object' ? body : null;
+}
 
 /**
  * Resuelve el cliente MP para un webhook dado su MP payment ID.
