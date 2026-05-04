@@ -4,8 +4,10 @@ const Payment            = require('../models/Payment');
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Unit               = require('../models/Unit');
+const Expense            = require('../models/Expense');
 const Organization = require('../models/Organization');
 const { calcUnitFee } = require('./unitController');
+const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
 const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const receiptService = require('../services/receiptService');
@@ -29,6 +31,10 @@ async function settleOwnerAccount(payment) {
     return;
   }
 
+  if (payment.type === 'extraordinary') {
+    return;
+  }
+
   await OrganizationMember.updateOne(
     { user: ownerId, organization: payment.organization, role: 'owner' },
     { isDebtor: false, balance: 0 }
@@ -48,33 +54,230 @@ async function generateReceiptsForApprovedMPPayments(paymentList) {
   });
 }
 
+function normalizeArray(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === 'string') {
+    if (!value.trim()) return [];
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    } catch {}
+    return value.split(',').map(v => v.trim()).filter(Boolean);
+  }
+  return value ? [value] : [];
+}
+
+function parseExternalReference(reference) {
+  const parts = String(reference || '').split('|');
+  const [orgId, ownerId] = parts;
+  if (!orgId || !ownerId) return null;
+
+  if (parts[2] === 'v2') {
+    return {
+      orgId,
+      ownerId,
+      periods:          normalizeArray(parts[3]),
+      extraordinaryIds: normalizeArray(parts[4]),
+      balanceAmount:    Number(parts[5] || 0),
+      version:          'v2',
+    };
+  }
+
+  return {
+    orgId,
+    ownerId,
+    periods:          normalizeArray(parts[2]),
+    extraordinaryIds: [],
+    balanceAmount:    0,
+    version:          'legacy',
+  };
+}
+
+async function getOwnerPaymentContext(orgId, ownerId) {
+  const [org, membership, ownerUnits, allOrgUnits] = await Promise.all([
+    Organization.findById(orgId),
+    OrganizationMember.findOne({ user: ownerId, organization: orgId, role: 'owner' }).select('_id balance isDebtor'),
+    Unit.find({ owner: ownerId, active: true, organization: orgId }).sort({ name: 1 }).lean(),
+    Unit.find({ organization: orgId, active: true }).lean(),
+  ]);
+  const monthlyFee = org?.monthlyFee || 0;
+  const unitAmount = ownerUnits.length > 0
+    ? ownerUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+    : monthlyFee;
+  const unitsSnapshot = ownerUnits.map(u => u._id);
+  const breakdownSnapshot = ownerUnits.map(u => ({
+    unit:   u._id,
+    name:   u.name,
+    amount: calcUnitFee(u, monthlyFee),
+  }));
+
+  return { org, membership, ownerUnits, allOrgUnits, unitAmount, unitsSnapshot, breakdownSnapshot };
+}
+
+async function buildExtraordinaryItems({ orgId, ownerId, extraordinaryIds, ownerUnits, allOrgUnits }) {
+  if (!extraordinaryIds.length) return [];
+
+  const expenses = await Expense.find({
+    _id:          { $in: extraordinaryIds },
+    organization: orgId,
+    expenseType:  'extraordinary',
+    isChargeable: true,
+    isActive:     { $ne: false },
+  }).select('_id description amount extraordinaryBillingMode unitAmount appliesToAllOwners targetUnits').lean();
+
+  if (expenses.length !== extraordinaryIds.length) {
+    const err = new Error('Uno o más conceptos extraordinarios no son válidos.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const alreadyPaid = await Payment.findOne({
+    organization: orgId,
+    owner:        ownerId,
+    status:       { $in: ['pending', 'approved'] },
+    'extraordinaryItems.expense': { $in: extraordinaryIds },
+  });
+  if (alreadyPaid) {
+    const err = new Error('Uno o más conceptos extraordinarios ya tienen un pago activo.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return expenses.map(expense => {
+    const { amountForOwner } = calculateExtraordinaryAmountForOwner(expense, ownerUnits, allOrgUnits);
+    return { expense: expense._id, amount: amountForOwner, description: expense.description };
+  }).filter(item => item.amount > 0);
+}
+
+async function createPaymentsFromMPReference(mpData) {
+  const ref = parseExternalReference(mpData.external_reference);
+  if (!ref?.orgId || !ref?.ownerId) {
+    logger.warn(`MP reconcile: external_reference incompleto: ${mpData.external_reference}`);
+    return [];
+  }
+
+  const ctx = await getOwnerPaymentContext(ref.orgId, ref.ownerId);
+  const docs = [];
+
+  if (ref.periods.length) {
+    const existingActive = await Payment.find({
+      organization: ref.orgId,
+      owner:        ref.ownerId,
+      month:        { $in: ref.periods },
+      status:       { $in: ['pending', 'approved'] },
+    }).select('month');
+    const activeSet = new Set(existingActive.map(p => p.month));
+    const newMonths = ref.periods.filter(m => !activeSet.has(m));
+
+    docs.push(...newMonths.map(month => ({
+      organization:   ref.orgId,
+      owner:          ref.ownerId,
+      membership:     ctx.membership?._id,
+      month,
+      amount:         ctx.unitAmount,
+      status:         'pending',
+      paymentMethod:  'mercadopago',
+      type:           'monthly',
+      mpPreferenceId: mpData.preference_id,
+      units:          ctx.unitsSnapshot,
+      breakdown:      ctx.breakdownSnapshot,
+    })));
+  }
+
+  if (ref.extraordinaryIds.length) {
+    const extraordinaryItems = await buildExtraordinaryItems({
+      orgId: ref.orgId,
+      ownerId: ref.ownerId,
+      extraordinaryIds: ref.extraordinaryIds,
+      ownerUnits: ctx.ownerUnits,
+      allOrgUnits: ctx.allOrgUnits,
+    });
+    const amount = extraordinaryItems.reduce((sum, item) => sum + item.amount, 0);
+    if (amount > 0) {
+      docs.push({
+        organization:      ref.orgId,
+        owner:             ref.ownerId,
+        membership:        ctx.membership?._id,
+        amount,
+        status:            'pending',
+        paymentMethod:     'mercadopago',
+        type:              'extraordinary',
+        mpPreferenceId:    mpData.preference_id,
+        units:             ctx.unitsSnapshot,
+        breakdown:         ctx.breakdownSnapshot,
+        extraordinaryItems: extraordinaryItems.map(({ expense, amount }) => ({ expense, amount })),
+      });
+    }
+  }
+
+  if (ref.balanceAmount > 0) {
+    const pendingBalance = await Payment.findOne({
+      organization: ref.orgId,
+      owner:        ref.ownerId,
+      type:         'balance',
+      status:       'pending',
+    });
+    if (!pendingBalance) {
+      docs.push({
+        organization:   ref.orgId,
+        owner:          ref.ownerId,
+        membership:     ctx.membership?._id,
+        amount:         ref.balanceAmount,
+        status:         'pending',
+        paymentMethod:  'mercadopago',
+        type:           'balance',
+        mpPreferenceId: mpData.preference_id,
+      });
+    }
+  }
+
+  if (!docs.length) {
+    logger.info(`MP reconcile: no hay conceptos nuevos para ${ref.ownerId}`);
+    return [];
+  }
+
+  const created = await Payment.insertMany(docs);
+  logger.info(`MP reconcile: creados ${created.length} registro(s) desde external_reference - ${ref.ownerId}`);
+
+  return Payment.find({ _id: { $in: created.map(p => p._id) } })
+    .populate('owner', 'name email unit fcmToken');
+}
+
 async function ensurePaymentsFromMPData(mpData) {
   if (!mpData?.external_reference || ['rejected', 'cancelled'].includes(mpData.status)) {
     return [];
   }
 
-  const parts = mpData.external_reference.split('|');
-  const [refOrgId, refOwnerId, monthCodes] = parts;
-  const refMonths = monthCodes?.split(',').filter(Boolean) || [];
+  const ref = parseExternalReference(mpData.external_reference);
+  const refOrgId = ref?.orgId;
+  const refOwnerId = ref?.ownerId;
+  const refMonths = ref?.periods || [];
 
-  if (!refOrgId || !refOwnerId || refMonths.length === 0) {
+  if (!refOrgId || !refOwnerId || (refMonths.length === 0 && !ref?.extraordinaryIds.length && !ref?.balanceAmount)) {
     logger.warn(`MP reconcile: external_reference incompleto: ${mpData.external_reference}`);
     return [];
   }
 
-  let paymentList = await Payment.find({
-    organization:  refOrgId,
-    owner:         refOwnerId,
-    month:         { $in: refMonths },
-    paymentMethod: 'mercadopago',
-    status:        'pending',
-  }).populate('owner', 'name email unit fcmToken');
+  let paymentList = [];
+  if (refMonths.length) {
+    paymentList = await Payment.find({
+      organization:  refOrgId,
+      owner:         refOwnerId,
+      month:         { $in: refMonths },
+      paymentMethod: 'mercadopago',
+      status:        { $in: ['pending', 'approved'] },
+    }).populate('owner', 'name email unit fcmToken');
+  }
 
   if (!paymentList.length && mpData.preference_id) {
     paymentList = await Payment.find({
       mpPreferenceId: mpData.preference_id,
-      status:         'pending',
+      status:         { $in: ['pending', 'approved'] },
     }).populate('owner', 'name email unit fcmToken');
+  }
+
+  if (!paymentList.length && ref.version === 'v2') {
+    paymentList = await createPaymentsFromMPReference(mpData);
   }
 
   if (!paymentList.length) {
@@ -165,6 +368,145 @@ exports.createPreference = async (req, res, next) => {
     if (!org) return res.status(400).json({ success: false, message: 'Organización requerida.' });
 
     const monthlyFee = org.monthlyFee || org.feeAmount || 0;
+    const v2Periods = normalizeArray(req.body?.periods);
+    const v2ExtraordinaryIds = normalizeArray(req.body?.extraordinaryIds);
+    const requestedBalanceAmount = Number(req.body?.balanceAmount || 0);
+
+    if (v2Periods.length > 0 || v2ExtraordinaryIds.length > 0 || requestedBalanceAmount > 0) {
+      const periodRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+      if (v2Periods.some(p => !periodRegex.test(p))) {
+        return res.status(400).json({ success: false, message: 'Formato de período inválido.' });
+      }
+
+      const currentPeriod = org.feePeriodCode || new Date().toISOString().slice(0, 7);
+      if (v2Periods.some(p => p > currentPeriod)) {
+        return res.status(400).json({ success: false, message: 'No se pueden pagar períodos futuros.' });
+      }
+
+      const ctx = await getOwnerPaymentContext(req.orgId, owner._id);
+      const items = [];
+      let totalAmount = 0;
+      let payablePeriods = [];
+      let balanceAmount = 0;
+
+      if (v2Periods.length > 0) {
+        const existingActive = await Payment.find({
+          organization: req.orgId,
+          owner: owner._id,
+          month: { $in: v2Periods },
+          status: { $in: ['pending', 'approved'] },
+        }).select('month');
+        const activeSet = new Set(existingActive.map(p => p.month));
+        payablePeriods = v2Periods.filter(p => !activeSet.has(p));
+        const periodsAmount = ctx.unitAmount * payablePeriods.length;
+        if (periodsAmount > 0) {
+          totalAmount += periodsAmount;
+          const periodLabel = payablePeriods.length === 1 ? payablePeriods[0] : `${payablePeriods.length} períodos`;
+          items.push({
+            id:          `fee-${payablePeriods[0]}-${payablePeriods.length}p-${owner._id}`,
+            title:       `${org.feeLabel} ${periodLabel} — ${org.name}`,
+            description: `${owner.name} — ${owner.unit || ''}`.trim(),
+            quantity:    1,
+            unit_price:  periodsAmount,
+            currency_id: 'ARS',
+          });
+        }
+      }
+
+      if (v2ExtraordinaryIds.length > 0) {
+        const extraordinaryItems = await buildExtraordinaryItems({
+          orgId: req.orgId,
+          ownerId: owner._id,
+          extraordinaryIds: v2ExtraordinaryIds,
+          ownerUnits: ctx.ownerUnits,
+          allOrgUnits: ctx.allOrgUnits,
+        });
+        const extrasAmount = extraordinaryItems.reduce((sum, item) => sum + item.amount, 0);
+        if (extrasAmount <= 0) {
+          return res.status(400).json({ success: false, message: 'No hay importe extraordinario para pagar.' });
+        }
+        totalAmount += extrasAmount;
+        items.push({
+          id:          `extra-${v2ExtraordinaryIds.join('-')}`,
+          title:       `Gasto extraordinario — ${org.name}`,
+          description: extraordinaryItems.map(item => item.description).join(', '),
+          quantity:    1,
+          unit_price:  extrasAmount,
+          currency_id: 'ARS',
+        });
+      }
+
+      if (requestedBalanceAmount > 0) {
+        const pendingBalance = await Payment.findOne({
+          organization: req.orgId,
+          owner:        owner._id,
+          type:         'balance',
+          status:       'pending',
+        });
+        if (pendingBalance) {
+          return res.status(400).json({ success: false, message: 'Ya tenés un pago de saldo anterior pendiente.' });
+        }
+        const debt = Math.abs(Math.min(ctx.membership?.balance || owner.balance || 0, 0));
+        if (debt <= 0) {
+          return res.status(400).json({ success: false, message: 'No hay deuda inicial pendiente para pagar.' });
+        }
+        balanceAmount = Math.min(requestedBalanceAmount, debt);
+        totalAmount += balanceAmount;
+        items.push({
+          id:          `balance-${owner._id}`,
+          title:       `Saldo anterior — ${org.name}`,
+          description: `${owner.name} — deuda inicial`,
+          quantity:    1,
+          unit_price:  balanceAmount,
+          currency_id: 'ARS',
+        });
+      }
+
+      if (totalAmount <= 0 || items.length === 0) {
+        return res.status(400).json({ success: false, message: 'Seleccioná al menos un concepto para pagar.' });
+      }
+
+      const client     = await getMPClient(req.orgId);
+      const preference = new Preference(client);
+      const appBaseUrl = process.env.APP_BASE_URL;
+      const apiBaseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_BASE_URL || appBaseUrl;
+
+      const preferenceData = {
+        items,
+        payer: {
+          name:    owner.name.split(' ')[0],
+          surname: owner.name.split(' ').slice(1).join(' '),
+          email:   owner.email,
+        },
+        back_urls: {
+          success: `${appBaseUrl}/pago/exitoso`,
+          failure: `${appBaseUrl}/pago/fallido`,
+          pending: `${appBaseUrl}/pago/pendiente`,
+        },
+        auto_return: 'approved',
+        notification_url: `${apiBaseUrl}/api/mercadopago/webhook`,
+        external_reference: `${req.orgId}|${owner._id}|v2|${payablePeriods.join(',')}|${v2ExtraordinaryIds.join(',')}|${balanceAmount}|${Date.now()}`,
+        expires: true,
+        expiration_date_to: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      };
+
+      const result = await preference.create({ body: preferenceData });
+
+      logger.info(`Preferencia MP creada: ${result.id} — ${owner.name} — $${totalAmount} [org: ${req.orgId}]`);
+
+      return res.json({
+        success: true,
+        data: {
+          preferenceId: result.id,
+          initPoint:    result.init_point,
+          sandboxUrl:   result.sandbox_init_point,
+          periods:      payablePeriods,
+          extraordinaryIds: v2ExtraordinaryIds,
+          balanceAmount,
+          totalAmount,
+        },
+      });
+    }
 
     // Períodos a pagar: si se envían desde el frontend, usarlos; si no, el período vigente
     const rawPeriods = req.body?.periods;
@@ -304,22 +646,23 @@ exports.webhook = async (req, res) => {
       if (mpData.preference_id) {
         paymentList = await Payment.find({
           mpPreferenceId: mpData.preference_id,
-          status:         'pending',
+          status:         { $in: ['pending', 'approved'] },
         }).populate('owner', 'name email unit fcmToken');
       }
 
       // Fallback: buscar por external_reference (compatibilidad hacia atrás)
       if (!paymentList.length && mpData.external_reference) {
-        const parts      = mpData.external_reference.split('|');
-        const [refOrgId, ownerId, monthCodes] = parts;
-        const months     = monthCodes?.split(',').filter(Boolean) || [];
+        const ref = parseExternalReference(mpData.external_reference);
+        const refOrgId = ref?.orgId;
+        const ownerId = ref?.ownerId;
+        const months = ref?.periods || [];
         if (months.length > 0) {
           paymentList = await Payment.find({
             organization:  refOrgId,
             owner:         ownerId,
             month:         { $in: months },
             paymentMethod: 'mercadopago',
-            status:        'pending',
+            status:        { $in: ['pending', 'approved'] },
           }).populate('owner', 'name email unit fcmToken');
         }
       }
@@ -328,7 +671,7 @@ exports.webhook = async (req, res) => {
         // Sin registro previo: el pago fue iniciado sin crear registro anticipado.
         // Para approved/pending creamos el registro ahora desde external_reference.
         if (['rejected', 'cancelled'].includes(mpData.status)) {
-          logger.info(`Webhook MP: ${mpData.status} sin registro previo — ${mpData.external_reference}`);
+          logger.info(`Webhook MP: ${mpData.status} sin registro previo � ${mpData.external_reference}`);
           return;
         }
 
@@ -337,70 +680,9 @@ exports.webhook = async (req, res) => {
           return;
         }
 
-        const parts = mpData.external_reference.split('|');
-        const [refOrgId, refOwnerId, monthCodes] = parts;
-        const refMonths = monthCodes?.split(',').filter(Boolean) || [];
-
-        if (!refOwnerId || refMonths.length === 0) {
-          logger.warn(`Webhook MP: external_reference incompleto: ${mpData.external_reference}`);
-          return;
-        }
-
-        // Excluir períodos que ya tienen pago activo (idempotencia + respeto al índice único)
-        const existingActive = await Payment.find({
-          organization: refOrgId,
-          owner:        refOwnerId,
-          month:        { $in: refMonths },
-          status:       { $in: ['pending', 'approved'] },
-        }).select('month');
-        const activeSet  = new Set(existingActive.map(p => p.month));
-        const newMonths  = refMonths.filter(m => !activeSet.has(m));
-
-        if (newMonths.length === 0) {
-          logger.info(`Webhook MP: todos los períodos ya tienen pago activo para ${refOwnerId}`);
-          return;
-        }
-
-        const [refOrg, refMembership] = await Promise.all([
-          Organization.findById(refOrgId),
-          OrganizationMember.findOne({ user: refOwnerId, organization: refOrgId, role: 'owner' }).select('_id'),
-        ]);
-        const monthlyFee = refOrg?.monthlyFee || 0;
-
-        // Calcular monto desde unidades activas del propietario
-        const refUnits = await Unit.find({ owner: refOwnerId, active: true, organization: refOrgId }).sort({ name: 1 });
-        const unitAmount = refUnits.length > 0
-          ? refUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
-          : monthlyFee;
-        const unitsSnapshot   = refUnits.map(u => u._id);
-        const breakdownSnapshot = refUnits.map(u => ({
-          unit:   u._id,
-          name:   u.name,
-          amount: calcUnitFee(u, monthlyFee),
-        }));
-
-        const created = await Payment.insertMany(
-          newMonths.map(month => ({
-            organization:   refOrgId,
-            owner:          refOwnerId,
-            membership:     refMembership?._id,
-            month,
-            amount:         unitAmount,
-            status:         'pending',
-            paymentMethod:  'mercadopago',
-            type:           'monthly',
-            mpPreferenceId: mpData.preference_id,
-            units:          unitsSnapshot,
-            breakdown:      breakdownSnapshot,
-          }))
-        );
-
-        paymentList = await Payment.find({ _id: { $in: created.map(p => p._id) } })
-          .populate('owner', 'name email unit fcmToken');
-
-        logger.info(`Webhook MP: creados ${created.length} registro(s) desde external_reference — ${refOwnerId}`);
+        paymentList = await createPaymentsFromMPReference(mpData);
+        if (!paymentList.length) return;
       }
-
       // Actualizar todos los pagos
       for (const payment of paymentList) {
         payment.mpPaymentId = String(data.id);

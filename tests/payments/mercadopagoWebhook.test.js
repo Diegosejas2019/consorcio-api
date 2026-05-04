@@ -1,8 +1,11 @@
 const mockMPPaymentGet = jest.fn();
+const mockPreferenceCreate = jest.fn();
 
 jest.mock('mercadopago', () => ({
   MercadoPagoConfig: jest.fn().mockImplementation(config => config),
-  Preference:        jest.fn(),
+  Preference:        jest.fn().mockImplementation(() => ({
+    create: mockPreferenceCreate,
+  })),
   Payment:           jest.fn().mockImplementation(() => ({
     get: mockMPPaymentGet,
   })),
@@ -30,6 +33,7 @@ const OrganizationMember = require('../../src/models/OrganizationMember');
 const Payment = require('../../src/models/Payment');
 const Unit = require('../../src/models/Unit');
 const User = require('../../src/models/User');
+const Expense = require('../../src/models/Expense');
 const emailService = require('../../src/services/emailService');
 const firebaseService = require('../../src/services/firebaseService');
 const receiptService = require('../../src/services/receiptService');
@@ -37,8 +41,15 @@ const { signToken } = require('../../src/middleware/auth');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
-afterEach(async () => {
+beforeEach(() => {
   jest.clearAllMocks();
+  mockPreferenceCreate.mockResolvedValue({
+    id: 'pref-test',
+    init_point: 'https://mp.example.com/init',
+    sandbox_init_point: 'https://mp.example.com/sandbox',
+  });
+});
+afterEach(async () => {
   await dbHelper.clear();
 });
 
@@ -51,6 +62,108 @@ async function waitForPayment(filter, predicate = Boolean) {
   }
   return Payment.findOne(filter);
 }
+
+describe('POST /api/mercadopago/preference', () => {
+  test('crea preferencia para pagar saldo anterior sin período', async () => {
+    const org = await Organization.create({
+      name:          'Org MP Balance',
+      slug:          `org-mp-balance-${Date.now()}`,
+      businessType:  'consorcio',
+      monthlyFee:    10000,
+      feePeriodCode: '2026-05',
+      mpAccessToken: 'TEST_ACCESS_TOKEN',
+    });
+    const owner = await User.create({
+      name: 'Owner Balance',
+      email: `owner-balance-${Date.now()}@test.com`,
+      password: 'password123',
+      role: 'owner',
+      organization: org._id,
+      isActive: true,
+    });
+    const membership = await OrganizationMember.create({
+      user: owner._id,
+      organization: org._id,
+      role: 'owner',
+      balance: -25000,
+      isDebtor: true,
+    });
+    const token = signToken(owner._id, { organizationId: org._id, role: 'owner', membershipId: membership._id });
+
+    const res = await request(app)
+      .post('/api/mercadopago/preference')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ balanceAmount: 25000 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.balanceAmount).toBe(25000);
+    expect(res.body.data.totalAmount).toBe(25000);
+    const body = mockPreferenceCreate.mock.calls[0][0].body;
+    expect(body.items[0]).toEqual(expect.objectContaining({
+      title: expect.stringContaining('Saldo anterior'),
+      unit_price: 25000,
+    }));
+    expect(body.external_reference).toContain('|v2||');
+  });
+
+  test('crea preferencia para gasto extraordinario sin período mensual', async () => {
+    const org = await Organization.create({
+      name:          'Org MP Extra',
+      slug:          `org-mp-extra-${Date.now()}`,
+      businessType:  'consorcio',
+      monthlyFee:    10000,
+      feePeriodCode: '2026-05',
+      mpAccessToken: 'TEST_ACCESS_TOKEN',
+    });
+    const owner = await User.create({
+      name: 'Owner Extra',
+      email: `owner-extra-${Date.now()}@test.com`,
+      password: 'password123',
+      role: 'owner',
+      organization: org._id,
+      isActive: true,
+    });
+    const membership = await OrganizationMember.create({
+      user: owner._id,
+      organization: org._id,
+      role: 'owner',
+    });
+    await Unit.create({
+      organization: org._id,
+      owner: owner._id,
+      name: 'Lote 2',
+      status: 'occupied',
+      active: true,
+    });
+    const expense = await Expense.create({
+      organization: org._id,
+      description: 'Reparación portón',
+      category: 'maintenance',
+      amount: 8000,
+      date: new Date('2026-05-02'),
+      expenseType: 'extraordinary',
+      isChargeable: true,
+      extraordinaryBillingMode: 'fixed_total',
+      createdBy: owner._id,
+    });
+    const token = signToken(owner._id, { organizationId: org._id, role: 'owner', membershipId: membership._id });
+
+    const res = await request(app)
+      .post('/api/mercadopago/preference')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ extraordinaryIds: [expense._id.toString()] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.periods).toEqual([]);
+    expect(res.body.data.extraordinaryIds).toEqual([expense._id.toString()]);
+    const body = mockPreferenceCreate.mock.calls[0][0].body;
+    expect(body.items[0]).toEqual(expect.objectContaining({
+      title: expect.stringContaining('Gasto extraordinario'),
+      unit_price: 8000,
+    }));
+    expect(body.external_reference).toContain(`|v2||${expense._id}|0|`);
+  });
+});
 
 describe('POST /api/mercadopago/webhook', () => {
   test('operación MP approved crea pago pendiente de aprobación', async () => {
