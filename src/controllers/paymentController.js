@@ -439,7 +439,10 @@ exports.getReceipt = async (req, res, next) => {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
-    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
+    const ownsPayment = payment.owner?.toString() === req.user.id
+      || (req.membership?._id && payment.membership?.toString() === req.membership._id.toString());
+
+    if (req.user.role === 'owner' && !ownsPayment) {
       return res.status(403).json({ success: false, message: 'Acceso denegado.' });
     }
 
@@ -493,7 +496,10 @@ exports.getSystemReceipt = async (req, res, next) => {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
-    if (req.user.role === 'owner' && payment.owner.toString() !== req.user.id) {
+    const ownsPayment = payment.owner?.toString() === req.user.id
+      || (req.membership?._id && payment.membership?.toString() === req.membership._id.toString());
+
+    if (req.user.role === 'owner' && !ownsPayment) {
       return res.status(403).json({ success: false, message: 'Acceso denegado.' });
     }
 
