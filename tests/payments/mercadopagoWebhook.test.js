@@ -18,6 +18,10 @@ jest.mock('../../src/services/emailService', () => ({
   sendPaymentRejected: jest.fn().mockResolvedValue(null),
 }));
 
+jest.mock('../../src/services/receiptService', () => ({
+  generateAndStoreReceipt: jest.fn().mockResolvedValue({ systemReceipt: { url: 'https://cdn.example.com/recibo.pdf' } }),
+}));
+
 const request = require('supertest');
 const app = require('../../src/app');
 const dbHelper = require('../helpers/dbHelper');
@@ -28,6 +32,7 @@ const Unit = require('../../src/models/Unit');
 const User = require('../../src/models/User');
 const emailService = require('../../src/services/emailService');
 const firebaseService = require('../../src/services/firebaseService');
+const receiptService = require('../../src/services/receiptService');
 const { signToken } = require('../../src/middleware/auth');
 
 beforeAll(() => dbHelper.connect());
@@ -103,8 +108,9 @@ describe('POST /api/mercadopago/webhook', () => {
       p => p.mpStatus === 'approved'
     );
     expect(payment).toBeTruthy();
-    expect(payment.status).toBe('pending');
+    expect(payment.status).toBe('approved');
     expect(payment.paymentMethod).toBe('mercadopago');
+    expect(payment.type).toBe('monthly');
     expect(payment.mpStatus).toBe('approved');
     expect(payment.mpDetail).toBe('accredited');
     expect(payment.mpPaymentId).toBe('123456');
@@ -112,15 +118,16 @@ describe('POST /api/mercadopago/webhook', () => {
     expect(payment.membership.toString()).toBe(membership._id.toString());
 
     const updatedMembership = await OrganizationMember.findById(membership._id);
-    expect(updatedMembership.isDebtor).toBe(true);
-    expect(updatedMembership.balance).toBe(-10000);
+    expect(updatedMembership.isDebtor).toBe(false);
+    expect(updatedMembership.balance).toBe(0);
 
-    expect(emailService.sendPaymentApproved).not.toHaveBeenCalled();
+    expect(receiptService.generateAndStoreReceipt).toHaveBeenCalledWith(payment._id);
+    expect(emailService.sendPaymentApproved).toHaveBeenCalled();
     expect(firebaseService.sendToUser).toHaveBeenCalledWith(
       owner._id,
       expect.objectContaining({
-        title: 'Pago recibido',
-        data: expect.objectContaining({ type: 'payment_pending_approval' }),
+        title: 'Pago aprobado',
+        data: expect.objectContaining({ type: 'payment_approved' }),
       })
     );
   });
@@ -169,10 +176,10 @@ describe('POST /api/mercadopago/webhook', () => {
 
     const payment = await waitForPayment({ owner: owner._id, month: '2026-05', mpPaymentId: '456789' });
     expect(payment).toBeTruthy();
-    expect(payment.status).toBe('pending');
+    expect(payment.status).toBe('approved');
     expect(payment.mpStatus).toBe('approved');
-    expect(payment.reviewedAt).toBeUndefined();
-    expect(emailService.sendPaymentApproved).not.toHaveBeenCalled();
+    expect(payment.reviewedAt).toBeInstanceOf(Date);
+    expect(emailService.sendPaymentApproved).toHaveBeenCalled();
   });
 });
 
@@ -235,18 +242,23 @@ describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
     expect(res.body.data.payments).toEqual([
       expect.objectContaining({
         month:  '2026-02',
-        status: 'pending',
+        status: 'approved',
         amount: 15000,
       }),
     ]);
 
     const payment = await Payment.findOne({ owner: owner._id, month: '2026-02' });
     expect(payment).toBeTruthy();
-    expect(payment.status).toBe('pending');
+    expect(payment.status).toBe('approved');
     expect(payment.paymentMethod).toBe('mercadopago');
+    expect(payment.type).toBe('monthly');
     expect(payment.mpPaymentId).toBe('157681535942');
     expect(payment.mpStatus).toBe('approved');
     expect(payment.mpPreferenceId).toBe('pref-callback');
     expect(payment.membership.toString()).toBe(membership._id.toString());
+
+    const updatedMembership = await OrganizationMember.findById(membership._id);
+    expect(updatedMembership.isDebtor).toBe(false);
+    expect(updatedMembership.balance).toBe(0);
   });
 });

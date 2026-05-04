@@ -299,7 +299,8 @@ const generatePDF = async (html) => {
 // ── Upload a Cloudinary ───────────────────────────────────────
 
 const uploadReceipt = async (buffer, receiptNumber) => {
-  const b64     = buffer.toString('base64');
+  const pdfBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const b64     = pdfBuffer.toString('base64');
   const dataUri = `data:application/pdf;base64,${b64}`;
 
   const result = await cloudinary.uploader.upload(dataUri, {

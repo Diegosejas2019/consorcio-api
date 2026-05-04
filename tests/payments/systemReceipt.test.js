@@ -36,11 +36,13 @@ const dbHelper       = require('../helpers/dbHelper');
 const { createOwnerWithToken } = require('../helpers/factories');
 const Payment        = require('../../src/models/Payment');
 const receiptService = require('../../src/services/receiptService');
+const originalFetch  = global.fetch;
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
 afterEach(async () => {
   jest.clearAllMocks();
+  global.fetch = originalFetch;
   await dbHelper.clear();
 });
 
@@ -66,6 +68,40 @@ describe('GET /api/payments/:id/system-receipt', () => {
     expect(res.body.data.url).toBe('https://cdn.example.com/recibo.pdf');
     expect(res.body.data.receiptNumber).toBe('REC-00000001');
     expect(receiptService.generateAndStoreReceipt).not.toHaveBeenCalled();
+  });
+
+  test('descarga el recibo como PDF autenticado', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    const payment = await Payment.create({
+      organization: orgId,
+      owner:        user._id,
+      month:        '2026-04',
+      amount:       15000,
+      status:       'approved',
+      systemReceipt: { url: 'https://cdn.example.com/recibo.pdf', publicId: 'recibo_1' },
+      receiptNumber: 'REC-00000001',
+      receiptIssuedAt: new Date('2026-05-01T00:00:00.000Z'),
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok:      true,
+      headers: { get: (name) => (name.toLowerCase() === 'content-length' ? '4' : null) },
+      body:    new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+          controller.close();
+        },
+      }),
+    });
+
+    const res = await request(app)
+      .get(`/api/payments/${payment._id}/system-receipt?download=1`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/pdf');
+    expect(res.headers['content-disposition']).toContain('filename="REC-00000001.pdf"');
+    expect(global.fetch).toHaveBeenCalledWith('https://cdn.example.com/recibo.pdf');
   });
 
   test('genera el recibo bajo demanda para pagos aprobados historicos sin PDF', async () => {

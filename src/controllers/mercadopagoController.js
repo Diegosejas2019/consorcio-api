@@ -8,9 +8,47 @@ const Organization = require('../models/Organization');
 const { calcUnitFee } = require('./unitController');
 const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
+const receiptService = require('../services/receiptService');
 const logger  = require('../config/logger');
 
-async function ensurePendingPaymentsFromMPData(mpData) {
+async function settleOwnerAccount(payment) {
+  const ownerId = payment.owner?._id || payment.owner;
+
+  if (payment.type === 'balance') {
+    const updatedMember = await OrganizationMember.findOneAndUpdate(
+      { user: ownerId, organization: payment.organization, role: 'owner' },
+      { $inc: { balance: payment.amount } },
+      { new: true }
+    );
+    if ((updatedMember?.balance ?? -1) >= 0) {
+      await OrganizationMember.updateOne(
+        { user: ownerId, organization: payment.organization, role: 'owner' },
+        { isDebtor: false }
+      );
+    }
+    return;
+  }
+
+  await OrganizationMember.updateOne(
+    { user: ownerId, organization: payment.organization, role: 'owner' },
+    { isDebtor: false, balance: 0 }
+  );
+}
+
+async function generateReceiptsForApprovedMPPayments(paymentList) {
+  const approvedPayments = paymentList.filter(payment => payment.status === 'approved' && !payment.systemReceipt?.url);
+  const results = await Promise.allSettled(
+    approvedPayments.map(payment => receiptService.generateAndStoreReceipt(payment._id))
+  );
+
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      logger.error(`[MercadoPago] Error generando recibo ${approvedPayments[index]?._id}: ${result.reason?.message}`);
+    }
+  });
+}
+
+async function ensurePaymentsFromMPData(mpData) {
   if (!mpData?.external_reference || ['rejected', 'cancelled'].includes(mpData.status)) {
     return [];
   }
@@ -79,6 +117,7 @@ async function ensurePendingPaymentsFromMPData(mpData) {
         amount:         unitAmount,
         status:         'pending',
         paymentMethod:  'mercadopago',
+        type:           'monthly',
         mpPreferenceId: mpData.preference_id,
         units:          unitsSnapshot,
         breakdown:      breakdownSnapshot,
@@ -96,13 +135,16 @@ async function ensurePendingPaymentsFromMPData(mpData) {
     payment.mpStatus    = mpData.status;
     payment.mpDetail    = mpData.status_detail;
     if (mpData.status === 'approved') {
-      payment.status = 'pending';
+      payment.status     = 'approved';
+      payment.reviewedAt = payment.reviewedAt || new Date();
     } else if (['rejected', 'cancelled'].includes(mpData.status)) {
       payment.status        = 'rejected';
       payment.rejectionNote = `Rechazado por MercadoPago: ${mpData.status_detail}`;
     }
   }
   await Promise.all(paymentList.map(p => p.save()));
+  await Promise.all(paymentList.filter(p => p.status === 'approved').map(settleOwnerAccount));
+  await generateReceiptsForApprovedMPPayments(paymentList);
 
   return paymentList;
 }
@@ -346,6 +388,7 @@ exports.webhook = async (req, res) => {
             amount:         unitAmount,
             status:         'pending',
             paymentMethod:  'mercadopago',
+            type:           'monthly',
             mpPreferenceId: mpData.preference_id,
             units:          unitsSnapshot,
             breakdown:      breakdownSnapshot,
@@ -365,7 +408,8 @@ exports.webhook = async (req, res) => {
         payment.mpDetail    = mpData.status_detail;
 
         if (mpData.status === 'approved') {
-          payment.status = 'pending';
+          payment.status     = 'approved';
+          payment.reviewedAt = payment.reviewedAt || new Date();
         } else if (['rejected', 'cancelled'].includes(mpData.status)) {
           payment.status        = 'rejected';
           payment.rejectionNote = `Rechazado por MercadoPago: ${mpData.status_detail}`;
@@ -373,6 +417,7 @@ exports.webhook = async (req, res) => {
       }
 
       await Promise.all(paymentList.map(p => p.save()));
+      await Promise.all(paymentList.filter(p => p.status === 'approved').map(settleOwnerAccount));
 
       const firstPayment  = paymentList[0];
       const ownerDoc      = firstPayment.owner;
@@ -383,15 +428,18 @@ exports.webhook = async (req, res) => {
           ? firstPayment.monthFormatted
           : `${paymentList.length} períodos`;
 
+        await generateReceiptsForApprovedMPPayments(paymentList);
+
         Promise.allSettled([
+          emailService.sendPaymentApproved(ownerDoc, firstPayment),
           firebaseService.sendToUser(ownerDoc._id, {
-            title: 'Pago recibido',
-            body:  `Recibimos tu pago de ${periodsSummary} por $${totalAmount.toLocaleString('es-AR')}. Quedó pendiente de aprobación.`,
-            data:  { type: 'payment_pending_approval', paymentId: firstPayment._id.toString() },
+            title: 'Pago aprobado',
+            body:  `Recibimos tu pago de ${periodsSummary} por $${totalAmount.toLocaleString('es-AR')}.`,
+            data:  { type: 'payment_approved', paymentId: firstPayment._id.toString() },
           }),
         ]);
 
-        logger.info(`Pago MP recibido pendiente de aprobación: ${paymentList.length} período(s) — ${ownerDoc?.name}`);
+        logger.info(`Pago MP aprobado: ${paymentList.length} período(s) — ${ownerDoc?.name}`);
 
       } else if (['rejected', 'cancelled'].includes(mpData.status)) {
         Promise.allSettled([
@@ -470,7 +518,7 @@ exports.getPaymentStatus = async (req, res, next) => {
     const client    = await getMPClient(req.orgId);
     const mpPayment = new MPPayment(client);
     const data      = await mpPayment.get({ id: req.params.mpPaymentId });
-    const payments  = await ensurePendingPaymentsFromMPData(data);
+    const payments  = await ensurePaymentsFromMPData(data);
 
     res.json({
       success: true,

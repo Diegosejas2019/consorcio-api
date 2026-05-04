@@ -512,6 +512,26 @@ exports.getSystemReceipt = async (req, res, next) => {
       receiptPayment = await receiptService.generateAndStoreReceipt(payment._id);
     }
 
+    if (req.query.download === '1') {
+      const receiptUrl = receiptPayment.systemReceipt.url;
+      const cloudRes = await fetch(receiptUrl);
+      if (!cloudRes.ok) {
+        logger.error(`System receipt proxy error: ${cloudRes.status} — paymentId: ${payment._id}`);
+        return res.status(502).json({ success: false, message: 'No se pudo obtener el recibo desde Cloudinary.' });
+      }
+
+      const filename = `${receiptPayment.receiptNumber || 'recibo'}.pdf`.replace(/"/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+      const contentLength = cloudRes.headers.get('content-length');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+
+      const { Readable } = require('stream');
+      Readable.fromWeb(cloudRes.body).pipe(res);
+      return;
+    }
+
     res.json({
       success: true,
       data: {
