@@ -10,6 +10,103 @@ const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const logger  = require('../config/logger');
 
+async function ensurePendingPaymentsFromMPData(mpData) {
+  if (!mpData?.external_reference || ['rejected', 'cancelled'].includes(mpData.status)) {
+    return [];
+  }
+
+  const parts = mpData.external_reference.split('|');
+  const [refOrgId, refOwnerId, monthCodes] = parts;
+  const refMonths = monthCodes?.split(',').filter(Boolean) || [];
+
+  if (!refOrgId || !refOwnerId || refMonths.length === 0) {
+    logger.warn(`MP reconcile: external_reference incompleto: ${mpData.external_reference}`);
+    return [];
+  }
+
+  let paymentList = await Payment.find({
+    organization:  refOrgId,
+    owner:         refOwnerId,
+    month:         { $in: refMonths },
+    paymentMethod: 'mercadopago',
+    status:        'pending',
+  }).populate('owner', 'name email unit fcmToken');
+
+  if (!paymentList.length && mpData.preference_id) {
+    paymentList = await Payment.find({
+      mpPreferenceId: mpData.preference_id,
+      status:         'pending',
+    }).populate('owner', 'name email unit fcmToken');
+  }
+
+  if (!paymentList.length) {
+    const existingActive = await Payment.find({
+      organization: refOrgId,
+      owner:        refOwnerId,
+      month:        { $in: refMonths },
+      status:       { $in: ['pending', 'approved'] },
+    }).select('month');
+    const activeSet = new Set(existingActive.map(p => p.month));
+    const newMonths = refMonths.filter(m => !activeSet.has(m));
+
+    if (!newMonths.length) {
+      logger.info(`MP reconcile: todos los períodos ya tienen pago activo para ${refOwnerId}`);
+      return [];
+    }
+
+    const [refOrg, refMembership] = await Promise.all([
+      Organization.findById(refOrgId),
+      OrganizationMember.findOne({ user: refOwnerId, organization: refOrgId, role: 'owner' }).select('_id'),
+    ]);
+    const monthlyFee = refOrg?.monthlyFee || 0;
+    const refUnits = await Unit.find({ owner: refOwnerId, active: true, organization: refOrgId }).sort({ name: 1 });
+    const unitAmount = refUnits.length > 0
+      ? refUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+      : monthlyFee;
+    const unitsSnapshot = refUnits.map(u => u._id);
+    const breakdownSnapshot = refUnits.map(u => ({
+      unit:   u._id,
+      name:   u.name,
+      amount: calcUnitFee(u, monthlyFee),
+    }));
+
+    const created = await Payment.insertMany(
+      newMonths.map(month => ({
+        organization:   refOrgId,
+        owner:          refOwnerId,
+        membership:     refMembership?._id,
+        month,
+        amount:         unitAmount,
+        status:         'pending',
+        paymentMethod:  'mercadopago',
+        mpPreferenceId: mpData.preference_id,
+        units:          unitsSnapshot,
+        breakdown:      breakdownSnapshot,
+      }))
+    );
+
+    paymentList = await Payment.find({ _id: { $in: created.map(p => p._id) } })
+      .populate('owner', 'name email unit fcmToken');
+
+    logger.info(`MP reconcile: creados ${created.length} registro(s) desde external_reference - ${refOwnerId}`);
+  }
+
+  for (const payment of paymentList) {
+    payment.mpPaymentId = String(mpData.id);
+    payment.mpStatus    = mpData.status;
+    payment.mpDetail    = mpData.status_detail;
+    if (mpData.status === 'approved') {
+      payment.status = 'pending';
+    } else if (['rejected', 'cancelled'].includes(mpData.status)) {
+      payment.status        = 'rejected';
+      payment.rejectionNote = `Rechazado por MercadoPago: ${mpData.status_detail}`;
+    }
+  }
+  await Promise.all(paymentList.map(p => p.save()));
+
+  return paymentList;
+}
+
 // ── Helper: instancia MP con credenciales de la organización ──
 async function getMPClient(orgId) {
   const org = await Organization.findById(orgId).select('+mpAccessToken');
@@ -68,7 +165,8 @@ exports.createPreference = async (req, res, next) => {
     const client     = await getMPClient(req.orgId);
     const preference = new Preference(client);
 
-    const baseUrl = process.env.APP_BASE_URL;
+    const appBaseUrl = process.env.APP_BASE_URL;
+    const apiBaseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_BASE_URL || appBaseUrl;
 
     const periodLabel = payablePeriods.length === 1
       ? org.feePeriodLabel
@@ -91,12 +189,12 @@ exports.createPreference = async (req, res, next) => {
         email:   owner.email,
       },
       back_urls: {
-        success: `${baseUrl}/pago/exitoso`,
-        failure: `${baseUrl}/pago/fallido`,
-        pending: `${baseUrl}/pago/pendiente`,
+        success: `${appBaseUrl}/pago/exitoso`,
+        failure: `${appBaseUrl}/pago/fallido`,
+        pending: `${appBaseUrl}/pago/pendiente`,
       },
       auto_return: 'approved',
-      notification_url: `${baseUrl}/api/mercadopago/webhook`,
+      notification_url: `${apiBaseUrl}/api/mercadopago/webhook`,
       // Formato: orgId|ownerId|period1,period2,...|timestamp
       external_reference: `${req.orgId}|${owner._id}|${payablePeriods.join(',')}|${Date.now()}`,
       expires: true,
@@ -372,6 +470,7 @@ exports.getPaymentStatus = async (req, res, next) => {
     const client    = await getMPClient(req.orgId);
     const mpPayment = new MPPayment(client);
     const data      = await mpPayment.get({ id: req.params.mpPaymentId });
+    const payments  = await ensurePendingPaymentsFromMPData(data);
 
     res.json({
       success: true,
@@ -382,6 +481,12 @@ exports.getPaymentStatus = async (req, res, next) => {
         amount:     data.transaction_amount,
         method:     data.payment_method_id,
         approvedAt: data.date_approved,
+        payments:   payments.map(p => ({
+          id:     p._id,
+          month:  p.month,
+          status: p.status,
+          amount: p.amount,
+        })),
       },
     });
   } catch (err) {

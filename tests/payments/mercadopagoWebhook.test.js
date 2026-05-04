@@ -28,6 +28,7 @@ const Unit = require('../../src/models/Unit');
 const User = require('../../src/models/User');
 const emailService = require('../../src/services/emailService');
 const firebaseService = require('../../src/services/firebaseService');
+const { signToken } = require('../../src/middleware/auth');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
@@ -172,5 +173,80 @@ describe('POST /api/mercadopago/webhook', () => {
     expect(payment.mpStatus).toBe('approved');
     expect(payment.reviewedAt).toBeUndefined();
     expect(emailService.sendPaymentApproved).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
+  test('approved MP callback concilia y crea pago pendiente si no llegÃ³ webhook', async () => {
+    const org = await Organization.create({
+      name:          'Org MP Callback',
+      slug:          `org-mp-callback-${Date.now()}`,
+      businessType:  'consorcio',
+      monthlyFee:    15000,
+      mpAccessToken: 'TEST_ACCESS_TOKEN',
+    });
+
+    const owner = await User.create({
+      name:         'Owner Callback',
+      email:        `owner-callback-${Date.now()}@test.com`,
+      password:     'password123',
+      role:         'owner',
+      organization: org._id,
+      isActive:     true,
+    });
+
+    const membership = await OrganizationMember.create({
+      user:         owner._id,
+      organization: org._id,
+      role:         'owner',
+      isDebtor:     true,
+      balance:      -15000,
+    });
+
+    await Unit.create({
+      organization: org._id,
+      owner:        owner._id,
+      name:         'Lote 7',
+      status:       'occupied',
+      coefficient:  1,
+      active:       true,
+    });
+
+    mockMPPaymentGet.mockResolvedValue({
+      id:                 157681535942,
+      status:             'approved',
+      status_detail:      'accredited',
+      preference_id:      'pref-callback',
+      external_reference: `${org._id}|${owner._id}|2026-02|1777918476256`,
+    });
+
+    const token = signToken(owner._id, {
+      organizationId: org._id,
+      role:           'owner',
+      membershipId:   membership._id,
+    });
+
+    const res = await request(app)
+      .get('/api/mercadopago/payment/157681535942')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('approved');
+    expect(res.body.data.payments).toEqual([
+      expect.objectContaining({
+        month:  '2026-02',
+        status: 'pending',
+        amount: 15000,
+      }),
+    ]);
+
+    const payment = await Payment.findOne({ owner: owner._id, month: '2026-02' });
+    expect(payment).toBeTruthy();
+    expect(payment.status).toBe('pending');
+    expect(payment.paymentMethod).toBe('mercadopago');
+    expect(payment.mpPaymentId).toBe('157681535942');
+    expect(payment.mpStatus).toBe('approved');
+    expect(payment.mpPreferenceId).toBe('pref-callback');
+    expect(payment.membership.toString()).toBe(membership._id.toString());
   });
 });
