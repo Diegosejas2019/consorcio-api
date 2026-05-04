@@ -43,6 +43,40 @@ describe('Units admin flows', () => {
     expect(res.body.data.skippedNames).toEqual(['Lote 2']);
   });
 
+  test('omite números existentes al crear unidades por rango aunque cambie el prefijo', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    await Unit.create([
+      { organization: orgId, name: 'Unidad 1', status: 'available', active: true },
+      { organization: orgId, name: 'UF-02', status: 'available', active: true },
+    ]);
+
+    const res = await request(app)
+      .post('/api/units/bulk')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ count: 4, start: 1, prefix: 'Lote' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.created).toBe(2);
+    expect(res.body.data.skipped).toBe(2);
+    expect(res.body.data.skippedNames).toEqual(['Lote 1', 'Lote 2']);
+
+    const units = await Unit.find({ organization: orgId, active: true }).sort({ name: 1 }).lean();
+    expect(units.map(u => u.name)).toEqual(['Lote 3', 'Lote 4', 'UF-02', 'Unidad 1']);
+  });
+
+  test('rechaza crear una unidad individual si el número ya existe con otro prefijo', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    await Unit.create({ organization: orgId, name: 'Lote 7', status: 'available', active: true });
+
+    const res = await request(app)
+      .post('/api/units')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'Unidad 007' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('ya existe');
+  });
+
   test('permite crear unidad para owner vinculado por membresia multi-org', async () => {
     const { token, orgId } = await createAdminWithToken();
     const otherOrg = await Organization.create({ name: 'Otra Org', slug: 'otra-org', businessType: 'consorcio' });

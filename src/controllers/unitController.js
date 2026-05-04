@@ -38,16 +38,25 @@ async function assignFallbackUnitId(ownerId, orgId, exceptUnitId = null) {
   await User.findByIdAndUpdate(ownerId, { unitId: nextUnit?._id || null });
 }
 
+function extractUnitNumber(name) {
+  const match = String(name ?? '').trim().match(/(\d+)\s*$/);
+  if (!match) return null;
+  return String(Number(match[1]));
+}
+
 async function ensureUnitNameAvailable(orgId, name, excludeId = null) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const existing = await Unit.findOne({
+  const unitNumber = extractUnitNumber(name);
+  const existing = await Unit.find({
     organization: orgId,
     active: true,
-    name: { $regex: `^${escaped}$`, $options: 'i' },
     ...(excludeId ? { _id: { $ne: excludeId } } : {}),
-  }).select('_id name');
+  }).select('_id name').lean();
 
-  return !existing;
+  return !existing.some(unit => {
+    const existingName = String(unit.name).trim();
+    if (existingName.toLowerCase() === name.trim().toLowerCase()) return true;
+    return unitNumber && extractUnitNumber(existingName) === unitNumber;
+  });
 }
 
 // ── GET /api/units — listar unidades ──────────────────────────
@@ -142,15 +151,21 @@ exports.bulkCreateUnits = async (req, res, next) => {
       .select('name')
       .lean();
     const existingNames = new Set(existing.map(u => String(u.name).trim().toLowerCase()));
+    const existingNumbers = new Set(
+      existing.map(u => extractUnitNumber(u.name)).filter(Boolean)
+    );
 
     const docs = [];
     const skipped = [];
     for (const name of names) {
-      if (existingNames.has(name.toLowerCase())) {
+      const normalizedName = name.toLowerCase();
+      const unitNumber = extractUnitNumber(name);
+      if (existingNames.has(normalizedName) || (unitNumber && existingNumbers.has(unitNumber))) {
         skipped.push(name);
         continue;
       }
-      existingNames.add(name.toLowerCase());
+      existingNames.add(normalizedName);
+      if (unitNumber) existingNumbers.add(unitNumber);
       docs.push({
         organization: req.orgId,
         owner: null,
