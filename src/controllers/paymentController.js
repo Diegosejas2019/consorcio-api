@@ -488,16 +488,21 @@ exports.getSystemReceipt = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Acceso denegado.' });
     }
 
+    if (payment.status !== 'approved') {
+      return res.status(400).json({ success: false, message: 'Solo se puede descargar el recibo de pagos aprobados.' });
+    }
+
+    let receiptPayment = payment;
     if (!payment.systemReceipt?.url) {
-      return res.status(404).json({ success: false, message: 'El recibo aún no fue generado.' });
+      receiptPayment = await receiptService.generateAndStoreReceipt(payment._id);
     }
 
     res.json({
       success: true,
       data: {
-        receiptNumber:   payment.receiptNumber,
-        receiptIssuedAt: payment.receiptIssuedAt,
-        url:             payment.systemReceipt.url,
+        receiptNumber:   receiptPayment.receiptNumber,
+        receiptIssuedAt: receiptPayment.receiptIssuedAt,
+        url:             receiptPayment.systemReceipt.url,
       },
     });
   } catch (err) {
