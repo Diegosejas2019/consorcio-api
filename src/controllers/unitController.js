@@ -1,6 +1,7 @@
 const Unit         = require('../models/Unit');
 const User         = require('../models/User');
 const Organization = require('../models/Organization');
+const OrganizationMember = require('../models/OrganizationMember');
 const logger       = require('../config/logger');
 
 // ── Helper: calcular monto final de una unidad ────────────────
@@ -8,6 +9,46 @@ function calcUnitFee(unit, monthlyFee) {
   return unit.customFee != null ? unit.customFee : (monthlyFee * unit.coefficient);
 }
 exports.calcUnitFee = calcUnitFee;
+
+async function findActiveOwnerInOrg(ownerId, orgId) {
+  if (!ownerId) return null;
+
+  const membership = await OrganizationMember.findOne({
+    user: ownerId,
+    organization: orgId,
+    role: 'owner',
+    isActive: true,
+  }).populate('user', 'name email role isActive unitId');
+
+  if (membership?.user?.isActive !== false) return membership.user;
+
+  // Backward compatibility para usuarios legacy sin OrganizationMember.
+  return User.findOne({ _id: ownerId, organization: orgId, role: 'owner', isActive: true });
+}
+
+async function assignFallbackUnitId(ownerId, orgId, exceptUnitId = null) {
+  if (!ownerId) return;
+  const nextUnit = await Unit.findOne({
+    owner: ownerId,
+    organization: orgId,
+    active: true,
+    ...(exceptUnitId ? { _id: { $ne: exceptUnitId } } : {}),
+  }).sort({ name: 1 }).select('_id');
+
+  await User.findByIdAndUpdate(ownerId, { unitId: nextUnit?._id || null });
+}
+
+async function ensureUnitNameAvailable(orgId, name, excludeId = null) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const existing = await Unit.findOne({
+    organization: orgId,
+    active: true,
+    name: { $regex: `^${escaped}$`, $options: 'i' },
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  }).select('_id name');
+
+  return !existing;
+}
 
 // ── GET /api/units — listar unidades ──────────────────────────
 // Admin: puede filtrar por ?ownerId=. Owner: solo las suyas.
@@ -47,10 +88,14 @@ exports.createUnit = async (req, res, next) => {
     const { ownerId, name, coefficient, customFee } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ success: false, message: 'El nombre de la unidad es obligatorio.' });
+    const unitName = name.trim();
+    if (!(await ensureUnitNameAvailable(req.orgId, unitName))) {
+      return res.status(400).json({ success: false, message: `La unidad "${unitName}" ya existe.` });
+    }
 
     let owner = null;
     if (ownerId) {
-      owner = await User.findOne({ _id: ownerId, organization: req.orgId, role: 'owner', isActive: true });
+      owner = await findActiveOwnerInOrg(ownerId, req.orgId);
       if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
     }
 
@@ -58,7 +103,7 @@ exports.createUnit = async (req, res, next) => {
       organization: req.orgId,
       owner:        ownerId || null,
       status:       ownerId ? 'occupied' : 'available',
-      name:         name.trim(),
+      name:         unitName,
       coefficient:  coefficient != null ? Number(coefficient) : 1,
       customFee:    customFee != null && customFee !== '' ? Number(customFee) : null,
     });
@@ -77,6 +122,63 @@ exports.createUnit = async (req, res, next) => {
   }
 };
 
+// ── POST /api/units/bulk — crear unidades por rango (admin) ───
+exports.bulkCreateUnits = async (req, res, next) => {
+  try {
+    const count = Number(req.body.count);
+    const start = Number(req.body.start ?? 1);
+    const prefix = String(req.body.prefix ?? 'Lote ').trimEnd();
+    const separator = prefix ? ' ' : '';
+
+    if (!Number.isInteger(count) || count < 1 || count > 1000) {
+      return res.status(400).json({ success: false, message: 'La cantidad debe ser un número entero entre 1 y 1000.' });
+    }
+    if (!Number.isInteger(start) || start < 0) {
+      return res.status(400).json({ success: false, message: 'El número inicial debe ser un entero mayor o igual a 0.' });
+    }
+
+    const names = Array.from({ length: count }, (_, i) => `${prefix}${separator}${start + i}`.trim());
+    const existing = await Unit.find({ organization: req.orgId, active: true })
+      .select('name')
+      .lean();
+    const existingNames = new Set(existing.map(u => String(u.name).trim().toLowerCase()));
+
+    const docs = [];
+    const skipped = [];
+    for (const name of names) {
+      if (existingNames.has(name.toLowerCase())) {
+        skipped.push(name);
+        continue;
+      }
+      existingNames.add(name.toLowerCase());
+      docs.push({
+        organization: req.orgId,
+        owner: null,
+        status: 'available',
+        name,
+        coefficient: 1,
+        customFee: null,
+        active: true,
+      });
+    }
+
+    const created = docs.length ? await Unit.insertMany(docs, { ordered: false }) : [];
+
+    logger.info(`Unidades creadas por rango: ${created.length}/${count} org=${req.orgId}`);
+    res.status(201).json({
+      success: true,
+      data: {
+        created: created.length,
+        skipped: skipped.length,
+        skippedNames: skipped,
+        units: created,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── PATCH /api/units/:id — actualizar unidad (admin) ──────────
 exports.updateUnit = async (req, res, next) => {
   try {
@@ -88,6 +190,9 @@ exports.updateUnit = async (req, res, next) => {
     // Normalizar: nombre trim, customFee null si vacío
     if (update.name)      update.name      = update.name.trim();
     if (update.customFee === '' || update.customFee === null) update.customFee = null;
+    if (update.name && !(await ensureUnitNameAvailable(req.orgId, update.name, req.params.id))) {
+      return res.status(400).json({ success: false, message: `La unidad "${update.name}" ya existe.` });
+    }
 
     const unit = await Unit.findOneAndUpdate(
       { _id: req.params.id, organization: req.orgId },
@@ -118,7 +223,7 @@ exports.deleteUnit = async (req, res, next) => {
 
     // Liberar al propietario si tenía asignada esta unidad
     if (unit.owner) {
-      await User.findByIdAndUpdate(unit.owner, { unitId: null });
+      await assignFallbackUnitId(unit.owner, req.orgId, unit._id);
     }
 
     logger.info(`Unidad desactivada: ${unit._id} — ${unit.name}`);
@@ -136,18 +241,13 @@ exports.assignOwner = async (req, res, next) => {
 
     const [unit, owner] = await Promise.all([
       Unit.findOne({ _id: req.params.id, organization: req.orgId, active: true }),
-      User.findOne({ _id: ownerId, organization: req.orgId, role: 'owner', isActive: true }),
+      findActiveOwnerInOrg(ownerId, req.orgId),
     ]);
 
     if (!unit)  return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
     if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
     if (unit.status === 'occupied') {
       return res.status(400).json({ success: false, message: 'La unidad ya está ocupada.' });
-    }
-
-    // Liberar unidad anterior del owner si tenía una
-    if (owner.unitId) {
-      await Unit.findByIdAndUpdate(owner.unitId, { owner: null, status: 'available' });
     }
 
     await Promise.all([
@@ -170,9 +270,9 @@ exports.releaseOwner = async (req, res, next) => {
     if (!unit.owner) return res.status(400).json({ success: false, message: 'La unidad no tiene propietario asignado.' });
 
     await Promise.all([
-      User.findByIdAndUpdate(unit.owner, { unitId: null }),
       Unit.findByIdAndUpdate(unit._id, { owner: null, status: 'available' }),
     ]);
+    await assignFallbackUnitId(unit.owner, req.orgId, unit._id);
 
     logger.info(`Unidad ${unit.name} liberada`);
     res.json({ success: true, message: 'Propietario liberado correctamente.' });

@@ -9,7 +9,51 @@ const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const XLSX    = require('xlsx');
 
 // Campos del User que son identidad global (no datos financieros por org)
-const USER_FIELDS = new Set(['name', 'email', 'password', 'unitId', 'phone', 'role', 'organization', 'createdBy', 'isActive']);
+const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'phone', 'role', 'organization', 'createdBy', 'isActive']);
+
+function normalizeUnitName(raw) {
+  return String(raw || '').trim().replace(/\s+/g, ' ');
+}
+
+async function findAssignableUnit(unitId, orgId, ownerId) {
+  const unit = await Unit.findOne({ _id: unitId, organization: orgId, active: true });
+  if (!unit) return { error: { status: 404, message: 'Unidad no encontrada.' } };
+  if (unit.status === 'occupied' && unit.owner?.toString() !== ownerId.toString()) {
+    return { error: { status: 400, message: 'La unidad ya está ocupada.' } };
+  }
+  return { unit };
+}
+
+async function validateLegacyUnitAvailable(orgId, unitName, ownerId = null) {
+  const normalized = normalizeUnitName(unitName);
+  if (!normalized) return null;
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const memberships = await OrganizationMember.find({ organization: orgId, role: 'owner', isActive: true })
+    .select('user')
+    .lean();
+  const ownerIds = memberships.map(m => m.user).filter(id => !ownerId || id.toString() !== ownerId.toString());
+
+  const legacyOwner = ownerIds.length
+    ? await User.findOne({
+        _id: { $in: ownerIds },
+        role: 'owner',
+        isActive: true,
+        unit: { $regex: `^${escaped}$`, $options: 'i' },
+      }).select('_id unit')
+    : null;
+  if (legacyOwner) return legacyOwner.unit || normalized;
+
+  const existingUnit = await Unit.findOne({
+    organization: orgId,
+    active: true,
+    name: { $regex: `^${escaped}$`, $options: 'i' },
+    owner: { $ne: ownerId || null },
+  }).select('name owner');
+  if (existingUnit?.owner) return existingUnit.name || normalized;
+
+  return null;
+}
 
 // ── GET /api/owners — listar todos (admin) ────────────────────
 exports.getAllOwners = async (req, res, next) => {
@@ -131,9 +175,16 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const allowed  = ['name', 'email', 'password', 'phone', 'percentage'];
+    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'percentage'];
     const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
+    if (ownerData.unit) {
+      ownerData.unit = normalizeUnitName(ownerData.unit);
+      const conflict = await validateLegacyUnitAvailable(req.orgId, ownerData.unit);
+      if (conflict) {
+        return res.status(400).json({ success: false, message: `La unidad ${conflict} ya está asignada a otro propietario.` });
+      }
+    }
 
     const initialDebtAmount = Number(req.body.initialDebtAmount ?? 0);
     if (initialDebtAmount < 0) {
@@ -163,6 +214,14 @@ exports.createOwner = async (req, res, next) => {
         if (membershipExists) {
           return res.status(400).json({ success: false, message: 'El usuario ya pertenece a esta organización.' });
         }
+        const preservedUnit = normalizeUnitName(ownerData.unit || existingActive.unit);
+        if (preservedUnit) {
+          const conflict = await validateLegacyUnitAvailable(req.orgId, preservedUnit, existingActive._id);
+          if (conflict) {
+            return res.status(400).json({ success: false, message: `La unidad ${conflict} ya está asignada a otro propietario.` });
+          }
+          ownerData.unit = preservedUnit;
+        }
         const { password: _p, ...rawUpdate } = ownerData;
         const updateFields = Object.fromEntries(Object.entries(rawUpdate).filter(([k]) => USER_FIELDS.has(k)));
         owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
@@ -171,6 +230,14 @@ exports.createOwner = async (req, res, next) => {
       } else {
         const existingInactive = await User.findOne({ email: req.body.email, isActive: false }).select('+password');
         if (existingInactive) {
+          const preservedUnit = normalizeUnitName(ownerData.unit || existingInactive.unit);
+          if (preservedUnit) {
+            const conflict = await validateLegacyUnitAvailable(req.orgId, preservedUnit, existingInactive._id);
+            if (conflict) {
+              return res.status(400).json({ success: false, message: `La unidad ${conflict} ya está asignada a otro propietario.` });
+            }
+            ownerData.unit = preservedUnit;
+          }
           const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
           Object.assign(existingInactive, inactiveUpdate, { isActive: true });
           if (tempPassword) existingInactive.password = tempPassword;
@@ -209,11 +276,8 @@ exports.createOwner = async (req, res, next) => {
 
     // Asignar unidad si se proveyó unitId
     if (req.body.unitId) {
-      const unit = await Unit.findOne({ _id: req.body.unitId, organization: req.orgId, active: true });
-      if (!unit) return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
-      if (unit.status === 'occupied' && unit.owner?.toString() !== owner._id.toString()) {
-        return res.status(400).json({ success: false, message: 'La unidad ya está ocupada.' });
-      }
+      const { unit, error } = await findAssignableUnit(req.body.unitId, req.orgId, owner._id);
+      if (error) return res.status(error.status).json({ success: false, message: error.message });
       await Promise.all([
         Unit.findByIdAndUpdate(unit._id, { owner: owner._id, status: 'occupied' }),
         User.findByIdAndUpdate(owner._id, { unitId: unit._id }),
@@ -266,11 +330,8 @@ exports.updateOwner = async (req, res, next) => {
           await Unit.findByIdAndUpdate(prevUnitId, { owner: null, status: 'available' });
         }
         if (newUnitId) {
-          const newUnit = await Unit.findOne({ _id: newUnitId, organization: req.orgId, active: true });
-          if (!newUnit) return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
-          if (newUnit.status === 'occupied' && newUnit.owner?.toString() !== req.params.id) {
-            return res.status(400).json({ success: false, message: 'La unidad ya está ocupada.' });
-          }
+          const { error } = await findAssignableUnit(newUnitId, req.orgId, req.params.id);
+          if (error) return res.status(error.status).json({ success: false, message: error.message });
           await Unit.findByIdAndUpdate(newUnitId, { owner: req.params.id, status: 'occupied' });
         }
         userUpdate.unitId = newUnitId;
@@ -315,9 +376,9 @@ exports.deleteOwner = async (req, res, next) => {
     );
     if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
 
-    // Liberar unidad asignada a este propietario
+    // Liberar todas las unidades asignadas a este propietario en esta org.
     await Promise.all([
-      Unit.findOneAndUpdate(
+      Unit.updateMany(
         { owner: req.params.id, organization: req.orgId, active: true },
         { owner: null, status: 'available' }
       ),

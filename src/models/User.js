@@ -42,6 +42,11 @@ const userSchema = new mongoose.Schema(
       ref: 'Unit',
       default: null,
     },
+    // @deprecated — compatibilidad con datos legacy; el modelo relacional es Unit.
+    unit: {
+      type: String,
+      trim: true,
+    },
     phone: {
       type: String,
       trim: true,
