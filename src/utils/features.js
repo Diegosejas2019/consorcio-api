@@ -6,6 +6,7 @@ const KNOWN_FEATURES = [
   'notices',
   'expenses',
   'providers',
+  'documents',
 ];
 
 const DEFAULT_DISABLED_FEATURES = new Set(['visits', 'reservations']);

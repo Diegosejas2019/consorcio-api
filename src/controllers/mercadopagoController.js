@@ -218,19 +218,31 @@ async function createPaymentsFromMPReference(mpData) {
       status:       'pending',
     });
     if (!pendingBalance) {
-      docs.push({
-        organization:   ref.orgId,
-        owner:          ref.ownerId,
-        membership:     ctx.membership?._id,
-        amount:         ref.balanceAmount,
-        status:         'pending',
-        paymentMethod:  'mercadopago',
-        type:           'balance',
-        mpPreferenceId: mpData.preference_id,
-      });
+      const currentDebt = Math.abs(Math.min(Number(ctx.membership?.balance || 0), 0));
+      const duplicateMPBalance = mpData.id
+        ? await Payment.findOne({
+            organization: ref.orgId,
+            owner:        ref.ownerId,
+            type:         'balance',
+            mpPaymentId:  String(mpData.id),
+            status:       { $in: ['pending', 'approved'] },
+          })
+        : null;
+
+      if (!duplicateMPBalance && currentDebt > 0) {
+        docs.push({
+          organization:   ref.orgId,
+          owner:          ref.ownerId,
+          membership:     ctx.membership?._id,
+          amount:         Math.min(ref.balanceAmount, currentDebt),
+          status:         'pending',
+          paymentMethod:  'mercadopago',
+          type:           'balance',
+          mpPreferenceId: mpData.preference_id,
+        });
+      }
     }
   }
-
   if (!docs.length) {
     logger.info(`MP reconcile: no hay conceptos nuevos para ${ref.ownerId}`);
     return [];

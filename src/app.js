@@ -97,6 +97,7 @@ app.use('/api/config',        require('./routes/config'));
 app.use('/api/mercadopago',   require('./routes/mercadopago'));
 app.use('/api/providers',     require('./routes/providers'));
 app.use('/api/expenses',      require('./routes/expenses'));
+app.use('/api/organization-documents', require('./routes/organizationDocumentRoutes'));
 app.use('/api/reports',       require('./routes/reports'));
 app.use('/api/votes',         require('./routes/votes'));
 app.use('/api/units',         require('./routes/units'));
@@ -125,6 +126,7 @@ app.get('/api', (req, res) => {
       mercadopago:   '/api/mercadopago',
       providers:     '/api/providers',
       expenses:      '/api/expenses',
+      organizationDocuments: '/api/organization-documents',
       supportTickets: '/api/support-tickets',
     },
   });

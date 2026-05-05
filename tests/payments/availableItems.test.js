@@ -8,6 +8,7 @@ jest.mock('../../src/config/cloudinary', () => {
     uploadClaim: memoryUpload,
     uploadNotice: memoryUpload,
     uploadEmployee: memoryUpload,
+    uploadOrganizationDocument: memoryUpload,
     deleteCloudinaryAttachments: jest.fn().mockResolvedValue(null),
     cloudinary: { uploader: { destroy: jest.fn().mockResolvedValue({}) } },
   };

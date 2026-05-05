@@ -106,6 +106,40 @@ const uploadClaim  = makeUploader('consorcio/reclamos', 'claim');
 const uploadNotice = makeUploader('consorcio/avisos',   'aviso');
 const uploadEmployee = makeUploader('consorcio/empleados', 'emp');
 
+const organizationDocumentStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
+    const isImage = file.mimetype.startsWith('image/');
+    const ext     = MIME_TO_EXT[file.mimetype] || 'bin';
+    return {
+      folder:          `gestionar/organization-documents/${req.orgId}`,
+      resource_type:   isImage ? 'image' : 'raw',
+      allowed_formats: isImage ? ['jpg', 'jpeg', 'png', 'webp'] : ['pdf'],
+      public_id:       isImage
+        ? `doc_${req.user?.id}_${Date.now()}`
+        : `doc_${req.user?.id}_${Date.now()}.${ext}`,
+      type:            'upload',
+    };
+  },
+});
+
+const organizationDocumentFileFilter = (req, file, cb) => {
+  const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+  if (allowed.has(file.mimetype)) {
+    cb(null, true);
+  } else {
+    const err = new Error('Solo se permiten PDF o imagenes JPG, PNG o WebP.');
+    err.statusCode = 400;
+    cb(err, false);
+  }
+};
+
+const uploadOrganizationDocument = multer({
+  storage: organizationDocumentStorage,
+  fileFilter: organizationDocumentFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
 async function deleteCloudinaryAttachments(attachments = []) {
   await Promise.all(
     attachments
@@ -117,4 +151,13 @@ async function deleteCloudinaryAttachments(attachments = []) {
   );
 }
 
-module.exports = { upload, uploadProvider, uploadClaim, uploadNotice, uploadEmployee, deleteCloudinaryAttachments, cloudinary };
+module.exports = {
+  upload,
+  uploadProvider,
+  uploadClaim,
+  uploadNotice,
+  uploadEmployee,
+  uploadOrganizationDocument,
+  deleteCloudinaryAttachments,
+  cloudinary,
+};

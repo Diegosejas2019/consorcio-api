@@ -7,6 +7,7 @@ jest.mock('../../src/config/cloudinary', () => {
     uploadClaim: memoryUpload,
     uploadNotice: memoryUpload,
     uploadEmployee: memoryUpload,
+    uploadOrganizationDocument: memoryUpload,
     deleteCloudinaryAttachments: jest.fn().mockResolvedValue(null),
     cloudinary: {
       uploader: { destroy: jest.fn().mockResolvedValue({}) },
@@ -84,6 +85,12 @@ describe('GET /api/payments/:id/system-receipt', () => {
 
   test('descarga el recibo como PDF autenticado', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
+    const expectedDownloadDate = new Intl.DateTimeFormat('es-AR', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+      day:      '2-digit',
+      month:    '2-digit',
+      year:     'numeric',
+    }).format(new Date()).replace(/\//g, '-');
     const payment = await Payment.create({
       organization: orgId,
       owner:        user._id,
@@ -112,7 +119,7 @@ describe('GET /api/payments/:id/system-receipt', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/pdf');
-    expect(res.headers['content-disposition']).toContain('filename="REC-00000001.pdf"');
+    expect(res.headers['content-disposition']).toContain(`filename="recibo_${expectedDownloadDate}.pdf"`);
     const { cloudinary } = require('../../src/config/cloudinary');
     expect(cloudinary.utils.private_download_url).toHaveBeenCalledWith(
       'recibo_1',

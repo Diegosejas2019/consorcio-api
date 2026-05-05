@@ -374,4 +374,68 @@ describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
     expect(updatedMembership.isDebtor).toBe(false);
     expect(updatedMembership.balance).toBe(0);
   });
+
+  test('approved MP callback de saldo anterior es idempotente', async () => {
+    const org = await Organization.create({
+      name:          'Org MP Balance Callback',
+      slug:          `org-mp-balance-callback-${Date.now()}`,
+      businessType:  'consorcio',
+      monthlyFee:    1000,
+      mpAccessToken: 'TEST_ACCESS_TOKEN',
+    });
+
+    const owner = await User.create({
+      name:         'Owner Balance Callback',
+      email:        `owner-balance-callback-${Date.now()}@test.com`,
+      password:     'password123',
+      role:         'owner',
+      organization: org._id,
+      isActive:     true,
+    });
+
+    const membership = await OrganizationMember.create({
+      user:         owner._id,
+      organization: org._id,
+      role:         'owner',
+      isDebtor:     true,
+      balance:      -1095,
+    });
+
+    mockMPPaymentGet.mockResolvedValue({
+      id:                 157779829724,
+      status:             'approved',
+      status_detail:      'accredited',
+      external_reference: `${org._id}|${owner._id}|v2|||1095|1777976182000`,
+    });
+
+    const token = signToken(owner._id, {
+      organizationId: org._id,
+      role:           'owner',
+      membershipId:   membership._id,
+    });
+
+    const first = await request(app)
+      .get('/api/mercadopago/payment/157779829724')
+      .set('Authorization', `Bearer ${token}`);
+    const second = await request(app)
+      .get('/api/mercadopago/payment/157779829724')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+
+    const payments = await Payment.find({
+      owner: owner._id,
+      organization: org._id,
+      type: 'balance',
+      mpPaymentId: '157779829724',
+    });
+    expect(payments).toHaveLength(1);
+    expect(payments[0].amount).toBe(1095);
+    expect(payments[0].status).toBe('approved');
+
+    const updatedMembership = await OrganizationMember.findById(membership._id);
+    expect(updatedMembership.balance).toBe(0);
+    expect(updatedMembership.isDebtor).toBe(false);
+  });
 });

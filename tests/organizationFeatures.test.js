@@ -40,6 +40,7 @@ describe('Organization feature modules', () => {
       notices: true,
       expenses: true,
       providers: true,
+      documents: true,
     });
   });
 

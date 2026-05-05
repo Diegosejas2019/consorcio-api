@@ -44,6 +44,15 @@ const buildSystemReceiptDownloadUrl = (systemReceipt) => {
   );
 };
 
+const formatReceiptDownloadDate = (date = new Date()) => {
+  return new Intl.DateTimeFormat('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    day:      '2-digit',
+    month:    '2-digit',
+    year:     'numeric',
+  }).format(date).replace(/\//g, '-');
+};
+
 const buildAvailablePaymentItems = async ({ organizationId, owner, membership }) => {
   const [org, activePayments, ownerUnits, allOrgUnits] = await Promise.all([
     Organization.findById(organizationId).select('paymentPeriods feePeriodCode monthlyFee'),
@@ -563,7 +572,7 @@ exports.getSystemReceipt = async (req, res, next) => {
         return res.status(502).json({ success: false, message: 'No se pudo obtener el recibo desde Cloudinary.' });
       }
 
-      const filename = `${receiptPayment.receiptNumber || 'recibo'}.pdf`.replace(/"/g, '');
+      const filename = `recibo_${formatReceiptDownloadDate()}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
