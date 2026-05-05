@@ -20,13 +20,21 @@ jest.mock('../../src/services/firebaseService', () => ({
 jest.mock('../../src/services/emailService', () => ({
   sendPaymentApproved: jest.fn().mockResolvedValue(null),
   sendPaymentRejected: jest.fn().mockResolvedValue(null),
+  sendReceiptEmail:     jest.fn().mockResolvedValue(null),
+}));
+jest.mock('../../src/services/receiptService', () => ({
+  generateAndStoreReceipt: jest.fn().mockImplementation(async (paymentId) => {
+    const Payment = require('../../src/models/Payment');
+    return Payment.findById(paymentId);
+  }),
 }));
 
 const request  = require('supertest');
 const app      = require('../../src/app');
 const dbHelper = require('../helpers/dbHelper');
-const { createOwnerWithToken } = require('../helpers/factories');
+const { createOwnerWithToken, createAdminWithToken } = require('../helpers/factories');
 const Payment  = require('../../src/models/Payment');
+const OrganizationMember = require('../../src/models/OrganizationMember');
 
 // Buffer mínimo que simula un PDF válido
 const FAKE_PDF = Buffer.from('%PDF-1.4 fake content for testing');
@@ -170,6 +178,57 @@ describe('POST /api/payments — subida de comprobante', () => {
       .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
 
     expect(res.status).toBe(400);
+  });
+
+  test('rechaza pago de saldo anterior si supera la deuda pendiente', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    await OrganizationMember.create({
+      user: user._id,
+      organization: orgId,
+      role: 'owner',
+      balance: -5000,
+      isDebtor: true,
+      isActive: true,
+    });
+
+    const res = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('amount', '6000')
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('superar');
+  });
+
+  test('al aprobar saldo anterior cancela la deuda sin dejar saldo positivo', async () => {
+    const { user, orgId } = await createOwnerWithToken();
+    const { token: adminToken } = await createAdminWithToken(orgId);
+    await OrganizationMember.create({
+      user: user._id,
+      organization: orgId,
+      role: 'owner',
+      balance: -5000,
+      isDebtor: true,
+      isActive: true,
+    });
+    const payment = await Payment.create({
+      organization: orgId,
+      owner: user._id,
+      amount: 5000,
+      status: 'pending',
+      type: 'balance',
+      paymentMethod: 'manual',
+    });
+
+    const res = await request(app)
+      .patch(`/api/payments/${payment._id}/approve`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    const member = await OrganizationMember.findOne({ user: user._id, organization: orgId });
+    expect(member.balance).toBe(0);
+    expect(member.isDebtor).toBe(false);
   });
 
 });

@@ -209,7 +209,7 @@ exports.createPayment = async (req, res, next) => {
     const [org, activeUnits, ownerMembership, allOrgUnits] = await Promise.all([
       Organization.findById(req.orgId).select('monthlyFee feePeriodCode'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
-      OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner' }).select('startBillingPeriod'),
+      OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner' }).select('startBillingPeriod balance'),
       Unit.find({ organization: req.orgId, active: true }).lean(),
     ]);
 
@@ -221,6 +221,17 @@ exports.createPayment = async (req, res, next) => {
     }
 
     const monthlyFee = org?.monthlyFee ?? 0;
+
+    if (!month && extraordinaryIds.length === 0) {
+      const currentDebt = Math.abs(Math.min(Number(ownerMembership?.balance || 0), 0));
+      const paymentAmount = Number(amount);
+      if (currentDebt <= 0) {
+        return res.status(400).json({ success: false, message: 'No hay saldo anterior pendiente para pagar.' });
+      }
+      if (paymentAmount > currentDebt) {
+        return res.status(400).json({ success: false, message: 'El importe no puede superar el saldo anterior pendiente.' });
+      }
+    }
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
     if (month) {
@@ -377,7 +388,7 @@ exports.approvePayment = async (req, res, next) => {
       if ((updatedMember?.balance ?? -1) >= 0) {
         await OrganizationMember.updateOne(
           { user: payment.owner._id, organization: payment.organization, role: 'owner' },
-          { isDebtor: false }
+          { isDebtor: false, balance: 0 }
         );
       }
     } else {

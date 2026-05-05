@@ -25,7 +25,7 @@ async function settleOwnerAccount(payment) {
     if ((updatedMember?.balance ?? -1) >= 0) {
       await OrganizationMember.updateOne(
         { user: ownerId, organization: payment.organization, role: 'owner' },
-        { isDebtor: false }
+        { isDebtor: false, balance: 0 }
       );
     }
     return;
