@@ -10,7 +10,7 @@ jest.mock('../../src/config/cloudinary', () => {
     deleteCloudinaryAttachments: jest.fn().mockResolvedValue(null),
     cloudinary: {
       uploader: { destroy: jest.fn().mockResolvedValue({}) },
-      utils:    { private_download_url: jest.fn() },
+      utils:    { private_download_url: jest.fn().mockReturnValue('https://signed.example.com/recibo.pdf') },
     },
   };
 });
@@ -113,7 +113,13 @@ describe('GET /api/payments/:id/system-receipt', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('application/pdf');
     expect(res.headers['content-disposition']).toContain('filename="REC-00000001.pdf"');
-    expect(global.fetch).toHaveBeenCalledWith('https://cdn.example.com/recibo.pdf');
+    const { cloudinary } = require('../../src/config/cloudinary');
+    expect(cloudinary.utils.private_download_url).toHaveBeenCalledWith(
+      'recibo_1',
+      'pdf',
+      expect.objectContaining({ resource_type: 'raw', type: 'upload' })
+    );
+    expect(global.fetch).toHaveBeenCalledWith('https://signed.example.com/recibo.pdf');
   });
 
   test('genera el recibo bajo demanda para pagos aprobados historicos sin PDF', async () => {

@@ -388,3 +388,4 @@ no en variables de entorno.
 - `fcmToken` y `password` en User tienen `select: false`
 - Mensajes FCM son data-only para compatibilidad Android 14+
 - Errores de usuario siempre en español, sin exponer detalles técnicos
+c

@@ -13,6 +13,37 @@ const { sendDueDateReminders } = require('../services/schedulerService');
 const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
 const logger          = require('../config/logger');
 
+const getCloudinaryRawPublicIdFromUrl = (url) => {
+  if (!url) return null;
+  try {
+    const { pathname } = new URL(url);
+    const uploadMarker = '/raw/upload/';
+    const uploadIndex = pathname.indexOf(uploadMarker);
+    if (uploadIndex === -1) return null;
+
+    const afterUpload = pathname.slice(uploadIndex + uploadMarker.length);
+    const withoutVersion = afterUpload.replace(/^v\d+\//, '');
+    return decodeURIComponent(withoutVersion).replace(/\.pdf$/i, '');
+  } catch {
+    return null;
+  }
+};
+
+const buildSystemReceiptDownloadUrl = (systemReceipt) => {
+  const publicId = systemReceipt?.publicId || getCloudinaryRawPublicIdFromUrl(systemReceipt?.url);
+  if (!publicId) return systemReceipt?.url;
+
+  return cloudinary.utils.private_download_url(
+    publicId,
+    'pdf',
+    {
+      resource_type: 'raw',
+      type:          'upload',
+      expires_at:    Math.floor(Date.now() / 1000) + 120,
+    }
+  );
+};
+
 const buildAvailablePaymentItems = async ({ organizationId, owner, membership }) => {
   const [org, activePayments, ownerUnits, allOrgUnits] = await Promise.all([
     Organization.findById(organizationId).select('paymentPeriods feePeriodCode monthlyFee'),
@@ -513,10 +544,11 @@ exports.getSystemReceipt = async (req, res, next) => {
     }
 
     if (req.query.download === '1') {
-      const receiptUrl = receiptPayment.systemReceipt.url;
+      const receiptUrl = buildSystemReceiptDownloadUrl(receiptPayment.systemReceipt);
       const cloudRes = await fetch(receiptUrl);
       if (!cloudRes.ok) {
-        logger.error(`System receipt proxy error: ${cloudRes.status} — paymentId: ${payment._id}`);
+        const cloudinaryError = cloudRes.headers.get('x-cld-error');
+        logger.error(`System receipt proxy error: ${cloudRes.status}${cloudinaryError ? ` - ${cloudinaryError}` : ''} - paymentId: ${payment._id}`);
         return res.status(502).json({ success: false, message: 'No se pudo obtener el recibo desde Cloudinary.' });
       }
 
