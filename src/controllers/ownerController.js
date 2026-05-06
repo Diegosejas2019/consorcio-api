@@ -1,11 +1,12 @@
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
+const Organization = require('../models/Organization');
 const Payment = require('../models/Payment');
 const Unit    = require('../models/Unit');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome } = require('../services/emailService');
-const { formatYYYYMM, getNextMonth } = require('../utils/periods');
+const { formatYYYYMM, getNextMonth, currentYYYYMM } = require('../utils/periods');
 const XLSX    = require('xlsx');
 
 // Campos del User que son identidad global (no datos financieros por org)
@@ -19,6 +20,18 @@ function normalizeDebtBalance(raw, fallback = 0) {
   const amount = Number(raw ?? fallback);
   if (!Number.isFinite(amount)) return fallback;
   return amount > 0 ? -amount : amount;
+}
+
+function computeTotalOwed(membership, approvedPaidMonths, ownerUnits, org) {
+  const initialDebt   = Math.max(0, -(membership.balance || 0));
+  const monthlyFee    = org?.monthlyFee || 0;
+  const ownerFee      = ownerUnits.reduce((sum, u) => sum + (u.customFee != null ? u.customFee : monthlyFee * (u.coefficient || 1)), 0);
+  const startBilling  = membership.startBillingPeriod;
+  const currentPeriod = currentYYYYMM();
+  const unpaidCount   = (org?.paymentPeriods || [])
+    .filter(p => !approvedPaidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod)
+    .length;
+  return initialDebt + unpaidCount * ownerFee;
 }
 
 function getRequestedUnitIds(body) {
@@ -138,15 +151,23 @@ exports.getAllOwners = async (req, res, next) => {
 
     memberships = memberships.filter(m => m.user != null);
 
-    // Cargar todas las unidades de la org para sort + search
-    const allUnits = await Unit.find({ organization: req.orgId, active: true })
-      .select('owner name')
-      .lean();
+    // Cargar todas las unidades de la org para sort + search + cálculo de fee
+    const [allUnits, org] = await Promise.all([
+      Unit.find({ organization: req.orgId, active: true })
+        .select('owner name customFee coefficient')
+        .lean(),
+      Organization.findById(req.orgId).select('paymentPeriods monthlyFee'),
+    ]);
 
-    const unitsByOwner = allUnits.reduce((map, u) => {
-      if (u.owner) (map[u.owner.toString()] ||= []).push(u.name);
-      return map;
-    }, {});
+    const unitsByOwner    = {};
+    const unitFeesByOwner = {};
+    allUnits.forEach(u => {
+      if (u.owner) {
+        const key = u.owner.toString();
+        (unitsByOwner[key]    ||= []).push(u.name);
+        (unitFeesByOwner[key] ||= []).push(u);
+      }
+    });
 
     if (search) {
       const re = new RegExp(search, 'i');
@@ -167,17 +188,25 @@ exports.getAllOwners = async (req, res, next) => {
     const paged = memberships.slice((page - 1) * limit, page * limit);
     const ownerIds = paged.map(m => m.user._id);
 
-    const lastPayments = await Payment.aggregate([
-      { $match: { owner: { $in: ownerIds }, status: 'approved' } },
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: '$owner',
-          month:     { $first: '$month' },
-          amount:    { $first: '$amount' },
-          createdAt: { $first: '$createdAt' },
+    const [lastPayments, approvedMonthlyPayments] = await Promise.all([
+      Payment.aggregate([
+        { $match: { owner: { $in: ownerIds }, status: 'approved' } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$owner',
+            month:     { $first: '$month' },
+            amount:    { $first: '$amount' },
+            createdAt: { $first: '$createdAt' },
+          },
         },
-      },
+      ]),
+      Payment.find({
+        organization: req.orgId,
+        owner: { $in: ownerIds },
+        status: 'approved',
+        month: { $exists: true, $ne: null },
+      }).select('owner month').lean(),
     ]);
 
     const lastPaymentByOwner = lastPayments.reduce((map, p) => {
@@ -185,17 +214,28 @@ exports.getAllOwners = async (req, res, next) => {
       return map;
     }, {});
 
-    const owners = paged.map(m => ({
-      ...m.user,
-      balance:            normalizeDebtBalance(m.balance),
-      isDebtor:           m.isDebtor,
-      percentage:         m.percentage,
-      startBillingPeriod: m.startBillingPeriod,
-      role:               m.role,
-      membershipId:       m._id,
-      lastPayment:        lastPaymentByOwner[m.user._id.toString()] ?? null,
-      units:              unitsByOwner[m.user._id.toString()] ?? [],
-    }));
+    const paidMonthsByOwner = approvedMonthlyPayments.reduce((map, p) => {
+      const key = p.owner.toString();
+      (map[key] ||= new Set()).add(p.month);
+      return map;
+    }, {});
+
+    const owners = paged.map(m => {
+      const ownerId  = m.user._id.toString();
+      const totalOwed = computeTotalOwed(m, paidMonthsByOwner[ownerId] || new Set(), unitFeesByOwner[ownerId] || [], org);
+      return {
+        ...m.user,
+        balance:            normalizeDebtBalance(m.balance),
+        isDebtor:           m.isDebtor,
+        percentage:         m.percentage,
+        startBillingPeriod: m.startBillingPeriod,
+        role:               m.role,
+        membershipId:       m._id,
+        lastPayment:        lastPaymentByOwner[ownerId] ?? null,
+        units:              unitsByOwner[ownerId] ?? [],
+        totalOwed,
+      };
+    });
 
     res.json({
       success: true,
@@ -231,9 +271,19 @@ exports.getOwner = async (req, res, next) => {
       membershipId:       membership._id,
     };
 
-    const payments = await Payment.find({ owner: membership.user._id, organization: req.orgId })
-      .sort({ createdAt: -1 })
-      .select('-__v');
+    const [payments, org, ownerUnits] = await Promise.all([
+      Payment.find({ owner: membership.user._id, organization: req.orgId })
+        .sort({ createdAt: -1 })
+        .select('-__v'),
+      Organization.findById(req.orgId).select('paymentPeriods monthlyFee'),
+      Unit.find({ owner: membership.user._id, organization: req.orgId, active: true })
+        .select('customFee coefficient')
+        .lean(),
+    ]);
+    const approvedPaidMonths = new Set(
+      payments.filter(p => p.status === 'approved' && p.month).map(p => p.month)
+    );
+    owner.totalOwed = computeTotalOwed(membership, approvedPaidMonths, ownerUnits, org || {});
 
     res.json({ success: true, data: { owner, payments } });
   } catch (err) {
