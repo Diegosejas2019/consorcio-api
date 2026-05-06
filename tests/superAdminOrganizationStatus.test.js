@@ -43,6 +43,88 @@ async function createOrgUser(role, org, emailPrefix) {
 }
 
 describe('SuperAdmin organization status', () => {
+  test('super_admin cambia la contrasena de un usuario usando solo email', async () => {
+    const { token } = await createSuperAdminToken();
+    const org = await Organization.create({ name: 'Org Password', slug: 'org-password', businessType: 'consorcio' });
+    const owner = await createOrgUser('owner', org, 'reset-owner');
+
+    const res = await request(app)
+      .patch('/api/super-admin/users/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ email: owner.user.email.toUpperCase(), newPassword: 'Nueva2026!' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Contrasena actualizada correctamente.');
+    expect(res.body.data.user.email).toBe(owner.user.email);
+    expect(res.body.data.user.password).toBeUndefined();
+
+    const oldLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: owner.user.email, password: 'User2025!' });
+    expect(oldLogin.status).toBe(401);
+
+    const newLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: owner.user.email, password: 'Nueva2026!' });
+    expect(newLogin.status).toBe(200);
+  });
+
+  test('admin comun no puede cambiar contrasenas desde SuperAdmin', async () => {
+    const org = await Organization.create({ name: 'Org Admin Password', slug: 'org-admin-password', businessType: 'consorcio' });
+    const admin = await createOrgUser('admin', org, 'password-admin');
+    const owner = await createOrgUser('owner', org, 'password-owner');
+
+    const res = await request(app)
+      .patch('/api/super-admin/users/password')
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ email: owner.user.email, newPassword: 'Nueva2026!' });
+
+    expect(res.status).toBe(403);
+  });
+
+  test('super_admin recibe 404 si el email no existe', async () => {
+    const { token } = await createSuperAdminToken();
+
+    const res = await request(app)
+      .patch('/api/super-admin/users/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ email: 'nadie@test.com', newPassword: 'Nueva2026!' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe('Usuario no encontrado.');
+  });
+
+  test('super_admin no cambia contrasena si el email esta duplicado entre organizaciones', async () => {
+    const { token } = await createSuperAdminToken();
+    const orgA = await Organization.create({ name: 'Org Duplicada A', slug: 'org-duplicada-a', businessType: 'consorcio' });
+    const orgB = await Organization.create({ name: 'Org Duplicada B', slug: 'org-duplicada-b', businessType: 'consorcio' });
+
+    await User.create({
+      name: 'Usuario A',
+      email: 'duplicado@test.com',
+      password: 'User2025!',
+      role: 'owner',
+      organization: orgA._id,
+      isActive: true,
+    });
+    await User.create({
+      name: 'Usuario B',
+      email: 'duplicado@test.com',
+      password: 'User2025!',
+      role: 'owner',
+      organization: orgB._id,
+      isActive: true,
+    });
+
+    const res = await request(app)
+      .patch('/api/super-admin/users/password')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ email: 'duplicado@test.com', newPassword: 'Nueva2026!' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe('Hay mas de un usuario con ese email. No se cambio la contrasena.');
+  });
+
   test('desactiva organizacion, bloquea admin/owner y no borra datos historicos', async () => {
     const { token, user: root } = await createSuperAdminToken();
     const org = await Organization.create({ name: 'Org Demo', slug: 'org-demo', businessType: 'consorcio' });
