@@ -7,6 +7,12 @@ function formatYYYYMM(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function currentYYYYMM() {
+  const override = process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE;
+  if (/^\d{4}-(0[1-9]|1[0-2])$/.test(override || '')) return override;
+  return formatYYYYMM(new Date());
+}
+
 /**
  * Devuelve el período siguiente dado uno en formato "YYYY-MM".
  * Maneja el cruce de año (ej: "2026-12" → "2027-01").
@@ -21,4 +27,4 @@ function getNextMonth(yyyyMM) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-module.exports = { formatYYYYMM, getNextMonth };
+module.exports = { formatYYYYMM, currentYYYYMM, getNextMonth };

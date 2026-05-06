@@ -11,6 +11,7 @@ const firebaseService = require('../services/firebaseService');
 const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
 const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
+const { currentYYYYMM } = require('../utils/periods');
 const logger          = require('../config/logger');
 
 const getCloudinaryRawPublicIdFromUrl = (url) => {
@@ -73,7 +74,7 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
   );
 
   const startBilling  = membership?.startBillingPeriod ?? owner.startBillingPeriod;
-  const currentPeriod = org?.feePeriodCode || new Date().toISOString().slice(0, 7);
+  const currentPeriod = currentYYYYMM();
   const periods = (org?.paymentPeriods || [])
     .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
 
@@ -257,7 +258,7 @@ exports.createPayment = async (req, res, next) => {
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
     if (month) {
-      const currentPeriod = org?.feePeriodCode || new Date().toISOString().slice(0, 7);
+      const currentPeriod = currentYYYYMM();
       if (month > currentPeriod) {
         return res.status(400).json({
           success: false,

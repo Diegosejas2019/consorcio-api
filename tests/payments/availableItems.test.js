@@ -33,10 +33,14 @@ const Unit     = require('../../src/models/Unit');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
-afterEach(() => dbHelper.clear());
+afterEach(async () => {
+  delete process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE;
+  await dbHelper.clear();
+});
 
 describe('GET /api/payments - items disponibles para pagar', () => {
   test('no devuelve periodos futuros aunque esten configurados', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2025-04';
     const { token, orgId } = await createOwnerWithToken();
     await Organization.findByIdAndUpdate(orgId, {
       feePeriodCode:  '2025-04',
@@ -49,6 +53,22 @@ describe('GET /api/payments - items disponibles para pagar', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.periods).toEqual(['2025-03', '2025-04']);
+  });
+
+  test('devuelve el mes calendario actual aunque feePeriodCode haya quedado atrasado', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-05';
+    const { token, orgId } = await createOwnerWithToken();
+    await Organization.findByIdAndUpdate(orgId, {
+      feePeriodCode:  '2026-04',
+      paymentPeriods: ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+    });
+
+    const res = await request(app)
+      .get('/api/payments/available-items')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.periods).toEqual(['2026-01', '2026-02', '2026-03', '2026-04', '2026-05']);
   });
 
   test('devuelve gastos extraordinarios cobrables disponibles para el owner', async () => {

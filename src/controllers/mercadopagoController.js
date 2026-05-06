@@ -11,6 +11,7 @@ const { calculateExtraordinaryAmountForOwner } = require('../services/expenseSer
 const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const receiptService = require('../services/receiptService');
+const { currentYYYYMM } = require('../utils/periods');
 const logger  = require('../config/logger');
 
 async function settleOwnerAccount(payment) {
@@ -390,7 +391,7 @@ exports.createPreference = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Formato de período inválido.' });
       }
 
-      const currentPeriod = org.feePeriodCode || new Date().toISOString().slice(0, 7);
+      const currentPeriod = currentYYYYMM();
       if (v2Periods.some(p => p > currentPeriod)) {
         return res.status(400).json({ success: false, message: 'No se pueden pagar períodos futuros.' });
       }
@@ -533,7 +534,7 @@ exports.createPreference = async (req, res, next) => {
     }
 
     // Excluir períodos con pago activo
-    const currentPeriod = org.feePeriodCode || new Date().toISOString().slice(0, 7);
+    const currentPeriod = currentYYYYMM();
     if (periods.some(p => p > currentPeriod)) {
       return res.status(400).json({ success: false, message: 'No se pueden pagar períodos futuros.' });
     }

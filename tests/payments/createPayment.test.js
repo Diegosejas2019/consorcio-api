@@ -42,10 +42,14 @@ const FAKE_PDF = Buffer.from('%PDF-1.4 fake content for testing');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
-afterEach(() => dbHelper.clear());
+afterEach(async () => {
+  delete process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE;
+  await dbHelper.clear();
+});
 
 describe('POST /api/payments — subida de comprobante', () => {
   test('rechaza pagos de periodos futuros', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2025-04';
     const { token, orgId } = await createOwnerWithToken();
     const Organization = require('../../src/models/Organization');
     await Organization.findByIdAndUpdate(orgId, { feePeriodCode: '2025-04' });
