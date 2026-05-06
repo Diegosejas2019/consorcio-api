@@ -66,7 +66,7 @@ Entidad raíz del sistema multi-tenant. Cada organización tiene su propia confi
 
 ### User
 Identidad global del usuario. Roles: `owner` | `admin` | `superadmin`.
-Campos globales: `name`, `email`, `phone`, `unit` (texto libre), `role`, `organization` (ref, backward compat), `fcmToken` (select: false).
+Campos globales: `name`, `email`, `phone` (principal, backward compat), `phones` (lista de teléfonos), `unit` (texto libre), `role`, `organization` (ref, backward compat), `fcmToken` (select: false).
 **Deprecated en User** (leer desde `OrganizationMember`): `balance`, `isDebtor`, `percentage`, `startBillingPeriod` — estos campos existen en el schema por backward compat pero no se escriben en nuevas creaciones.
 Password hasheado con bcrypt (12 rounds), nunca devuelto en queries.
 `DELETE /api/owners/:id` es soft-delete: pone `isActive: false` en OrganizationMember (y en User solo si no quedan otras membresías activas). El historial de pagos se conserva.
@@ -103,7 +103,9 @@ Sólo owners pueden crear reclamos. Admin actualiza estado y puede agregar `admi
 Virtuales: `categoryLabel`, `statusLabel` en español.
 
 ### Expense
-Gastos de la organización. Categorías: `cleaning` | `security` | `maintenance` | `utilities` | `administration` | `other`.
+Gastos de la organización. Categorías dinámicas por organización mediante `ExpenseCategory`.
+Defaults: `cleaning` | `security` | `maintenance` | `utilities` | `administration` | `salaries` | `other`.
+Endpoints: `GET /api/expenses/categories` lista categorías activas y crea defaults si faltan. `POST /api/expenses/categories` agrega una categoría con `{ label, key? }`.
 Estados: `pending` | `paid`. Métodos de pago: `cash` | `transfer` | `mercadopago`.
 `expenseType`: `ordinary` (default) | `extraordinary` — clasifica el gasto.
 `isChargeable` (bool, default `false`): solo relevante en `extraordinary`. Si `true`, el gasto aparece como concepto cobrable que los propietarios pueden incluir al crear un pago.

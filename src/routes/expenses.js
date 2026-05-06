@@ -9,6 +9,8 @@ router.get('/summary', protect, requireOrg, ctrl.getExpensesSummary);
 // El resto solo para admin
 router.use(protect, restrictTo('admin'));
 
+router.get('/categories',                ctrl.getExpenseCategories);
+router.post('/categories',               ctrl.createExpenseCategory);
 router.get('/',                          ctrl.getExpenses);
 router.post('/',                         upload.array('attachments', 5), ctrl.createExpense);
 router.patch('/:id',                     upload.array('attachments', 5), ctrl.updateExpense);

@@ -186,7 +186,7 @@ exports.getMembers = async (req, res, next) => {
     if (isActive) filter.isActive = isActive === 'true';
 
     const memberships = await OrganizationMember.find(filter)
-      .populate('user', 'name email unit phone role isActive lastLogin createdAt')
+      .populate('user', 'name email unit phone phones role isActive lastLogin createdAt')
       .select('-__v')
       .sort({ role: 1, createdAt: -1 })
       .lean();

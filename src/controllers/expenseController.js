@@ -1,17 +1,52 @@
 const { Readable } = require('stream');
 const Expense  = require('../models/Expense');
+const ExpenseCategory = require('../models/ExpenseCategory');
 const Provider = require('../models/Provider');
 const logger   = require('../config/logger');
 const { cloudinary } = require('../config/cloudinary');
+const {
+  assertExpenseCategoryExists,
+  getExpenseCategoryLabelMap,
+  listExpenseCategories,
+  slugifyCategoryKey,
+} = require('../services/expenseCategoryService');
 
-const CATEGORY_LABELS = {
-  cleaning:       'Limpieza',
-  security:       'Seguridad',
-  maintenance:    'Mantenimiento',
-  utilities:      'Servicios',
-  administration: 'Administración',
-  salaries:       'Sueldos',
-  other:          'Otros',
+// ── GET /api/expenses/categories — listar categorías dinámicas ──
+exports.getExpenseCategories = async (req, res, next) => {
+  try {
+    const categories = await listExpenseCategories(req.orgId, { createdBy: req.user?._id });
+    res.json({ success: true, data: { categories } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/expenses/categories — agregar categoría ───────────
+exports.createExpenseCategory = async (req, res, next) => {
+  try {
+    const label = String(req.body.label || req.body.name || '').trim();
+    const key   = slugifyCategoryKey(req.body.key || label);
+
+    if (!label) return res.status(400).json({ success: false, message: 'El nombre de la categoria es obligatorio.' });
+    if (!key) return res.status(400).json({ success: false, message: 'La clave de la categoria no es valida.' });
+
+    const existing = await ExpenseCategory.findOne({ organization: req.orgId, key });
+    if (existing && existing.isActive !== false) {
+      return res.status(400).json({ success: false, message: 'Ya existe una categoria con esa clave.' });
+    }
+
+    const category = existing || new ExpenseCategory({ organization: req.orgId, key, createdBy: req.user._id });
+    category.label = label;
+    category.isActive = true;
+    await category.save();
+
+    res.status(201).json({ success: true, data: { category } });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({ success: false, message: 'Ya existe una categoria con esa clave.' });
+    }
+    next(err);
+  }
 };
 
 // ── GET /api/expenses/summary — resumen por categoría (owners y admin) ──
@@ -28,10 +63,13 @@ exports.getExpensesSummary = async (req, res, next) => {
       { $sort: { amount: -1 } },
     ]);
 
-    const total = agg.reduce((s, c) => s + c.amount, 0);
+    const [total, categoryLabels] = await Promise.all([
+      Promise.resolve(agg.reduce((s, c) => s + c.amount, 0)),
+      getExpenseCategoryLabelMap(req.orgId),
+    ]);
     const categories = agg.map(c => ({
       category: c._id,
-      label:    CATEGORY_LABELS[c._id] || c._id,
+      label:    categoryLabels[c._id] || c._id,
       amount:   c.amount,
       count:    c.count,
     }));
@@ -84,6 +122,10 @@ exports.createExpense = async (req, res, next) => {
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
     }
 
+    const categoryResult = await assertExpenseCategoryExists(req.orgId, data.category);
+    if (categoryResult.error) return res.status(categoryResult.error.status).json({ success: false, message: categoryResult.error.message });
+    data.category = categoryResult.key;
+
     // Validaciones para gastos extraordinarios cobrables
     if (data.expenseType === 'extraordinary' && data.isChargeable) {
       const mode = data.extraordinaryBillingMode || 'fixed_total';
@@ -132,6 +174,12 @@ exports.updateExpense = async (req, res, next) => {
     if (req.body.provider) {
       const prov = await Provider.findOne({ _id: req.body.provider, organization: req.orgId });
       if (!prov) return res.status(400).json({ success: false, message: 'Proveedor no válido.' });
+    }
+
+    if (setFields.category !== undefined) {
+      const categoryResult = await assertExpenseCategoryExists(req.orgId, setFields.category);
+      if (categoryResult.error) return res.status(categoryResult.error.status).json({ success: false, message: categoryResult.error.message });
+      setFields.category = categoryResult.key;
     }
 
     // Validaciones para gastos extraordinarios cobrables (solo cuando se cambia el modo)

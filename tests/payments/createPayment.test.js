@@ -202,6 +202,28 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.body.message).toContain('superar');
   });
 
+  test('permite subir comprobante de deuda inicial usando balanceAmount', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    await OrganizationMember.create({
+      user: user._id,
+      organization: orgId,
+      role: 'owner',
+      balance: -5000,
+      isDebtor: true,
+      isActive: true,
+    });
+
+    const res = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('balanceAmount', '5000')
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.payment.type).toBe('balance');
+    expect(res.body.data.payment.amount).toBe(5000);
+  });
+
   test('al aprobar saldo anterior cancela la deuda sin dejar saldo positivo', async () => {
     const { user, orgId } = await createOwnerWithToken();
     const { token: adminToken } = await createAdminWithToken(orgId);

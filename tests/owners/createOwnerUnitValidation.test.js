@@ -5,6 +5,7 @@ const { createAdminWithToken } = require('../helpers/factories');
 const User = require('../../src/models/User');
 const Unit = require('../../src/models/Unit');
 const OrganizationMember = require('../../src/models/OrganizationMember');
+const XLSX = require('xlsx');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
@@ -78,6 +79,46 @@ describe('POST /api/owners unit validation', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.data.owner.unit).toBe('Lote Libre');
+  });
+
+  test('permite alta con mas de un telefono y mantiene phone como principal', async () => {
+    const { token } = await createAdminWithToken();
+
+    const res = await request(app)
+      .post('/api/owners')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Owner Con Telefonos',
+        email: 'telefonos@test.com',
+        password: 'password123',
+        phones: [' 1122334455 ', '1199887766'],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.owner.phone).toBe('1122334455');
+    expect(res.body.data.owner.phones).toEqual(['1122334455', '1199887766']);
+
+    const owner = await User.findOne({ email: 'telefonos@test.com' }).lean();
+    expect(owner.phone).toBe('1122334455');
+    expect(owner.phones).toEqual(['1122334455', '1199887766']);
+  });
+
+  test('si recibe phone legacy lo expone tambien como phones', async () => {
+    const { token } = await createAdminWithToken();
+
+    const res = await request(app)
+      .post('/api/owners')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Owner Legacy Phone',
+        email: 'legacy-phone@test.com',
+        password: 'password123',
+        phone: '1122334455',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.owner.phone).toBe('1122334455');
+    expect(res.body.data.owner.phones).toEqual(['1122334455']);
   });
 
   test('permite alta con varias unidades disponibles y las marca ocupadas', async () => {
@@ -171,6 +212,74 @@ describe('POST /api/owners unit validation', () => {
 
     const updatedOwner = await User.findById(owner._id);
     expect(updatedOwner.unitId.toString()).toBe(units[1]._id.toString());
+  });
+
+  test('actualiza los telefonos reemplazando la lista completa', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const owner = await createActiveOwner(orgId, null);
+
+    const res = await request(app)
+      .patch(`/api/owners/${owner._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ phones: ['1155000000', '1166000000', '1155000000'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.owner.phone).toBe('1155000000');
+    expect(res.body.data.owner.phones).toEqual(['1155000000', '1166000000']);
+
+    const updatedOwner = await User.findById(owner._id).lean();
+    expect(updatedOwner.phone).toBe('1155000000');
+    expect(updatedOwner.phones).toEqual(['1155000000', '1166000000']);
+  });
+
+  test('normaliza balance positivo a saldo deudor negativo al editar', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const owner = await createActiveOwner(orgId, null);
+
+    const res = await request(app)
+      .patch(`/api/owners/${owner._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ balance: 12500 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.owner.balance).toBe(-12500);
+    expect(res.body.data.owner.isDebtor).toBe(true);
+
+    const member = await OrganizationMember.findOne({ user: owner._id, organization: orgId }).lean();
+    expect(member.balance).toBe(-12500);
+    expect(member.isDebtor).toBe(true);
+  });
+
+  test('normaliza saldos positivos de carga masiva como deudas negativas', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        nombre: 'Owner Saldo Positivo',
+        email: 'saldo-positivo@test.com',
+        'contraseña': 'password123',
+        saldo: 18500,
+        moroso: 'si',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Propietarios');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const res = await request(app)
+      .post('/api/owners/bulk')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', buffer, {
+        filename: 'owners.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.created).toBe(1);
+
+    const owner = await User.findOne({ email: 'saldo-positivo@test.com' }).lean();
+    const member = await OrganizationMember.findOne({ user: owner._id, organization: orgId }).lean();
+    expect(member.balance).toBe(-18500);
+    expect(member.isDebtor).toBe(true);
   });
 
   test('rechaza vincular usuario existente si conserva una unidad usada por otro owner', async () => {

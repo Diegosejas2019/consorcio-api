@@ -203,6 +203,7 @@ exports.createPayment = async (req, res, next) => {
   try {
     let { month, ownerNote } = req.body;
     let { amount } = req.body;
+    let balanceAmount = Number(req.body.balanceAmount || 0);
     const ownerId = req.user.role === 'owner' ? req.user._id : req.body.ownerId;
 
     // Parse extraordinaryIds: puede venir como string JSON, array, o múltiples campos
@@ -222,23 +223,35 @@ exports.createPayment = async (req, res, next) => {
       Unit.find({ organization: req.orgId, active: true }).lean(),
     ]);
 
-    if (!month && extraordinaryIds.length === 0) {
+    if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0) {
       if (!amount || Number(amount) < 1) {
         return res.status(400).json({ success: false, message: 'El período o importe son obligatorios.' });
       }
       // balance payment — continúa
     }
 
+    if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0) {
+      balanceAmount = Number(amount);
+    }
+
     const monthlyFee = org?.monthlyFee ?? 0;
 
-    if (!month && extraordinaryIds.length === 0) {
+    if (balanceAmount > 0) {
       const currentDebt = Math.abs(Math.min(Number(ownerMembership?.balance || 0), 0));
-      const paymentAmount = Number(amount);
       if (currentDebt <= 0) {
         return res.status(400).json({ success: false, message: 'No hay saldo anterior pendiente para pagar.' });
       }
-      if (paymentAmount > currentDebt) {
+      if (balanceAmount > currentDebt) {
         return res.status(400).json({ success: false, message: 'El importe no puede superar el saldo anterior pendiente.' });
+      }
+      const pendingBalance = await Payment.findOne({
+        organization: req.orgId,
+        owner:        ownerId,
+        type:         'balance',
+        status:       'pending',
+      });
+      if (pendingBalance) {
+        return res.status(400).json({ success: false, message: 'Ya tenes un pago de saldo anterior pendiente.' });
       }
     }
 
@@ -329,6 +342,10 @@ exports.createPayment = async (req, res, next) => {
         mimetype: req.file.mimetype,
         size:     req.file.size,
       };
+    }
+
+    if (!month && extraordinaryIds.length === 0 && balanceAmount > 0) {
+      amount = balanceAmount;
     }
 
     const paymentType = (!month && extraordinaryIds.length === 0)

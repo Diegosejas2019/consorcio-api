@@ -102,6 +102,53 @@ describe('Units admin flows', () => {
     expect(unit.owner.toString()).toBe(owner._id.toString());
   });
 
+  test('muestra como ocupada una unidad legacy con owner aunque status sea available', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const owner = await User.create({
+      name: 'Owner Legacy',
+      email: 'legacy-unit@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: orgId,
+      isActive: true,
+    });
+    const otherOwner = await User.create({
+      name: 'Otro Owner',
+      email: 'other-unit@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: orgId,
+      isActive: true,
+    });
+    await OrganizationMember.create([
+      { user: owner._id, organization: orgId, role: 'owner', isActive: true },
+      { user: otherOwner._id, organization: orgId, role: 'owner', isActive: true },
+    ]);
+    const unit = await Unit.create({ organization: orgId, owner: owner._id, name: 'Lote Legacy', status: 'occupied', active: true });
+    await Unit.updateOne({ _id: unit._id }, { $set: { status: 'available' } });
+
+    const listRes = await request(app)
+      .get('/api/units')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.data.units[0]).toEqual(
+      expect.objectContaining({
+        name: 'Lote Legacy',
+        status: 'occupied',
+        owner: expect.objectContaining({ name: 'Owner Legacy' }),
+      })
+    );
+
+    const assignRes = await request(app)
+      .patch(`/api/units/${unit._id}/assign-owner`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ownerId: otherOwner._id });
+
+    expect(assignRes.status).toBe(400);
+    expect(assignRes.body.message).toContain('ocupada');
+  });
+
   test('al eliminar owner libera todas sus unidades activas', async () => {
     const { token, orgId } = await createAdminWithToken();
     const owner = await User.create({

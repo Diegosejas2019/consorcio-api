@@ -4,17 +4,10 @@ const Expense            = require('../models/Expense');
 const Organization       = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
 const logger             = require('../config/logger');
-
-const CATEGORIES = ['cleaning', 'security', 'maintenance', 'utilities', 'administration', 'other'];
-
-const CATEGORY_LABELS = {
-  cleaning:       'Limpieza',
-  security:       'Seguridad',
-  maintenance:    'Mantenimiento',
-  utilities:      'Servicios',
-  administration: 'Administración',
-  other:          'Otros',
-};
+const {
+  getExpenseCategoryLabelMap,
+  listExpenseCategories,
+} = require('../services/expenseCategoryService');
 
 // ── GET /api/reports/monthly-summary?month=YYYY-MM ──────────────
 exports.getMonthlySummary = async (req, res, next) => {
@@ -35,7 +28,7 @@ exports.getMonthlySummary = async (req, res, next) => {
 
     logger.debug(`[reportController] monthly-summary org=${orgId} month=${month}`);
 
-    const [incomeAgg, expensesAgg, prevIncomeAgg, prevExpensesAgg] = await Promise.all([
+    const [incomeAgg, expensesAgg, prevIncomeAgg, prevExpensesAgg, categories] = await Promise.all([
       Payment.aggregate([
         { $match: { organization: orgId, status: 'approved', month } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
@@ -52,14 +45,16 @@ exports.getMonthlySummary = async (req, res, next) => {
         { $match: { organization: orgId, status: 'paid', isActive: { $ne: false }, date: { $lt: monthStart } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
+      listExpenseCategories(orgId, { createdBy: req.user?._id }),
     ]);
 
     const income        = incomeAgg[0]?.total        || 0;
     const saldoAnterior = (prevIncomeAgg[0]?.total   || 0) - (prevExpensesAgg[0]?.total || 0);
 
-    const expMap    = Object.fromEntries(expensesAgg.map(e => [e._id, e.total]));
-    const expenses  = Object.fromEntries(CATEGORIES.map(c => [c, expMap[c] || 0]));
-    const expTotal  = CATEGORIES.reduce((sum, c) => sum + expenses[c], 0);
+    const categoryKeys = [...new Set([...categories.map(c => c.key), ...expensesAgg.map(e => e._id)])];
+    const expMap       = Object.fromEntries(expensesAgg.map(e => [e._id, e.total]));
+    const expenses     = Object.fromEntries(categoryKeys.map(c => [c, expMap[c] || 0]));
+    const expTotal     = categoryKeys.reduce((sum, c) => sum + expenses[c], 0);
 
     res.json({
       success: true,
@@ -92,7 +87,7 @@ const monthAbbrev = (month) => {
   return `${abbrevs[parseInt(m, 10) - 1]}.${y.slice(2)}`;
 };
 
-const buildExpensasHTML = (org, month, ordinary, extraordinary, owners, paymentsByOwner) => {
+const buildExpensasHTML = (org, month, ordinary, extraordinary, owners, paymentsByOwner, categoryLabels = {}) => {
   const monthLabel = formatMonthLabel(month);
   const totalOrd   = ordinary.reduce((s, e) => s + e.amount, 0);
   const totalExt   = extraordinary.reduce((s, e) => s + e.amount, 0);
@@ -113,7 +108,7 @@ const buildExpensasHTML = (org, month, ordinary, extraordinary, owners, payments
           <td style="padding:10px 12px;font-size:13px;color:#374151;">${invoice}</td>
           <td style="padding:10px 12px;font-size:13px;color:#374151;">${cuit}</td>
           <td style="padding:10px 12px;font-size:13px;color:#374151;">${e.description}</td>
-          <td style="padding:10px 12px;font-size:13px;color:#374151;">${prov}<br><span style="font-size:11px;color:#9ca3af;">${CATEGORY_LABELS[e.category] || e.category}</span></td>
+          <td style="padding:10px 12px;font-size:13px;color:#374151;">${prov}<br><span style="font-size:11px;color:#9ca3af;">${categoryLabels[e.category] || e.category}</span></td>
           <td style="padding:10px 12px;font-size:13px;color:#111827;text-align:right;font-weight:500;">${formatCurrency(e.amount)}</td>
         </tr>`;
     }).join('');
@@ -388,7 +383,7 @@ exports.getExpensasPdf = async (req, res, next) => {
     const monthStart  = new Date(year, mon - 1, 1);
     const monthEnd    = new Date(year, mon, 0, 23, 59, 59, 999);
 
-    const [org, expenses, rawMembers, monthPayments] = await Promise.all([
+    const [org, expenses, rawMembers, monthPayments, categoryLabels] = await Promise.all([
       Organization.findById(orgId).select('name address cuit dueDayOfMonth lateFeePercent bankName bankAccount bankCbu bankHolder'),
       Expense.find({
         organization: orgId,
@@ -404,6 +399,7 @@ exports.getExpensasPdf = async (req, res, next) => {
       Payment.find({ organization: orgId, status: 'approved', month })
         .select('owner amount')
         .lean(),
+      getExpenseCategoryLabelMap(orgId),
     ]);
 
     if (!org) {
@@ -432,7 +428,7 @@ exports.getExpensasPdf = async (req, res, next) => {
     const ordinary      = expenses.filter(e => e.expenseType !== 'extraordinary');
     const extraordinary = expenses.filter(e => e.expenseType === 'extraordinary');
 
-    const html = buildExpensasHTML(org, month, ordinary, extraordinary, owners, paymentsByOwner);
+    const html = buildExpensasHTML(org, month, ordinary, extraordinary, owners, paymentsByOwner, categoryLabels);
 
     const browser = await puppeteer.launch({
       headless: true,

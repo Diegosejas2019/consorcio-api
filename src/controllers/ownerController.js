@@ -9,10 +9,16 @@ const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const XLSX    = require('xlsx');
 
 // Campos del User que son identidad global (no datos financieros por org)
-const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'phone', 'role', 'organization', 'createdBy', 'isActive']);
+const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'phone', 'phones', 'role', 'organization', 'createdBy', 'isActive']);
 
 function normalizeUnitName(raw) {
   return String(raw || '').trim().replace(/\s+/g, ' ');
+}
+
+function normalizeDebtBalance(raw, fallback = 0) {
+  const amount = Number(raw ?? fallback);
+  if (!Number.isFinite(amount)) return fallback;
+  return amount > 0 ? -amount : amount;
 }
 
 function getRequestedUnitIds(body) {
@@ -24,6 +30,24 @@ function getRequestedUnitIds(body) {
     values.push(body.unitId);
   }
   return [...new Set(values.map(id => String(id)).filter(Boolean))];
+}
+
+function normalizePhonesInput(body) {
+  const values = [];
+
+  if (body.phones !== undefined) {
+    values.push(...(Array.isArray(body.phones) ? body.phones : [body.phones]));
+  }
+  if (body.phone !== undefined) values.push(body.phone);
+
+  const phones = [...new Set(values
+    .flatMap(value => String(value || '').split(/[,;\n]/))
+    .map(value => value.trim())
+    .filter(Boolean))];
+  if (!phones.length && (body.phones !== undefined || body.phone !== undefined)) return { phone: undefined, phones: [] };
+  if (!phones.length) return {};
+
+  return { phone: phones[0], phones };
 }
 
 async function findAssignableUnits(unitIds, orgId, ownerId) {
@@ -38,10 +62,7 @@ async function findAssignableUnits(unitIds, orgId, ownerId) {
   const missing = unitIds.find(id => !foundIds.has(id));
   if (missing) return { error: { status: 404, message: 'Unidad no encontrada.' } };
 
-  const occupied = units.find(unit =>
-    unit.status === 'occupied' &&
-    (!ownerId || unit.owner?.toString() !== ownerId.toString())
-  );
+  const occupied = units.find(unit => unit.owner && (!ownerId || unit.owner.toString() !== ownerId.toString()));
   if (occupied) {
     return { error: { status: 400, message: `La unidad ${occupied.name} ya estÃ¡ ocupada.` } };
   }
@@ -112,7 +133,7 @@ exports.getAllOwners = async (req, res, next) => {
     if (isDebtor !== undefined) memberFilter.isDebtor = isDebtor === 'true';
 
     let memberships = await OrganizationMember.find(memberFilter)
-      .populate('user', 'name email unitId phone initials lastLogin createdAt isActive')
+      .populate('user', 'name email unitId phone phones initials lastLogin createdAt isActive')
       .lean();
 
     memberships = memberships.filter(m => m.user != null);
@@ -166,7 +187,7 @@ exports.getAllOwners = async (req, res, next) => {
 
     const owners = paged.map(m => ({
       ...m.user,
-      balance:            m.balance,
+      balance:            normalizeDebtBalance(m.balance),
       isDebtor:           m.isDebtor,
       percentage:         m.percentage,
       startBillingPeriod: m.startBillingPeriod,
@@ -202,7 +223,7 @@ exports.getOwner = async (req, res, next) => {
 
     const owner = {
       ...membership.user.toObject(),
-      balance:            membership.balance,
+      balance:            normalizeDebtBalance(membership.balance),
       isDebtor:           membership.isDebtor,
       percentage:         membership.percentage,
       startBillingPeriod: membership.startBillingPeriod,
@@ -223,9 +244,10 @@ exports.getOwner = async (req, res, next) => {
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
-    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'percentage'];
+    const allowed  = ['name', 'email', 'password', 'unit', 'phone', 'phones', 'percentage'];
     const ownerData = { role: 'owner', organization: req.orgId, createdBy: req.user._id };
     allowed.forEach((f) => { if (req.body[f] !== undefined) ownerData[f] = req.body[f]; });
+    Object.assign(ownerData, normalizePhonesInput(req.body));
     if (ownerData.unit) {
       ownerData.unit = normalizeUnitName(ownerData.unit);
       const conflict = await validateLegacyUnitAvailable(req.orgId, ownerData.unit);
@@ -238,7 +260,7 @@ exports.createOwner = async (req, res, next) => {
     if (initialDebtAmount < 0) {
       return res.status(400).json({ success: false, message: 'La deuda inicial no puede ser negativa.' });
     }
-    ownerData.balance  = initialDebtAmount > 0 ? -initialDebtAmount : 0;
+    ownerData.balance  = normalizeDebtBalance(initialDebtAmount);
     ownerData.isDebtor = initialDebtAmount > 0;
 
     const currentPeriod = formatYYYYMM(new Date());
@@ -354,16 +376,21 @@ exports.createOwner = async (req, res, next) => {
 exports.updateOwner = async (req, res, next) => {
   try {
     const memberFields = ['balance', 'isDebtor', 'percentage', 'startBillingPeriod'];
-    const userFields   = ['name', 'phone', 'isActive'];
+    const userFields   = ['name', 'phone', 'phones', 'isActive'];
 
     const userUpdate   = {};
     const memberUpdate = {};
     [...memberFields, ...userFields].forEach((f) => {
       if (req.body[f] !== undefined) {
-        if (memberFields.includes(f)) memberUpdate[f] = req.body[f];
+        if (f === 'balance') memberUpdate.balance = normalizeDebtBalance(req.body.balance);
+        else if (memberFields.includes(f)) memberUpdate[f] = req.body[f];
         else userUpdate[f] = req.body[f];
       }
     });
+    if (memberUpdate.balance !== undefined) {
+      memberUpdate.isDebtor = memberUpdate.balance < 0;
+    }
+    Object.assign(userUpdate, normalizePhonesInput(req.body));
 
     const membership = await OrganizationMember.findOne({
       user: req.params.id,
@@ -397,7 +424,7 @@ exports.updateOwner = async (req, res, next) => {
 
     const owner = {
       ...updatedUser.toObject(),
-      balance:            updatedMember.balance,
+      balance:            normalizeDebtBalance(updatedMember.balance),
       isDebtor:           updatedMember.isDebtor,
       percentage:         updatedMember.percentage,
       startBillingPeriod: updatedMember.startBillingPeriod,
@@ -471,9 +498,9 @@ exports.notifyOwner = async (req, res, next) => {
 exports.downloadBulkTemplate = (_req, res) => {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([
-    ['nombre', 'email', 'contraseña', 'telefono', 'saldo', 'moroso'],
-    ['María García', 'maria@mail.com', 'clave123', '1122334455', '0', 'no'],
-    ['Juan Pérez',   'juan@mail.com',  'clave456', '',           '0', 'no'],
+    ['nombre', 'email', 'contraseña', 'telefono', 'telefonos', 'saldo', 'moroso'],
+    ['María García', 'maria@mail.com', 'clave123', '1122334455', '1122334455; 1199887766', '0', 'no'],
+    ['Juan Pérez',   'juan@mail.com',  'clave456', '',           '',                       '0', 'no'],
   ]);
   XLSX.utils.book_append_sheet(wb, ws, 'Propietarios');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -508,9 +535,10 @@ exports.bulkCreateOwners = async (req, res, next) => {
       email:        'email',
       'contraseña': 'password',
       telefono:     'phone',
+      telefonos:    'phones',
       saldo:        'balance',
       moroso:       'isDebtor',
-      name: 'name', password: 'password', phone: 'phone',
+      name: 'name', password: 'password', phone: 'phone', phones: 'phones',
       balance: 'balance', isDebtor: 'isDebtor',
     };
     const created = [];
@@ -526,11 +554,13 @@ exports.bulkCreateOwners = async (req, res, next) => {
         if (field && val !== undefined && val !== '') ownerData[field] = val;
       });
 
-      if (ownerData.balance !== undefined) ownerData.balance = Number(ownerData.balance);
+      if (ownerData.balance !== undefined) ownerData.balance = normalizeDebtBalance(ownerData.balance);
+      Object.assign(ownerData, normalizePhonesInput(ownerData));
       if (ownerData.isDebtor !== undefined) {
         const v = String(ownerData.isDebtor).toLowerCase();
         ownerData.isDebtor = v === 'true' || v === '1' || v === 'si' || v === 'sí';
       }
+      if (ownerData.balance !== undefined) ownerData.isDebtor = ownerData.balance < 0;
 
       if (!ownerData.name || !ownerData.email) {
         errors.push({ row: rowNum, email: ownerData.email || '', reason: 'nombre y email son obligatorios.' });

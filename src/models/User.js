@@ -51,6 +51,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    phones: [{
+      type: String,
+      trim: true,
+    }],
     // @deprecated — leer desde OrganizationMember; se mantiene solo para docs legacy
     balance: {
       type: Number,
@@ -133,6 +137,24 @@ userSchema.virtual('initials').get(function () {
     .slice(0, 2)
     .map((w) => w[0].toUpperCase())
     .join('');
+});
+
+// Mantener compatibilidad: `phone` es el telefono principal y `phones` la lista completa.
+userSchema.pre('validate', function (next) {
+  const normalizedPhones = [];
+
+  const addPhone = (value) => {
+    const phone = String(value || '').trim();
+    if (phone && !normalizedPhones.includes(phone)) normalizedPhones.push(phone);
+  };
+
+  if (Array.isArray(this.phones)) this.phones.forEach(addPhone);
+  addPhone(this.phone);
+
+  this.phones = normalizedPhones;
+  this.phone = normalizedPhones[0] || undefined;
+
+  next();
 });
 
 // ── Pre-save: hashear password ───────────────────────────────

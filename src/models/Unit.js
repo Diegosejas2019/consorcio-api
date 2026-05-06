@@ -52,4 +52,15 @@ unitSchema.index({ organization: 1, owner: 1 });
 unitSchema.index({ organization: 1, active: 1 });
 unitSchema.index({ organization: 1, name: 1 }, { unique: true });
 
+unitSchema.pre('validate', function (next) {
+  if (this.active === false) {
+    this.status = 'inactive';
+  } else if (this.owner) {
+    this.status = 'occupied';
+  } else if (this.status === 'occupied') {
+    this.status = 'available';
+  }
+  next();
+});
+
 module.exports = mongoose.model('Unit', unitSchema);

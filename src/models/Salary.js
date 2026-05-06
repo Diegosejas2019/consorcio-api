@@ -38,9 +38,19 @@ const salarySchema = new mongoose.Schema(
       required: true,
       min: [0, 'El total no puede ser negativo'],
     },
+    paidAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'El monto pagado no puede ser negativo'],
+    },
+    remainingAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'El saldo pendiente no puede ser negativo'],
+    },
     status: {
       type: String,
-      enum: ['pending', 'paid', 'cancelled'],
+      enum: ['pending', 'partially_paid', 'paid', 'cancelled'],
       default: 'pending',
     },
     paymentDate:   { type: Date },
@@ -50,9 +60,22 @@ const salarySchema = new mongoose.Schema(
     createdBy:     { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     updatedBy:     { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
 );
 
 salarySchema.index({ organization: 1, employee: 1, period: 1 }, { unique: true });
+
+salarySchema.virtual('statusLabel').get(function () {
+  return {
+    pending:        'Pendiente',
+    partially_paid: 'Parcialmente pagado',
+    paid:           'Pagado',
+    cancelled:      'Cancelado',
+  }[this.status] || this.status;
+});
 
 module.exports = mongoose.model('Salary', salarySchema);

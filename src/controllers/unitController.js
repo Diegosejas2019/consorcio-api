@@ -10,6 +10,13 @@ function calcUnitFee(unit, monthlyFee) {
 }
 exports.calcUnitFee = calcUnitFee;
 
+function getEffectiveUnitStatus(unit) {
+  if (unit.active === false) return 'inactive';
+  if (unit.owner) return 'occupied';
+  if (unit.status === 'inactive') return 'inactive';
+  return 'available';
+}
+
 async function findActiveOwnerInOrg(ownerId, orgId) {
   if (!ownerId) return null;
 
@@ -80,10 +87,14 @@ exports.getUnits = async (req, res, next) => {
     const org = await Organization.findById(req.orgId).select('monthlyFee');
     const monthlyFee = org?.monthlyFee ?? 0;
 
-    const enriched = units.map(u => ({
-      ...u.toJSON(),
-      finalFee: calcUnitFee(u, monthlyFee),
-    }));
+    const enriched = units.map(u => {
+      const unit = u.toJSON();
+      return {
+        ...unit,
+        status: getEffectiveUnitStatus(unit),
+        finalFee: calcUnitFee(u, monthlyFee),
+      };
+    });
 
     res.json({ success: true, data: { units: enriched } });
   } catch (err) {
@@ -261,7 +272,7 @@ exports.assignOwner = async (req, res, next) => {
 
     if (!unit)  return res.status(404).json({ success: false, message: 'Unidad no encontrada.' });
     if (!owner) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
-    if (unit.status === 'occupied') {
+    if (unit.owner && unit.owner.toString() !== ownerId.toString()) {
       return res.status(400).json({ success: false, message: 'La unidad ya está ocupada.' });
     }
 

@@ -99,13 +99,13 @@ exports.login = async (req, res, next) => {
 // ── POST /api/auth/register (solo admin puede crear propietarios) ─
 exports.register = async (req, res, next) => {
   try {
-    const { name, email, password, unit, phone, role } = req.body;
+    const { name, email, password, unit, phone, phones, role } = req.body;
 
     // Solo admin puede crear otros admins (nunca superadmin via API)
     const assignedRole = req.user?.role === 'admin' ? (role === 'admin' ? 'admin' : 'owner') : 'owner';
 
     const user = await User.create({
-      name, email, password, unit, phone,
+      name, email, password, unit, phone, phones,
       role: assignedRole,
       organization: req.user?.organization?._id ?? req.user?.organization ?? undefined,
     });

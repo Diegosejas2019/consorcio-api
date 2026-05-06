@@ -1,8 +1,8 @@
 const router = require('express').Router();
 const ctrl   = require('../controllers/salaryController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 
-router.use(protect, restrictTo('admin'));
+router.use(protect, requireOrg, restrictTo('admin'));
 
 router.get('/',      ctrl.getSalaries);
 router.post('/',     ctrl.createSalary);
