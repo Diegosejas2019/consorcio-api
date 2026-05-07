@@ -151,6 +151,34 @@ describe('POST /api/owners unit validation', () => {
     ]);
   });
 
+  test('divide la deuda inicial entre las unidades asignadas al alta', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const units = await Unit.create([
+      { organization: orgId, name: 'Lote 1', status: 'available', active: true },
+      { organization: orgId, name: 'Lote 2', status: 'available', active: true },
+    ]);
+
+    const res = await request(app)
+      .post('/api/owners')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Owner Deuda Dos Lotes',
+        email: 'deuda-dos-lotes@test.com',
+        password: 'password123',
+        unitIds: units.map(u => u._id),
+        initialDebtAmount: 12000,
+      });
+
+    expect(res.status).toBe(201);
+
+    const owner = await User.findOne({ email: 'deuda-dos-lotes@test.com' });
+    const assigned = await Unit.find({ organization: orgId, owner: owner._id }).sort({ name: 1 }).lean();
+    expect(assigned.map(u => ({ name: u.name, balance: u.balance, isDebtor: u.isDebtor }))).toEqual([
+      { name: 'Lote 1', balance: -6000, isDebtor: true },
+      { name: 'Lote 2', balance: -6000, isDebtor: true },
+    ]);
+  });
+
   test('rechaza alta con unitIds si alguna unidad ya esta ocupada', async () => {
     const { token, orgId } = await createAdminWithToken();
     const existingOwner = await createActiveOwner(orgId, 'Lote 8');

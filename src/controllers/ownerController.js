@@ -114,6 +114,20 @@ async function setOwnerUnitBalance(ownerId, orgId, rawBalance) {
   return { unit: units[0], balance };
 }
 
+async function distributeInitialDebt(units, rawAmount) {
+  const amount = Number(rawAmount || 0);
+  if (amount <= 0 || !units.length) return;
+
+  const debtPerUnit = normalizeDebtBalance(amount / units.length);
+  await Unit.updateMany(
+    { _id: { $in: units.map(unit => unit._id) } },
+    {
+      balance: debtPerUnit,
+      isDebtor: true,
+    }
+  );
+}
+
 async function validateLegacyUnitAvailable(orgId, unitName, ownerId = null) {
   const normalized = normalizeUnitName(unitName);
   if (!normalized) return null;
@@ -342,10 +356,10 @@ exports.createOwner = async (req, res, next) => {
 
     const tempPassword = req.body.password;
     const requestedUnitIds = getRequestedUnitIds(req.body);
-    if (initialDebtAmount > 0 && requestedUnitIds.length !== 1) {
+    if (initialDebtAmount > 0 && requestedUnitIds.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'La deuda inicial debe asignarse a una única unidad.',
+        message: 'La deuda inicial debe asignarse al menos a una unidad.',
       });
     }
 
@@ -436,12 +450,7 @@ exports.createOwner = async (req, res, next) => {
       const { units, error } = await syncOwnerUnits(owner._id, req.orgId, requestedUnitIds);
       if (error) return res.status(error.status).json({ success: false, message: error.message });
       assignedUnits = units;
-      if (initialDebtAmount > 0 && assignedUnits.length === 1) {
-        await Unit.findByIdAndUpdate(assignedUnits[0]._id, {
-          balance:  normalizeDebtBalance(initialDebtAmount),
-          isDebtor: true,
-        });
-      }
+      await distributeInitialDebt(assignedUnits, initialDebtAmount);
       owner = await User.findById(owner._id).select('-password -fcmToken');
     }
 
