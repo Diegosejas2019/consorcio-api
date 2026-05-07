@@ -12,7 +12,12 @@ const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
 const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
 const { currentYYYYMM } = require('../utils/periods');
+const { computeTotalOwed, getChargeablePeriods, getUnpaidPeriods, normalizeDebtBalance } = require('../utils/ownerFinance');
 const logger          = require('../config/logger');
+
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const ADMIN_OWNER_STATUSES = new Set(['all', 'debtor', 'up_to_date', 'pending_review']);
+const ADMIN_OWNER_SORTS = new Set(['debt_first', 'name', 'unit', 'last_payment']);
 
 const getCloudinaryRawPublicIdFromUrl = (url) => {
   if (!url) return null;
@@ -107,6 +112,180 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
     .filter(Boolean);
 
   return { periods, extraordinary };
+};
+
+const summarizePaymentForAdmin = payment => ({
+  id:                  payment._id,
+  _id:                 payment._id,
+  month:               payment.month || null,
+  amount:              payment.amount,
+  status:              payment.status,
+  type:                payment.type,
+  paymentMethod:       payment.paymentMethod,
+  createdAt:           payment.createdAt,
+  reviewedAt:          payment.reviewedAt,
+  hasReceipt:          Boolean(payment.receipt?.url),
+  receiptFilename:     payment.receipt?.filename || null,
+  hasSystemReceipt:    Boolean(payment.systemReceipt?.url),
+  receiptNumber:       payment.receiptNumber || null,
+});
+
+const getSelectedPeriodStatus = (period, chargeablePeriods, paidPeriods, pendingPeriods) => {
+  if (!period) return undefined;
+  if (!chargeablePeriods.includes(period)) return 'not_chargeable';
+  if (paidPeriods.includes(period)) return 'paid';
+  if (pendingPeriods.includes(period)) return 'pending';
+  return 'unpaid';
+};
+
+// ── GET /api/payments/admin/owners — vista admin por propietario ──
+exports.getAdminOwnersPayments = async (req, res, next) => {
+  try {
+    const page   = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit  = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
+    const status = ADMIN_OWNER_STATUSES.has(req.query.status) ? req.query.status : 'all';
+    const sort   = ADMIN_OWNER_SORTS.has(req.query.sort) ? req.query.sort : 'debt_first';
+    const { search, period } = req.query;
+
+    if (period && !PERIOD_RE.test(period)) {
+      return res.status(400).json({ success: false, message: 'El periodo debe tener formato YYYY-MM.' });
+    }
+
+    let memberships = await OrganizationMember.find({
+      organization: req.orgId,
+      role:         'owner',
+      isActive:     true,
+    })
+      .populate('user', 'name email unit phone phones unitId isActive')
+      .lean();
+
+    memberships = memberships.filter(m => m.user);
+    const ownerIds = memberships.map(m => m.user._id);
+
+    const [org, units, payments] = await Promise.all([
+      Organization.findById(req.orgId).select('paymentPeriods monthlyFee feePeriodCode'),
+      Unit.find({ organization: req.orgId, active: true })
+        .select('owner name customFee coefficient')
+        .lean(),
+      Payment.find({ organization: req.orgId, owner: { $in: ownerIds } })
+        .select('-__v')
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
+
+    const unitsByOwner = {};
+    units.forEach(unit => {
+      if (!unit.owner) return;
+      const key = unit.owner.toString();
+      (unitsByOwner[key] ||= []).push(unit);
+    });
+
+    const paymentsByOwner = {};
+    payments.forEach(payment => {
+      const key = payment.owner.toString();
+      (paymentsByOwner[key] ||= []).push(payment);
+    });
+
+    let owners = memberships.map(membership => {
+      const owner = membership.user;
+      const ownerId = owner._id.toString();
+      const ownerUnits = unitsByOwner[ownerId] || [];
+      const ownerPayments = paymentsByOwner[ownerId] || [];
+      const paidPeriods = [...new Set(ownerPayments
+        .filter(p => p.status === 'approved' && p.month)
+        .map(p => p.month))]
+        .sort();
+      const paidPeriodSet = new Set(paidPeriods);
+      const pendingPayments = ownerPayments
+        .filter(p => p.status === 'pending')
+        .map(summarizePaymentForAdmin);
+      const pendingPeriods = [...new Set(pendingPayments.map(p => p.month).filter(Boolean))].sort();
+      const chargeablePeriods = getChargeablePeriods(membership, org || {});
+      const unpaidPeriods = getUnpaidPeriods(membership, paidPeriodSet, org || {});
+      const totalOwed = computeTotalOwed(membership, paidPeriodSet, ownerUnits, org || {});
+      const lastPaymentRaw = ownerPayments.find(p => p.status === 'approved');
+
+      return {
+        id:                   owner._id,
+        _id:                  owner._id,
+        membershipId:         membership._id,
+        name:                 owner.name,
+        email:                owner.email,
+        phone:                owner.phone,
+        phones:               owner.phones || [],
+        unit:                 owner.unit,
+        units:                ownerUnits.map(unit => unit.name).sort((a, b) => a.localeCompare(b)),
+        isDebtor:             totalOwed > 0,
+        storedIsDebtor:       membership.isDebtor,
+        balance:              normalizeDebtBalance(membership.balance),
+        totalOwed,
+        paidPeriods,
+        unpaidPeriods,
+        pendingPayments,
+        pendingPaymentsCount: pendingPayments.length,
+        lastPayment:          lastPaymentRaw ? summarizePaymentForAdmin(lastPaymentRaw) : null,
+        startBillingPeriod:   membership.startBillingPeriod,
+        ...(period ? {
+          selectedPeriod:       period,
+          selectedPeriodStatus: getSelectedPeriodStatus(period, chargeablePeriods, paidPeriods, pendingPeriods),
+        } : {}),
+      };
+    });
+
+    if (search) {
+      const re = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      owners = owners.filter(owner =>
+        re.test(owner.name || '')
+        || re.test(owner.email || '')
+        || re.test(owner.unit || '')
+        || owner.units.some(unit => re.test(unit))
+      );
+    }
+
+    if (period) {
+      owners = owners.filter(owner =>
+        owner.paidPeriods.includes(period)
+        || owner.unpaidPeriods.includes(period)
+        || owner.pendingPayments.some(payment => payment.month === period)
+      );
+    }
+
+    if (status === 'debtor') {
+      owners = owners.filter(owner => owner.totalOwed > 0);
+    } else if (status === 'up_to_date') {
+      owners = owners.filter(owner => owner.totalOwed <= 0);
+    } else if (status === 'pending_review') {
+      owners = owners.filter(owner => owner.pendingPayments.length > 0);
+    }
+
+    owners.sort((a, b) => {
+      if (sort === 'name') return a.name.localeCompare(b.name);
+      if (sort === 'unit') return (a.units[0] || a.unit || '').localeCompare(b.units[0] || b.unit || '') || a.name.localeCompare(b.name);
+      if (sort === 'last_payment') {
+        const aTime = a.lastPayment?.createdAt ? new Date(a.lastPayment.createdAt).getTime() : 0;
+        const bTime = b.lastPayment?.createdAt ? new Date(b.lastPayment.createdAt).getTime() : 0;
+        return bTime - aTime || a.name.localeCompare(b.name);
+      }
+      return Number(b.totalOwed > 0) - Number(a.totalOwed > 0)
+        || b.totalOwed - a.totalOwed
+        || (a.units[0] || a.unit || '').localeCompare(b.units[0] || b.unit || '')
+        || a.name.localeCompare(b.name);
+    });
+
+    const total = owners.length;
+    const pagedOwners = owners.slice((page - 1) * limit, page * limit);
+
+    res.json({
+      success: true,
+      data: {
+        owners: pagedOwners,
+        filters: { search: search || null, period: period || null, status, sort },
+      },
+      pagination: { total, page, limit, pages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 // ── GET /api/payments — listar (admin: todos; owner: los suyos) ─

@@ -17,6 +17,7 @@ router.param('id', (req, res, next, id) => {
 });
 
 router.get('/dashboard',       restrictTo('admin'), ctrl.getDashboard);
+router.get('/admin/owners',    restrictTo('admin'), ctrl.getAdminOwnersPayments);
 router.get('/available-items', ctrl.getAvailableItems);
 router.get('/',                ctrl.getPayments);
 router.post('/',         upload.single('receipt'), ctrl.createPayment);

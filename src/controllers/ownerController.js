@@ -6,7 +6,8 @@ const Unit    = require('../models/Unit');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome } = require('../services/emailService');
-const { formatYYYYMM, getNextMonth, currentYYYYMM } = require('../utils/periods');
+const { formatYYYYMM, getNextMonth } = require('../utils/periods');
+const { computeTotalOwed, normalizeDebtBalance } = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
 
 // Campos del User que son identidad global (no datos financieros por org)
@@ -14,24 +15,6 @@ const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'pho
 
 function normalizeUnitName(raw) {
   return String(raw || '').trim().replace(/\s+/g, ' ');
-}
-
-function normalizeDebtBalance(raw, fallback = 0) {
-  const amount = Number(raw ?? fallback);
-  if (!Number.isFinite(amount)) return fallback;
-  return amount > 0 ? -amount : amount;
-}
-
-function computeTotalOwed(membership, approvedPaidMonths, ownerUnits, org) {
-  const initialDebt   = Math.max(0, -(membership.balance || 0));
-  const monthlyFee    = org?.monthlyFee || 0;
-  const ownerFee      = ownerUnits.reduce((sum, u) => sum + (u.customFee != null ? u.customFee : monthlyFee * (u.coefficient || 1)), 0);
-  const startBilling  = membership.startBillingPeriod;
-  const currentPeriod = currentYYYYMM();
-  const unpaidCount   = (org?.paymentPeriods || [])
-    .filter(p => !approvedPaidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod)
-    .length;
-  return initialDebt + unpaidCount * ownerFee;
 }
 
 function getRequestedUnitIds(body) {
