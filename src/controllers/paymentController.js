@@ -88,8 +88,38 @@ const getOwnerPaymentContext = async ({ organizationId, ownerId }) => {
   return { owner: membership.user, membership };
 };
 
+const buildBillableUnitsContext = (memberships = [], units = []) => {
+  const allUnits = [...units];
+  const unitsByOwner = {};
+  units.forEach(unit => {
+    if (!unit.owner) return;
+    const key = unit.owner.toString();
+    (unitsByOwner[key] ||= []).push(unit);
+  });
+
+  memberships.forEach(membership => {
+    const user = membership.user;
+    if (!user) return;
+    const ownerId = (user._id || user).toString();
+    if (unitsByOwner[ownerId]?.length) return;
+    if (!user.unit && !user.unitId) return;
+    const legacyUnit = {
+      _id:         user.unitId || user._id,
+      name:        user.unit || 'Unidad',
+      owner:       user._id,
+      coefficient: membership.percentage > 0 ? membership.percentage : 1,
+      active:      true,
+      legacy:      true,
+    };
+    unitsByOwner[ownerId] = [legacyUnit];
+    allUnits.push(legacyUnit);
+  });
+
+  return { allUnits, unitsByOwner };
+};
+
 const buildAvailablePaymentItems = async ({ organizationId, owner, membership }) => {
-  const [org, activePayments, ownerUnits, allOrgUnits] = await Promise.all([
+  const [org, activePayments, rawOwnerUnits, rawOrgUnits, memberships] = await Promise.all([
     Organization.findById(organizationId).select('paymentPeriods feePeriodCode monthlyFee'),
     Payment.find({
       organization: organizationId,
@@ -98,7 +128,13 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
     }).select('month extraordinaryItems'),
     Unit.find({ owner: owner._id, organization: organizationId, active: true }).lean(),
     Unit.find({ organization: organizationId, active: true }).lean(),
+    OrganizationMember.find({ organization: organizationId, role: 'owner', isActive: true })
+      .select('user percentage')
+      .populate('user', 'unit unitId')
+      .lean(),
   ]);
+  const { allUnits: allOrgUnits, unitsByOwner } = buildBillableUnitsContext(memberships, rawOrgUnits);
+  const ownerUnits = unitsByOwner[owner._id.toString()] || rawOwnerUnits;
 
   const paidMonths = new Set(activePayments.map(p => p.month).filter(Boolean));
   const paidExtraIds = new Set(
@@ -264,12 +300,7 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
         .lean(),
     ]);
 
-    const unitsByOwner = {};
-    units.forEach(unit => {
-      if (!unit.owner) return;
-      const key = unit.owner.toString();
-      (unitsByOwner[key] ||= []).push(unit);
-    });
+    const { allUnits: billableUnits, unitsByOwner } = buildBillableUnitsContext(memberships, units);
 
     const paymentsByOwner = {};
     payments.forEach(payment => {
@@ -303,7 +334,7 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
       const extraordinaryOwed = chargeableExpenses
         .filter(expense => !paidExtraIds.has(expense._id.toString()))
         .map(expense => {
-          const { amountForOwner } = calculateExtraordinaryAmountForOwner(expense, ownerUnits, units);
+          const { amountForOwner } = calculateExtraordinaryAmountForOwner(expense, ownerUnits, billableUnits);
           if (amountForOwner === 0 && ['per_unit', 'by_coefficient'].includes(expense.extraordinaryBillingMode)) {
             return null;
           }
@@ -559,12 +590,18 @@ exports.createPayment = async (req, res, next) => {
     }
 
     // Cargar unidades activas del propietario para calcular monto y breakdown
-    const [org, activeUnits, membershipDoc, allOrgUnits] = await Promise.all([
+    const [org, rawActiveUnits, membershipDoc, rawOrgUnits, billableMemberships] = await Promise.all([
       Organization.findById(req.orgId).select('monthlyFee feePeriodCode'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
       OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner', isActive: true }).select('startBillingPeriod balance'),
       Unit.find({ organization: req.orgId, active: true }).lean(),
+      OrganizationMember.find({ organization: req.orgId, role: 'owner', isActive: true })
+        .select('user percentage')
+        .populate('user', 'unit unitId')
+        .lean(),
     ]);
+    const { allUnits: allOrgUnits, unitsByOwner } = buildBillableUnitsContext(billableMemberships, rawOrgUnits);
+    const activeUnits = unitsByOwner[ownerId.toString()] || rawActiveUnits;
     let ownerMembership = membershipDoc;
 
     if (!ownerMembership) {

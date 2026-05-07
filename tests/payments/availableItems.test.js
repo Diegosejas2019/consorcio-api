@@ -30,6 +30,7 @@ const Expense  = require('../../src/models/Expense');
 const Organization = require('../../src/models/Organization');
 const Payment  = require('../../src/models/Payment');
 const Unit     = require('../../src/models/Unit');
+const OrganizationMember = require('../../src/models/OrganizationMember');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
@@ -154,6 +155,31 @@ describe('GET /api/payments - items disponibles para pagar', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.extraordinary[0].amount).toBe(5000); // 10000 / 2 unidades asignadas x 1
+  });
+
+  test('fixed_total: contempla propietarios legacy con unidad en User.unit', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    const otherOwner = new (require('mongoose').Types.ObjectId)();
+    await OrganizationMember.create({ organization: orgId, user: user._id, role: 'owner', isActive: true });
+    await OrganizationMember.create({ organization: orgId, user: otherOwner, role: 'owner', isActive: true });
+    await Unit.create({ organization: orgId, owner: otherOwner, name: 'Lote B', active: true });
+
+    await Expense.create({
+      organization: orgId,
+      description:  'Porton automatico',
+      category:     'maintenance',
+      amount:       10000,
+      date:         new Date('2025-04-10'),
+      expenseType:  'extraordinary',
+      isChargeable: true,
+      extraordinaryBillingMode: 'fixed_total',
+      createdBy:    user._id,
+    });
+
+    const res = await request(app).get('/api/payments').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.extraordinary[0].amount).toBe(5000);
   });
 
   test('by_coefficient: calcula monto ponderado por coeficiente', async () => {
