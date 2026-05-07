@@ -245,7 +245,7 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
     memberships = memberships.filter(m => m.user);
     const ownerIds = memberships.map(m => m.user._id);
 
-    const [org, units, payments] = await Promise.all([
+    const [org, units, payments, chargeableExpenses] = await Promise.all([
       Organization.findById(req.orgId).select('paymentPeriods monthlyFee feePeriodCode'),
       Unit.find({ organization: req.orgId, active: true })
         .select('owner name customFee coefficient')
@@ -253,6 +253,14 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
       Payment.find({ organization: req.orgId, owner: { $in: ownerIds } })
         .select('-__v')
         .sort({ createdAt: -1 })
+        .lean(),
+      Expense.find({
+        organization: req.orgId,
+        expenseType:  'extraordinary',
+        isChargeable: true,
+        isActive:     { $ne: false },
+      }).select('_id description amount date extraordinaryBillingMode unitAmount appliesToAllOwners targetUnits')
+        .sort({ date: -1, createdAt: -1 })
         .lean(),
     ]);
 
@@ -285,7 +293,32 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
       const pendingPeriods = [...new Set(pendingPayments.map(p => p.month).filter(Boolean))].sort();
       const chargeablePeriods = getChargeablePeriods(membership, org || {});
       const unpaidPeriods = getUnpaidPeriods(membership, paidPeriodSet, org || {});
-      const totalOwed = computeTotalOwed(membership, paidPeriodSet, ownerUnits, org || {});
+      const paidExtraIds = new Set(
+        ownerPayments
+          .filter(p => ['pending', 'approved'].includes(p.status))
+          .flatMap(p => (p.extraordinaryItems || [])
+            .map(item => item.expense?.toString())
+            .filter(Boolean))
+      );
+      const extraordinaryOwed = chargeableExpenses
+        .filter(expense => !paidExtraIds.has(expense._id.toString()))
+        .map(expense => {
+          const { amountForOwner } = calculateExtraordinaryAmountForOwner(expense, ownerUnits, units);
+          if (amountForOwner === 0 && ['per_unit', 'by_coefficient'].includes(expense.extraordinaryBillingMode)) {
+            return null;
+          }
+          return {
+            id:          expense._id,
+            title:       expense.description || 'Concepto extraordinario',
+            amount:      amountForOwner,
+            period:      expense.date ? expense.date.toISOString().slice(0, 7) : null,
+            date:        expense.date,
+          };
+        })
+        .filter(Boolean);
+      const balanceOwed = Math.max(0, -normalizeDebtBalance(membership.balance));
+      const extraordinaryTotal = extraordinaryOwed.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+      const totalOwed = computeTotalOwed(membership, paidPeriodSet, ownerUnits, org || {}) + extraordinaryTotal;
       const lastPaymentRaw = ownerPayments.find(p => p.status === 'approved');
 
       return {
@@ -301,6 +334,8 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
         isDebtor:             totalOwed > 0,
         storedIsDebtor:       membership.isDebtor,
         balance:              normalizeDebtBalance(membership.balance),
+        balanceOwed,
+        extraordinaryOwed,
         totalOwed,
         paidPeriods,
         unpaidPeriods,
