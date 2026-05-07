@@ -34,6 +34,8 @@ exports.calculateExtraordinaryAmountForOwner = (expense, ownerUnits, allOrgUnits
   }
 
   if (mode === 'per_unit') {
+    applicableOwner = applicableOwner.filter(u => !u.legacy);
+    applicableAll = applicableAll.filter(u => !u.legacy);
     if (applicableOwner.length === 0) return { amountForOwner: 0, breakdown: [] };
     const amountPerUnit = expense.unitAmount || 0;
     return {
@@ -43,6 +45,8 @@ exports.calculateExtraordinaryAmountForOwner = (expense, ownerUnits, allOrgUnits
   }
 
   if (mode === 'by_coefficient') {
+    applicableOwner = applicableOwner.filter(u => !u.legacy);
+    applicableAll = applicableAll.filter(u => !u.legacy);
     if (applicableOwner.length === 0) return { amountForOwner: 0, breakdown: [] };
     const totalCoeff = applicableAll.reduce((s, u) => s + (u.coefficient || 1), 0) || 1;
     let amountForOwner = 0;

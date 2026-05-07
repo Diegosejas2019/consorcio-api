@@ -12,22 +12,41 @@ const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const receiptService = require('../services/receiptService');
 const { currentYYYYMM } = require('../utils/periods');
+const { normalizeDebtBalance } = require('../utils/ownerFinance');
 const logger  = require('../config/logger');
 
 async function settleOwnerAccount(payment) {
   const ownerId = payment.owner?._id || payment.owner;
 
   if (payment.type === 'balance') {
-    const updatedMember = await OrganizationMember.findOneAndUpdate(
-      { user: ownerId, organization: payment.organization, role: 'owner' },
-      { $inc: { balance: payment.amount } },
-      { new: true }
-    );
-    if ((updatedMember?.balance ?? -1) >= 0) {
-      await OrganizationMember.updateOne(
-        { user: ownerId, organization: payment.organization, role: 'owner' },
-        { isDebtor: false, balance: 0 }
-      );
+    let paymentUnits = (payment.units || []).map(id => id?._id || id).filter(Boolean);
+    if (!paymentUnits.length) {
+      const debtorUnits = await Unit.find({
+        owner: ownerId,
+        organization: payment.organization,
+        active: true,
+        balance: { $lt: 0 },
+      }).sort({ name: 1 }).select('_id');
+      if (debtorUnits.length === 1) paymentUnits = [debtorUnits[0]._id];
+    }
+
+    let remaining = Number(payment.amount || 0);
+    const units = await Unit.find({
+      _id: { $in: paymentUnits },
+      organization: payment.organization,
+      active: true,
+    }).sort({ name: 1 });
+
+    for (const unit of units) {
+      if (remaining <= 0) break;
+      const owed = Math.max(0, -normalizeDebtBalance(unit.balance));
+      if (owed <= 0) continue;
+      const applied = Math.min(owed, remaining);
+      unit.balance = normalizeDebtBalance(unit.balance + applied);
+      if (unit.balance >= 0) unit.balance = 0;
+      unit.isDebtor = unit.balance < 0;
+      await unit.save();
+      remaining -= applied;
     }
     return;
   }
@@ -35,11 +54,6 @@ async function settleOwnerAccount(payment) {
   if (payment.type === 'extraordinary') {
     return;
   }
-
-  await OrganizationMember.updateOne(
-    { user: ownerId, organization: payment.organization, role: 'owner' },
-    { isDebtor: false, balance: 0 }
-  );
 }
 
 async function generateReceiptsForApprovedMPPayments(paymentList) {
@@ -219,7 +233,8 @@ async function createPaymentsFromMPReference(mpData) {
       status:       'pending',
     });
     if (!pendingBalance) {
-      const currentDebt = Math.abs(Math.min(Number(ctx.membership?.balance || 0), 0));
+      const debtorUnits = ctx.ownerUnits.filter(unit => Math.max(0, -normalizeDebtBalance(unit.balance)) > 0);
+      const currentDebt = debtorUnits.reduce((sum, unit) => sum + Math.max(0, -normalizeDebtBalance(unit.balance)), 0);
       const duplicateMPBalance = mpData.id
         ? await Payment.findOne({
             organization: ref.orgId,
@@ -230,7 +245,7 @@ async function createPaymentsFromMPReference(mpData) {
           })
         : null;
 
-      if (!duplicateMPBalance && currentDebt > 0) {
+      if (!duplicateMPBalance && currentDebt > 0 && debtorUnits.length === 1) {
         docs.push({
           organization:   ref.orgId,
           owner:          ref.ownerId,
@@ -240,6 +255,8 @@ async function createPaymentsFromMPReference(mpData) {
           paymentMethod:  'mercadopago',
           type:           'balance',
           mpPreferenceId: mpData.preference_id,
+          units:          [debtorUnits[0]._id],
+          breakdown:      [{ unit: debtorUnits[0]._id, name: debtorUnits[0].name, amount: Math.min(ref.balanceAmount, currentDebt) }],
         });
       }
     }
@@ -459,7 +476,11 @@ exports.createPreference = async (req, res, next) => {
         if (pendingBalance) {
           return res.status(400).json({ success: false, message: 'Ya tenÃ©s un pago de saldo anterior pendiente.' });
         }
-        const debt = Math.abs(Math.min(ctx.membership?.balance || owner.balance || 0, 0));
+        const debtorUnits = ctx.ownerUnits.filter(unit => Math.max(0, -normalizeDebtBalance(unit.balance)) > 0);
+        if (debtorUnits.length !== 1) {
+          return res.status(400).json({ success: false, message: 'Seleccioná una única unidad para pagar el saldo anterior.' });
+        }
+        const debt = debtorUnits.reduce((sum, unit) => sum + Math.max(0, -normalizeDebtBalance(unit.balance)), 0);
         if (debt <= 0) {
           return res.status(400).json({ success: false, message: 'No hay deuda inicial pendiente para pagar.' });
         }

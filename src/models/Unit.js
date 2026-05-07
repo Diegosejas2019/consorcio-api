@@ -35,6 +35,18 @@ const unitSchema = new mongoose.Schema(
       default: null,
       min: [0, 'El monto personalizado no puede ser negativo'],
     },
+    balance: {
+      type: Number,
+      default: 0,
+    },
+    isDebtor: {
+      type: Boolean,
+      default: false,
+    },
+    startBillingPeriod: {
+      type: String,
+      match: [/^\d{4}-\d{2}$/, 'El período de inicio debe tener formato YYYY-MM'],
+    },
     active: {
       type: Boolean,
       default: true,
@@ -50,9 +62,15 @@ const unitSchema = new mongoose.Schema(
 // ── Índices ───────────────────────────────────────────────────
 unitSchema.index({ organization: 1, owner: 1 });
 unitSchema.index({ organization: 1, active: 1 });
+unitSchema.index({ organization: 1, isDebtor: 1, active: 1 });
 unitSchema.index({ organization: 1, name: 1 }, { unique: true });
 
 unitSchema.pre('validate', function (next) {
+  if (this.balance !== undefined) {
+    const amount = Number(this.balance || 0);
+    this.balance = amount > 0 ? -amount : amount;
+    this.isDebtor = this.balance < 0;
+  }
   if (this.active === false) {
     this.status = 'inactive';
   } else if (this.owner) {

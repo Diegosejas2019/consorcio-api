@@ -7,7 +7,13 @@ const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
-const { computeTotalOwed, normalizeDebtBalance } = require('../utils/ownerFinance');
+const {
+  computeTotalOwedByUnits,
+  computeUnitsBalance,
+  computeUnitsBalanceOwed,
+  normalizeDebtBalance,
+  summarizeUnitDebts,
+} = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
 
 // Campos del User que son identidad global (no datos financieros por org)
@@ -89,6 +95,25 @@ async function syncOwnerUnits(ownerId, orgId, requestedUnitIds) {
   return { units };
 }
 
+async function setOwnerUnitBalance(ownerId, orgId, rawBalance) {
+  const balance = normalizeDebtBalance(rawBalance);
+  const units = await Unit.find({ owner: ownerId, organization: orgId, active: true }).select('_id name');
+  if (units.length !== 1) {
+    return {
+      error: {
+        status: 400,
+        message: 'La deuda debe asignarse a una única unidad. Revisá las unidades del propietario.',
+      },
+    };
+  }
+
+  await Unit.findByIdAndUpdate(units[0]._id, {
+    balance,
+    isDebtor: balance < 0,
+  });
+  return { unit: units[0], balance };
+}
+
 async function validateLegacyUnitAvailable(orgId, unitName, ownerId = null) {
   const normalized = normalizeUnitName(unitName);
   if (!normalized) return null;
@@ -126,7 +151,15 @@ exports.getAllOwners = async (req, res, next) => {
     const { page = 1, limit = 20, search, isDebtor } = req.query;
 
     const memberFilter = { organization: req.orgId, role: 'owner', isActive: true };
-    if (isDebtor !== undefined) memberFilter.isDebtor = isDebtor === 'true';
+    if (isDebtor !== undefined) {
+      const debtorOwnerIds = await Unit.distinct('owner', {
+        organization: req.orgId,
+        active: true,
+        isDebtor: true,
+        owner: { $ne: null },
+      });
+      memberFilter.user = isDebtor === 'true' ? { $in: debtorOwnerIds } : { $nin: debtorOwnerIds };
+    }
 
     let memberships = await OrganizationMember.find(memberFilter)
       .populate('user', 'name email unitId phone phones initials lastLogin createdAt isActive')
@@ -137,7 +170,7 @@ exports.getAllOwners = async (req, res, next) => {
     // Cargar todas las unidades de la org para sort + search + cálculo de fee
     const [allUnits, org] = await Promise.all([
       Unit.find({ organization: req.orgId, active: true })
-        .select('owner name customFee coefficient')
+        .select('owner name customFee coefficient balance isDebtor startBillingPeriod')
         .lean(),
       Organization.findById(req.orgId).select('paymentPeriods monthlyFee'),
     ]);
@@ -189,7 +222,7 @@ exports.getAllOwners = async (req, res, next) => {
         owner: { $in: ownerIds },
         status: 'approved',
         month: { $exists: true, $ne: null },
-      }).select('owner month').lean(),
+      }).select('owner month units status').lean(),
     ]);
 
     const lastPaymentByOwner = lastPayments.reduce((map, p) => {
@@ -197,25 +230,30 @@ exports.getAllOwners = async (req, res, next) => {
       return map;
     }, {});
 
-    const paidMonthsByOwner = approvedMonthlyPayments.reduce((map, p) => {
+    const paymentsByOwner = approvedMonthlyPayments.reduce((map, p) => {
       const key = p.owner.toString();
-      (map[key] ||= new Set()).add(p.month);
+      (map[key] ||= []).push(p);
       return map;
     }, {});
 
-    const owners = paged.map(m => {
+    let owners = paged.map(m => {
       const ownerId  = m.user._id.toString();
-      const totalOwed = computeTotalOwed(m, paidMonthsByOwner[ownerId] || new Set(), unitFeesByOwner[ownerId] || [], org);
+      const ownerUnits = unitFeesByOwner[ownerId] || [];
+      const totalOwed = computeTotalOwedByUnits(m, paymentsByOwner[ownerId] || [], ownerUnits, org);
+      const balance = computeUnitsBalance(ownerUnits);
       return {
         ...m.user,
-        balance:            normalizeDebtBalance(m.balance),
-        isDebtor:           m.isDebtor,
+        balance,
+        balanceOwed:        computeUnitsBalanceOwed(ownerUnits),
+        isDebtor:           totalOwed > 0,
+        storedIsDebtor:     m.isDebtor,
         percentage:         m.percentage,
         startBillingPeriod: m.startBillingPeriod,
         role:               m.role,
         membershipId:       m._id,
         lastPayment:        lastPaymentByOwner[ownerId] ?? null,
         units:              unitsByOwner[ownerId] ?? [],
+        unitDebts:          summarizeUnitDebts(ownerUnits),
         totalOwed,
       };
     });
@@ -260,13 +298,15 @@ exports.getOwner = async (req, res, next) => {
         .select('-__v'),
       Organization.findById(req.orgId).select('paymentPeriods monthlyFee'),
       Unit.find({ owner: membership.user._id, organization: req.orgId, active: true })
-        .select('customFee coefficient')
+        .select('name customFee coefficient balance isDebtor startBillingPeriod')
         .lean(),
     ]);
-    const approvedPaidMonths = new Set(
-      payments.filter(p => p.status === 'approved' && p.month).map(p => p.month)
-    );
-    owner.totalOwed = computeTotalOwed(membership, approvedPaidMonths, ownerUnits, org || {});
+    const approvedPayments = payments.filter(p => p.status === 'approved' && p.month);
+    owner.balance = computeUnitsBalance(ownerUnits);
+    owner.balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+    owner.isDebtor = owner.balanceOwed > 0;
+    owner.unitDebts = summarizeUnitDebts(ownerUnits);
+    owner.totalOwed = computeTotalOwedByUnits(membership, approvedPayments, ownerUnits, org || {});
 
     res.json({ success: true, data: { owner, payments } });
   } catch (err) {
@@ -293,8 +333,8 @@ exports.createOwner = async (req, res, next) => {
     if (initialDebtAmount < 0) {
       return res.status(400).json({ success: false, message: 'La deuda inicial no puede ser negativa.' });
     }
-    ownerData.balance  = normalizeDebtBalance(initialDebtAmount);
-    ownerData.isDebtor = initialDebtAmount > 0;
+    ownerData.balance  = 0;
+    ownerData.isDebtor = false;
 
     const currentPeriod = formatYYYYMM(new Date());
     const chargeCurrentMonth = req.body.chargeCurrentMonth !== false;
@@ -302,6 +342,12 @@ exports.createOwner = async (req, res, next) => {
 
     const tempPassword = req.body.password;
     const requestedUnitIds = getRequestedUnitIds(req.body);
+    if (initialDebtAmount > 0 && requestedUnitIds.length !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'La deuda inicial debe asignarse a una única unidad.',
+      });
+    }
 
     let owner;
     let sendWelcomeEmail = true;
@@ -390,6 +436,12 @@ exports.createOwner = async (req, res, next) => {
       const { units, error } = await syncOwnerUnits(owner._id, req.orgId, requestedUnitIds);
       if (error) return res.status(error.status).json({ success: false, message: error.message });
       assignedUnits = units;
+      if (initialDebtAmount > 0 && assignedUnits.length === 1) {
+        await Unit.findByIdAndUpdate(assignedUnits[0]._id, {
+          balance:  normalizeDebtBalance(initialDebtAmount),
+          isDebtor: true,
+        });
+      }
       owner = await User.findById(owner._id).select('-password -fcmToken');
     }
 
@@ -408,21 +460,17 @@ exports.createOwner = async (req, res, next) => {
 // ── PATCH /api/owners/:id — actualizar datos ──────────────────
 exports.updateOwner = async (req, res, next) => {
   try {
-    const memberFields = ['balance', 'isDebtor', 'percentage', 'startBillingPeriod'];
+    const memberFields = ['isDebtor', 'percentage', 'startBillingPeriod'];
     const userFields   = ['name', 'phone', 'phones', 'isActive'];
 
     const userUpdate   = {};
     const memberUpdate = {};
     [...memberFields, ...userFields].forEach((f) => {
       if (req.body[f] !== undefined) {
-        if (f === 'balance') memberUpdate.balance = normalizeDebtBalance(req.body.balance);
-        else if (memberFields.includes(f)) memberUpdate[f] = req.body[f];
+        if (memberFields.includes(f)) memberUpdate[f] = req.body[f];
         else userUpdate[f] = req.body[f];
       }
     });
-    if (memberUpdate.balance !== undefined) {
-      memberUpdate.isDebtor = memberUpdate.balance < 0;
-    }
     Object.assign(userUpdate, normalizePhonesInput(req.body));
 
     const membership = await OrganizationMember.findOne({
@@ -441,6 +489,11 @@ exports.updateOwner = async (req, res, next) => {
       assignedUnits = units;
     }
 
+    if (req.body.balance !== undefined) {
+      const result = await setOwnerUnitBalance(req.params.id, req.orgId, req.body.balance);
+      if (result.error) return res.status(result.error.status).json({ success: false, message: result.error.message });
+    }
+
     await Promise.all([
       Object.keys(userUpdate).length > 0
         ? User.findByIdAndUpdate(req.params.id, userUpdate, { runValidators: true })
@@ -457,12 +510,20 @@ exports.updateOwner = async (req, res, next) => {
 
     const owner = {
       ...updatedUser.toObject(),
-      balance:            normalizeDebtBalance(updatedMember.balance),
-      isDebtor:           updatedMember.isDebtor,
+      balance:            0,
+      isDebtor:           false,
       percentage:         updatedMember.percentage,
       startBillingPeriod: updatedMember.startBillingPeriod,
       ...(assignedUnits ? { units: assignedUnits } : {}),
     };
+
+    const ownerUnits = await Unit.find({ owner: req.params.id, organization: req.orgId, active: true })
+      .select('name balance isDebtor customFee coefficient startBillingPeriod')
+      .lean();
+    owner.balance = computeUnitsBalance(ownerUnits);
+    owner.balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+    owner.isDebtor = owner.balanceOwed > 0;
+    owner.unitDebts = summarizeUnitDebts(ownerUnits);
 
     res.json({ success: true, data: { owner } });
   } catch (err) {
@@ -744,7 +805,7 @@ exports.getStats = async (req, res, next) => {
 
     const [totalOwners, debtors, payments] = await Promise.all([
       OrganizationMember.countDocuments({ organization: req.orgId, role: 'owner', isActive: true }),
-      OrganizationMember.countDocuments({ organization: req.orgId, role: 'owner', isActive: true, isDebtor: true }),
+      Unit.distinct('owner', { organization: req.orgId, active: true, isDebtor: true, owner: { $ne: null } }),
       Payment.find({ ...orgFilter, status: 'approved' }).select('amount month'),
     ]);
 
@@ -761,9 +822,9 @@ exports.getStats = async (req, res, next) => {
       success: true,
       data: {
         totalOwners,
-        debtors,
-        upToDate: totalOwners - debtors,
-        complianceRate: totalOwners > 0 ? Math.round(((totalOwners - debtors) / totalOwners) * 100) : 0,
+        debtors: debtors.length,
+        upToDate: totalOwners - debtors.length,
+        complianceRate: totalOwners > 0 ? Math.round(((totalOwners - debtors.length) / totalOwners) * 100) : 0,
         totalCollected,
         pendingPayments: await Payment.countDocuments({ ...orgFilter, status: 'pending' }),
         monthlyStats: monthlyAgg,

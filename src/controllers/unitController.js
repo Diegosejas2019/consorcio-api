@@ -105,7 +105,7 @@ exports.getUnits = async (req, res, next) => {
 // ── POST /api/units — crear unidad (admin) ────────────────────
 exports.createUnit = async (req, res, next) => {
   try {
-    const { ownerId, name, coefficient, customFee } = req.body;
+    const { ownerId, name, coefficient, customFee, balance, startBillingPeriod } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ success: false, message: 'El nombre de la unidad es obligatorio.' });
     const unitName = name.trim();
@@ -126,6 +126,9 @@ exports.createUnit = async (req, res, next) => {
       name:         unitName,
       coefficient:  coefficient != null ? Number(coefficient) : 1,
       customFee:    customFee != null && customFee !== '' ? Number(customFee) : null,
+      balance:      balance != null && balance !== '' ? Number(balance) : 0,
+      isDebtor:     Number(balance || 0) !== 0,
+      startBillingPeriod: startBillingPeriod || undefined,
     });
 
     if (owner) {
@@ -208,7 +211,7 @@ exports.bulkCreateUnits = async (req, res, next) => {
 // ── PATCH /api/units/:id — actualizar unidad (admin) ──────────
 exports.updateUnit = async (req, res, next) => {
   try {
-    const allowed = ['name', 'coefficient', 'customFee', 'active'];
+    const allowed = ['name', 'coefficient', 'customFee', 'active', 'balance', 'startBillingPeriod'];
     const update  = {};
     allowed.forEach(f => {
       if (req.body[f] !== undefined) update[f] = req.body[f];
@@ -216,6 +219,11 @@ exports.updateUnit = async (req, res, next) => {
     // Normalizar: nombre trim, customFee null si vacío
     if (update.name)      update.name      = update.name.trim();
     if (update.customFee === '' || update.customFee === null) update.customFee = null;
+    if (update.balance !== undefined) {
+      update.balance = Number(update.balance || 0);
+      if (update.balance > 0) update.balance = -update.balance;
+      update.isDebtor = update.balance < 0;
+    }
     if (update.name && !(await ensureUnitNameAvailable(req.orgId, update.name, req.params.id))) {
       return res.status(400).json({ success: false, message: `La unidad "${update.name}" ya existe.` });
     }

@@ -36,6 +36,7 @@ const dbHelper = require('../helpers/dbHelper');
 const { createOwnerWithToken, createAdminWithToken } = require('../helpers/factories');
 const Payment  = require('../../src/models/Payment');
 const OrganizationMember = require('../../src/models/OrganizationMember');
+const Unit = require('../../src/models/Unit');
 
 // Buffer mínimo que simula un PDF válido
 const FAKE_PDF = Buffer.from('%PDF-1.4 fake content for testing');
@@ -191,10 +192,9 @@ describe('POST /api/payments — subida de comprobante', () => {
       user: user._id,
       organization: orgId,
       role: 'owner',
-      balance: -5000,
-      isDebtor: true,
       isActive: true,
     });
+    await Unit.create({ organization: orgId, owner: user._id, name: 'Lote deuda', balance: -5000, isDebtor: true });
 
     const res = await request(app)
       .post('/api/payments')
@@ -212,10 +212,9 @@ describe('POST /api/payments — subida de comprobante', () => {
       user: user._id,
       organization: orgId,
       role: 'owner',
-      balance: -5000,
-      isDebtor: true,
       isActive: true,
     });
+    const unit = await Unit.create({ organization: orgId, owner: user._id, name: 'Lote deuda', balance: -5000, isDebtor: true });
 
     const res = await request(app)
       .post('/api/payments')
@@ -226,6 +225,7 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.payment.type).toBe('balance');
     expect(res.body.data.payment.amount).toBe(5000);
+    expect(res.body.data.payment.units.map(String)).toEqual([unit._id.toString()]);
   });
 
   test('al aprobar saldo anterior cancela la deuda sin dejar saldo positivo', async () => {
@@ -235,10 +235,9 @@ describe('POST /api/payments — subida de comprobante', () => {
       user: user._id,
       organization: orgId,
       role: 'owner',
-      balance: -5000,
-      isDebtor: true,
       isActive: true,
     });
+    const unit = await Unit.create({ organization: orgId, owner: user._id, name: 'Lote deuda', balance: -5000, isDebtor: true });
     const payment = await Payment.create({
       organization: orgId,
       owner: user._id,
@@ -246,6 +245,7 @@ describe('POST /api/payments — subida de comprobante', () => {
       status: 'pending',
       type: 'balance',
       paymentMethod: 'manual',
+      units: [unit._id],
     });
 
     const res = await request(app)
@@ -253,9 +253,9 @@ describe('POST /api/payments — subida de comprobante', () => {
       .set('Authorization', `Bearer ${adminToken}`);
 
     expect(res.status).toBe(200);
-    const member = await OrganizationMember.findOne({ user: user._id, organization: orgId });
-    expect(member.balance).toBe(0);
-    expect(member.isDebtor).toBe(false);
+    const updatedUnit = await Unit.findById(unit._id);
+    expect(updatedUnit.balance).toBe(0);
+    expect(updatedUnit.isDebtor).toBe(false);
   });
 
 });

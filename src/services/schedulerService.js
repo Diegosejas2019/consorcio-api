@@ -2,6 +2,7 @@ const cron               = require('node-cron');
 const Organization       = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
 const Payment            = require('../models/Payment');
+const Unit               = require('../models/Unit');
 const firebase     = require('./firebaseService');
 const emailService = require('./emailService');
 const logger       = require('../config/logger');
@@ -38,8 +39,11 @@ async function sendDueDateReminders(org) {
   }).populate({ path: 'user', select: '+fcmToken name email' });
 
   if (unpaidMembers.length > 0) {
-    const memberIds = unpaidMembers.map(m => m._id);
-    await OrganizationMember.updateMany({ _id: { $in: memberIds } }, { isDebtor: true });
+    const ownerIds = unpaidMembers.map(m => m.user?._id || m.user).filter(Boolean);
+    await Unit.updateMany(
+      { organization: org._id, owner: { $in: ownerIds }, active: true },
+      { isDebtor: true }
+    );
     logger.info(`[Scheduler] Org ${org._id}: ${unpaidMembers.length} propietario(s) marcados como deudores`);
   }
 

@@ -1,5 +1,6 @@
 const admin  = require('firebase-admin');
 const User   = require('../models/User');
+const Unit   = require('../models/Unit');
 const logger = require('../config/logger');
 
 // ── Inicializar Firebase Admin SDK ────────────────────────────
@@ -144,7 +145,13 @@ exports.sendMulticast = async (tokens, { title, body, data = {} }) => {
 exports.sendMonthlyReminders = async (orgId, expenseMonth, amount) => {
   if (!firebaseInitialized) return;
 
-  const debtors = await User.find({ organization: orgId, role: 'owner', isActive: true, isDebtor: true }).select('+fcmToken');
+  const debtorOwnerIds = await Unit.distinct('owner', {
+    organization: orgId,
+    active: true,
+    isDebtor: true,
+    owner: { $ne: null },
+  });
+  const debtors = await User.find({ _id: { $in: debtorOwnerIds }, role: 'owner', isActive: true }).select('+fcmToken');
   const tokens  = debtors.map(o => o.fcmToken).filter(Boolean);
 
   if (tokens.length === 0) return;

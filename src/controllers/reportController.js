@@ -3,6 +3,7 @@ const Payment            = require('../models/Payment');
 const Expense            = require('../models/Expense');
 const Organization       = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
+const Unit               = require('../models/Unit');
 const logger             = require('../config/logger');
 const {
   getExpenseCategoryLabelMap,
@@ -383,7 +384,7 @@ exports.getExpensasPdf = async (req, res, next) => {
     const monthStart  = new Date(year, mon - 1, 1);
     const monthEnd    = new Date(year, mon, 0, 23, 59, 59, 999);
 
-    const [org, expenses, rawMembers, monthPayments, categoryLabels] = await Promise.all([
+    const [org, expenses, rawMembers, orgUnits, monthPayments, categoryLabels] = await Promise.all([
       Organization.findById(orgId).select('name address cuit dueDayOfMonth lateFeePercent bankName bankAccount bankCbu bankHolder'),
       Expense.find({
         organization: orgId,
@@ -396,6 +397,9 @@ exports.getExpensasPdf = async (req, res, next) => {
       OrganizationMember.find({ organization: orgId, role: 'owner', isActive: true })
         .populate('user', 'name unit')
         .lean(),
+      Unit.find({ organization: orgId, active: true })
+        .select('owner name balance')
+        .lean(),
       Payment.find({ organization: orgId, status: 'approved', month })
         .select('owner amount')
         .lean(),
@@ -406,16 +410,26 @@ exports.getExpensasPdf = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Organización no encontrada.' });
     }
 
-    // Construir lista de propietarios desde OrganizationMember con datos financieros por org
+    const unitsByOwner = {};
+    orgUnits.forEach(unit => {
+      if (!unit.owner) return;
+      const key = unit.owner.toString();
+      (unitsByOwner[key] ||= []).push(unit);
+    });
+
+    // Construir lista de propietarios desde OrganizationMember y saldos por unidad
     const owners = rawMembers
       .filter(m => m.user)
-      .map(m => ({
-        _id:        m.user._id,
-        name:       m.user.name,
-        unit:       m.user.unit,
-        balance:    m.balance,
-        percentage: m.percentage,
-      }))
+      .map(m => {
+        const ownerUnits = unitsByOwner[m.user._id.toString()] || [];
+        return {
+          _id:        m.user._id,
+          name:       m.user.name,
+          unit:       ownerUnits.map(unit => unit.name).join(', ') || m.user.unit,
+          balance:    ownerUnits.reduce((sum, unit) => sum + Number(unit.balance || 0), 0),
+          percentage: m.percentage,
+        };
+      })
       .sort((a, b) => (a.unit || '').localeCompare(b.unit || ''));
 
     // Agrupar pagos por propietario

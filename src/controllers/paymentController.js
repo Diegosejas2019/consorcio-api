@@ -12,7 +12,17 @@ const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
 const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
 const { currentYYYYMM } = require('../utils/periods');
-const { computeTotalOwed, getChargeablePeriods, getUnpaidPeriods, normalizeDebtBalance } = require('../utils/ownerFinance');
+const {
+  calculateUnitFee,
+  computeTotalOwedByUnits,
+  computeUnitsBalance,
+  computeUnitsBalanceOwed,
+  getChargeablePeriodsForUnit,
+  getPaidMonthsForUnit,
+  getUnpaidPeriodsForUnit,
+  normalizeDebtBalance,
+  summarizeUnitDebts,
+} = require('../utils/ownerFinance');
 const logger          = require('../config/logger');
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -125,7 +135,7 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
       organization: organizationId,
       owner:        owner._id,
       status:       { $in: ['pending', 'approved'] },
-    }).select('month extraordinaryItems'),
+    }).select('month extraordinaryItems units status'),
     Unit.find({ owner: owner._id, organization: organizationId, active: true }).lean(),
     Unit.find({ organization: organizationId, active: true }).lean(),
     OrganizationMember.find({ organization: organizationId, role: 'owner', isActive: true })
@@ -134,19 +144,31 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
       .lean(),
   ]);
   const { allUnits: allOrgUnits, unitsByOwner } = buildBillableUnitsContext(memberships, rawOrgUnits);
-  const ownerUnits = unitsByOwner[owner._id.toString()] || rawOwnerUnits;
+  let ownerUnits = unitsByOwner[owner._id.toString()] || rawOwnerUnits;
+  if (!ownerUnits.length && (owner.unit || owner.unitId)) {
+    ownerUnits = [{
+      _id: owner.unitId || owner._id,
+      name: owner.unit || 'Unidad',
+      owner: owner._id,
+      coefficient: membership?.percentage > 0 ? membership.percentage : 1,
+      active: true,
+      legacy: true,
+    }];
+  }
 
-  const paidMonths = new Set(activePayments.map(p => p.month).filter(Boolean));
   const paidExtraIds = new Set(
     activePayments.flatMap(p => (p.extraordinaryItems || [])
       .map(e => e.expense?.toString())
       .filter(Boolean))
   );
 
-  const startBilling  = membership?.startBillingPeriod ?? owner.startBillingPeriod;
   const currentPeriod = currentYYYYMM();
-  const periods = (org?.paymentPeriods || [])
-    .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
+  const periods = [...new Set(ownerUnits.flatMap(unit => {
+    const paidMonths = getPaidMonthsForUnit(unit, activePayments, ['pending', 'approved']);
+    const startBilling = unit.startBillingPeriod || membership?.startBillingPeriod || owner.startBillingPeriod;
+    return (org?.paymentPeriods || [])
+      .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
+  }))].sort();
 
   const extras = await Expense.find({
     organization: organizationId,
@@ -179,26 +201,51 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
   return { periods, extraordinary };
 };
 
-const applyApprovedPaymentEffects = async (payment, reviewerId) => {
+async function applyBalancePaymentToUnits(payment) {
+  const ownerId = payment.owner?._id || payment.owner;
+  let paymentUnits = (payment.units || []).map(id => id?._id || id).filter(Boolean);
+
+  if (!paymentUnits.length) {
+    const debtorUnits = await Unit.find({
+      owner: ownerId,
+      organization: payment.organization,
+      active: true,
+      balance: { $lt: 0 },
+    }).sort({ name: 1 }).select('_id');
+    if (debtorUnits.length === 1) paymentUnits = [debtorUnits[0]._id];
+  }
+
+  if (!paymentUnits.length) {
+    throw new Error('El pago de saldo anterior no tiene una unidad asociada.');
+  }
+
+  let remaining = Number(payment.amount || 0);
+  const units = await Unit.find({
+    _id: { $in: paymentUnits },
+    organization: payment.organization,
+    active: true,
+  }).sort({ name: 1 });
+
+  for (const unit of units) {
+    if (remaining <= 0) break;
+    const owed = Math.max(0, -normalizeDebtBalance(unit.balance));
+    if (owed <= 0) continue;
+    const applied = Math.min(owed, remaining);
+    unit.balance = normalizeDebtBalance(unit.balance + applied);
+    if (unit.balance >= 0) unit.balance = 0;
+    unit.isDebtor = unit.balance < 0;
+    await unit.save();
+    remaining -= applied;
+  }
+}
+
+const applyApprovedPaymentEffects = async (payment, reviewerId, options = {}) => {
   const ownerId = payment.owner?._id || payment.owner;
   if (payment.type === 'balance') {
-    const updatedMember = await OrganizationMember.findOneAndUpdate(
-      { user: ownerId, organization: payment.organization, role: 'owner' },
-      { $inc: { balance: payment.amount } },
-      { new: true }
-    );
-    if ((updatedMember?.balance ?? -1) >= 0) {
-      await OrganizationMember.updateOne(
-        { user: ownerId, organization: payment.organization, role: 'owner' },
-        { isDebtor: false, balance: 0 }
-      );
-    }
-  } else {
-    await OrganizationMember.updateOne(
-      { user: ownerId, organization: payment.organization, role: 'owner' },
-      { isDebtor: false, balance: 0 }
-    );
+    await applyBalancePaymentToUnits(payment);
   }
+
+  if (options.notify === false) return;
 
   if (!payment.systemReceipt?.url) {
     receiptService.generateAndStoreReceipt(payment._id)
@@ -284,7 +331,7 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
     const [org, units, payments, chargeableExpenses] = await Promise.all([
       Organization.findById(req.orgId).select('paymentPeriods monthlyFee feePeriodCode'),
       Unit.find({ organization: req.orgId, active: true })
-        .select('owner name customFee coefficient')
+        .select('owner name customFee coefficient balance isDebtor startBillingPeriod')
         .lean(),
       Payment.find({ organization: req.orgId, owner: { $in: ownerIds } })
         .select('-__v')
@@ -313,17 +360,20 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
       const ownerId = owner._id.toString();
       const ownerUnits = unitsByOwner[ownerId] || [];
       const ownerPayments = paymentsByOwner[ownerId] || [];
-      const paidPeriods = [...new Set(ownerPayments
-        .filter(p => p.status === 'approved' && p.month)
-        .map(p => p.month))]
+      const paidPeriods = [...new Set(ownerUnits.flatMap(unit =>
+        [...getPaidMonthsForUnit(unit, ownerPayments, ['approved'])]
+      ))]
         .sort();
-      const paidPeriodSet = new Set(paidPeriods);
       const pendingPayments = ownerPayments
         .filter(p => p.status === 'pending')
         .map(summarizePaymentForAdmin);
       const pendingPeriods = [...new Set(pendingPayments.map(p => p.month).filter(Boolean))].sort();
-      const chargeablePeriods = getChargeablePeriods(membership, org || {});
-      const unpaidPeriods = getUnpaidPeriods(membership, paidPeriodSet, org || {});
+      const chargeablePeriods = [...new Set(ownerUnits.flatMap(unit =>
+        getChargeablePeriodsForUnit(unit, membership, org || {})
+      ))].sort();
+      const unpaidPeriods = [...new Set(ownerUnits.flatMap(unit =>
+        getUnpaidPeriodsForUnit(unit, membership, ownerPayments, org || {}, ['approved'])
+      ))].sort();
       const paidExtraIds = new Set(
         ownerPayments
           .filter(p => ['pending', 'approved'].includes(p.status))
@@ -347,9 +397,9 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
           };
         })
         .filter(Boolean);
-      const balanceOwed = Math.max(0, -normalizeDebtBalance(membership.balance));
+      const balanceOwed = computeUnitsBalanceOwed(ownerUnits);
       const extraordinaryTotal = extraordinaryOwed.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-      const totalOwed = computeTotalOwed(membership, paidPeriodSet, ownerUnits, org || {}) + extraordinaryTotal;
+      const totalOwed = computeTotalOwedByUnits(membership, ownerPayments, ownerUnits, org || {}) + extraordinaryTotal;
       const lastPaymentRaw = ownerPayments.find(p => p.status === 'approved');
 
       return {
@@ -364,8 +414,9 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
         units:                ownerUnits.map(unit => unit.name).sort((a, b) => a.localeCompare(b)),
         isDebtor:             totalOwed > 0,
         storedIsDebtor:       membership.isDebtor,
-        balance:              normalizeDebtBalance(membership.balance),
+        balance:              computeUnitsBalance(ownerUnits),
         balanceOwed,
+        unitDebts:            summarizeUnitDebts(ownerUnits),
         extraordinaryOwed,
         totalOwed,
         paidPeriods,
@@ -582,6 +633,7 @@ exports.createPayment = async (req, res, next) => {
       try { extraordinaryIds = JSON.parse(extraordinaryIds); } catch { extraordinaryIds = [extraordinaryIds]; }
     }
     if (!Array.isArray(extraordinaryIds)) extraordinaryIds = extraordinaryIds ? [extraordinaryIds] : [];
+    const requestedBalanceUnitIds = uniqueValues(normalizeArray(req.body.balanceUnitIds || req.body.balanceUnitId));
 
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
@@ -643,8 +695,28 @@ exports.createPayment = async (req, res, next) => {
       }
     }
 
+    let balanceUnitsForPayment = [];
     if (balanceAmount > 0) {
-      const currentDebt = Math.abs(Math.min(Number(ownerMembership?.balance || 0), 0));
+      const activeUnitIds = new Set(activeUnits.map(unit => (unit._id || unit.id)?.toString()).filter(Boolean));
+      if (requestedBalanceUnitIds.length) {
+        const invalidUnit = requestedBalanceUnitIds.find(id => !activeUnitIds.has(id));
+        if (invalidUnit) {
+          return res.status(400).json({ success: false, message: 'Una de las unidades seleccionadas no pertenece al propietario.' });
+        }
+        balanceUnitsForPayment = activeUnits.filter(unit => requestedBalanceUnitIds.includes((unit._id || unit.id).toString()));
+      } else {
+        balanceUnitsForPayment = activeUnits.filter(unit => Math.max(0, -normalizeDebtBalance(unit.balance)) > 0);
+        if (balanceUnitsForPayment.length !== 1) {
+          return res.status(400).json({
+            success: false,
+            message: 'Selecciona una única unidad para pagar el saldo anterior.',
+          });
+        }
+      }
+
+      const currentDebt = balanceUnitsForPayment.reduce((sum, unit) => (
+        sum + Math.max(0, -normalizeDebtBalance(unit.balance))
+      ), 0);
       if (currentDebt <= 0) {
         return res.status(400).json({ success: false, message: 'No hay saldo anterior pendiente para pagar.' });
       }
@@ -656,6 +728,7 @@ exports.createPayment = async (req, res, next) => {
         owner:        ownerId,
         type:         'balance',
         status:       'pending',
+        units:        { $in: balanceUnitsForPayment.map(unit => unit._id || unit.id) },
       });
       if (pendingBalance) {
         return res.status(400).json({ success: false, message: 'Ya tenes un pago de saldo anterior pendiente.' });
@@ -825,13 +898,21 @@ exports.createPayment = async (req, res, next) => {
       ? 'balance'
       : (!month ? 'extraordinary' : 'monthly');
 
-    // Snapshot de unidades al momento del pago (no aplica a pagos de saldo anterior)
-    const unitsSnapshot     = paymentType !== 'balance' ? activeUnits.map(u => u._id) : [];
-    const breakdownSnapshot = paymentType !== 'balance' ? activeUnits.map(u => ({
-      unit:   u._id,
-      name:   u.name,
-      amount: calcUnitFee(u, monthlyFee),
-    })) : [];
+    const snapshotUnits = paymentType === 'balance' ? balanceUnitsForPayment : activeUnits;
+    const unitsSnapshot = snapshotUnits.map(u => u._id);
+    let remainingBalanceBreakdown = Number(amount || 0);
+    const breakdownSnapshot = snapshotUnits.map(u => {
+      const owed = Math.max(0, -normalizeDebtBalance(u.balance));
+      const applied = paymentType === 'balance'
+        ? Math.min(owed, remainingBalanceBreakdown)
+        : calcUnitFee(u, monthlyFee);
+      if (paymentType === 'balance') remainingBalanceBreakdown -= applied;
+      return {
+        unit:   u._id,
+        name:   u.name,
+        amount: applied,
+      };
+    }).filter(item => paymentType !== 'balance' || item.amount > 0);
 
     const payment = await Payment.create({
       organization:      req.orgId,
@@ -887,24 +968,7 @@ exports.approvePayment = async (req, res, next) => {
     payment.approvedBy  = req.user._id;
     await payment.save();
 
-    if (payment.type === 'balance') {
-      const updatedMember = await OrganizationMember.findOneAndUpdate(
-        { user: payment.owner._id, organization: payment.organization, role: 'owner' },
-        { $inc: { balance: payment.amount } },
-        { new: true }
-      );
-      if ((updatedMember?.balance ?? -1) >= 0) {
-        await OrganizationMember.updateOne(
-          { user: payment.owner._id, organization: payment.organization, role: 'owner' },
-          { isDebtor: false, balance: 0 }
-        );
-      }
-    } else {
-      await OrganizationMember.updateOne(
-        { user: payment.owner._id, organization: payment.organization, role: 'owner' },
-        { isDebtor: false, balance: 0 }
-      );
-    }
+    await applyApprovedPaymentEffects(payment, req.user._id, { notify: false });
 
     // Generar recibo del sistema de forma asíncrona (no bloquea la aprobación)
     if (!payment.systemReceipt?.url) {

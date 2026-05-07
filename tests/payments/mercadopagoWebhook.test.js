@@ -85,9 +85,8 @@ describe('POST /api/mercadopago/preference', () => {
       user: owner._id,
       organization: org._id,
       role: 'owner',
-      balance: -25000,
-      isDebtor: true,
     });
+    await Unit.create({ organization: org._id, owner: owner._id, name: 'Lote saldo', balance: -25000, isDebtor: true });
     const token = signToken(owner._id, { organizationId: org._id, role: 'owner', membershipId: membership._id });
 
     const res = await request(app)
@@ -199,6 +198,8 @@ describe('POST /api/mercadopago/webhook', () => {
       status:       'occupied',
       coefficient:  1,
       active:       true,
+      balance:      -10000,
+      isDebtor:     true,
     });
 
     mockMPPaymentGet.mockResolvedValue({
@@ -230,9 +231,9 @@ describe('POST /api/mercadopago/webhook', () => {
     expect(payment.mpPreferenceId).toBe('pref-123');
     expect(payment.membership.toString()).toBe(membership._id.toString());
 
-    const updatedMembership = await OrganizationMember.findById(membership._id);
-    expect(updatedMembership.isDebtor).toBe(false);
-    expect(updatedMembership.balance).toBe(0);
+    const updatedUnit = await Unit.findOne({ owner: owner._id, organization: org._id });
+    expect(updatedUnit.balance).toBe(-10000);
+    expect(updatedUnit.isDebtor).toBe(true);
 
     expect(receiptService.generateAndStoreReceipt).toHaveBeenCalledWith(payment._id);
     expect(emailService.sendPaymentApproved).toHaveBeenCalled();
@@ -330,6 +331,8 @@ describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
       status:       'occupied',
       coefficient:  1,
       active:       true,
+      balance:      -15000,
+      isDebtor:     true,
     });
 
     mockMPPaymentGet.mockResolvedValue({
@@ -370,9 +373,9 @@ describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
     expect(payment.mpPreferenceId).toBe('pref-callback');
     expect(payment.membership.toString()).toBe(membership._id.toString());
 
-    const updatedMembership = await OrganizationMember.findById(membership._id);
-    expect(updatedMembership.isDebtor).toBe(false);
-    expect(updatedMembership.balance).toBe(0);
+    const updatedUnit = await Unit.findOne({ owner: owner._id, organization: org._id });
+    expect(updatedUnit.balance).toBe(-15000);
+    expect(updatedUnit.isDebtor).toBe(true);
   });
 
   test('approved MP callback de saldo anterior es idempotente', async () => {
@@ -397,9 +400,8 @@ describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
       user:         owner._id,
       organization: org._id,
       role:         'owner',
-      isDebtor:     true,
-      balance:      -1095,
     });
+    const unit = await Unit.create({ organization: org._id, owner: owner._id, name: 'Lote balance', balance: -1095, isDebtor: true });
 
     mockMPPaymentGet.mockResolvedValue({
       id:                 157779829724,
@@ -434,8 +436,8 @@ describe('GET /api/mercadopago/payment/:mpPaymentId', () => {
     expect(payments[0].amount).toBe(1095);
     expect(payments[0].status).toBe('approved');
 
-    const updatedMembership = await OrganizationMember.findById(membership._id);
-    expect(updatedMembership.balance).toBe(0);
-    expect(updatedMembership.isDebtor).toBe(false);
+    const updatedUnit = await Unit.findById(unit._id);
+    expect(updatedUnit.balance).toBe(0);
+    expect(updatedUnit.isDebtor).toBe(false);
   });
 });

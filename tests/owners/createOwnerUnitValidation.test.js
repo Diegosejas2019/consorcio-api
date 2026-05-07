@@ -235,6 +235,7 @@ describe('POST /api/owners unit validation', () => {
   test('normaliza balance positivo a saldo deudor negativo al editar', async () => {
     const { token, orgId } = await createAdminWithToken();
     const owner = await createActiveOwner(orgId, null);
+    const unit = await Unit.create({ organization: orgId, owner: owner._id, name: 'Lote deuda', active: true });
 
     const res = await request(app)
       .patch(`/api/owners/${owner._id}`)
@@ -245,9 +246,9 @@ describe('POST /api/owners unit validation', () => {
     expect(res.body.data.owner.balance).toBe(-12500);
     expect(res.body.data.owner.isDebtor).toBe(true);
 
-    const member = await OrganizationMember.findOne({ user: owner._id, organization: orgId }).lean();
-    expect(member.balance).toBe(-12500);
-    expect(member.isDebtor).toBe(true);
+    const updatedUnit = await Unit.findById(unit._id).lean();
+    expect(updatedUnit.balance).toBe(-12500);
+    expect(updatedUnit.isDebtor).toBe(true);
   });
 
   test('normaliza saldos positivos de carga masiva como deudas negativas', async () => {

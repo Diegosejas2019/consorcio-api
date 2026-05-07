@@ -77,6 +77,8 @@ async function createOwnerInOrg(orgId, data = {}) {
       name:         data.unitName,
       coefficient:  data.coefficient ?? 1,
       customFee:    data.customFee ?? null,
+      balance:      data.balance ?? 0,
+      isDebtor:     (data.balance ?? 0) < 0,
     });
   }
 
@@ -186,9 +188,9 @@ describe('GET /api/payments/admin/owners', () => {
       paymentPeriods: ['2026-01', '2026-02', '2026-03'],
     });
 
-    const paidOwner = await createOwnerInOrg(orgId, { name: 'Periodo Pago', startBillingPeriod: '2026-01' });
-    const pendingOwner = await createOwnerInOrg(orgId, { name: 'Periodo Pendiente', startBillingPeriod: '2026-01' });
-    const unpaidOwner = await createOwnerInOrg(orgId, { name: 'Periodo Adeudado', startBillingPeriod: '2026-01' });
+    const paidOwner = await createOwnerInOrg(orgId, { name: 'Periodo Pago', unitName: 'A-01', startBillingPeriod: '2026-01' });
+    const pendingOwner = await createOwnerInOrg(orgId, { name: 'Periodo Pendiente', unitName: 'A-02', startBillingPeriod: '2026-01' });
+    const unpaidOwner = await createOwnerInOrg(orgId, { name: 'Periodo Adeudado', unitName: 'A-03', startBillingPeriod: '2026-01' });
 
     await Payment.create([
       { organization: orgId, owner: paidOwner.user._id, month: '2026-02', amount: 1000, status: 'approved', type: 'monthly' },
@@ -244,7 +246,8 @@ describe('GET /api/payments/admin/owners', () => {
 
   test('aprobar un pago pendiente sigue funcionando desde el endpoint existente', async () => {
     const { token, orgId } = await createAdminWithToken();
-    const { user } = await createOwnerInOrg(orgId, { name: 'Aprobar Pago', balance: -1000, isDebtor: true });
+    const { user } = await createOwnerInOrg(orgId, { name: 'Aprobar Pago', unitName: 'A-04', balance: -1000, isDebtor: true });
+    const unit = await Unit.findOne({ owner: user._id, organization: orgId });
     const payment = await Payment.create({
       organization:  orgId,
       owner:         user._id,
@@ -252,6 +255,7 @@ describe('GET /api/payments/admin/owners', () => {
       status:        'pending',
       type:          'balance',
       paymentMethod: 'manual',
+      units:         [unit._id],
     });
 
     const res = await request(app)
@@ -260,8 +264,8 @@ describe('GET /api/payments/admin/owners', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.payment.status).toBe('approved');
-    const member = await OrganizationMember.findOne({ organization: orgId, user: user._id });
-    expect(member.balance).toBe(0);
-    expect(member.isDebtor).toBe(false);
+    const updatedUnit = await Unit.findById(unit._id);
+    expect(updatedUnit.balance).toBe(0);
+    expect(updatedUnit.isDebtor).toBe(false);
   });
 });

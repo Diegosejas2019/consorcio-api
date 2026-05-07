@@ -2,6 +2,7 @@ const Organization        = require('../models/Organization');
 const OrganizationFeature = require('../models/OrganizationFeature');
 const User                = require('../models/User');
 const OrganizationMember  = require('../models/OrganizationMember');
+const Unit                = require('../models/Unit');
 const logger              = require('../config/logger');
 const { isSuperAdminRole } = require('../utils/roles');
 const { defaultFeatureRecords } = require('../utils/features');
@@ -190,6 +191,20 @@ exports.getMembers = async (req, res, next) => {
       .select('-__v')
       .sort({ role: 1, createdAt: -1 })
       .lean();
+    const ownerIds = memberships.map(m => m.user?._id).filter(Boolean);
+    const units = ownerIds.length
+      ? await Unit.find({ organization: req.params.id, owner: { $in: ownerIds }, active: true })
+        .select('owner balance isDebtor')
+        .lean()
+      : [];
+    const unitSummaryByOwner = units.reduce((map, unit) => {
+      const key = unit.owner.toString();
+      const current = map[key] || { balance: 0, isDebtor: false };
+      current.balance += Number(unit.balance || 0);
+      current.isDebtor = current.isDebtor || unit.isDebtor || Number(unit.balance || 0) < 0;
+      map[key] = current;
+      return map;
+    }, {});
 
     const members = memberships
       .filter(m => m.user)
@@ -199,8 +214,8 @@ exports.getMembers = async (req, res, next) => {
         membershipId: m._id,
         organization: m.organization,
         isActive: m.isActive,
-        balance: m.balance,
-        isDebtor: m.isDebtor,
+        balance: unitSummaryByOwner[m.user._id.toString()]?.balance ?? 0,
+        isDebtor: unitSummaryByOwner[m.user._id.toString()]?.isDebtor ?? false,
         startBillingPeriod: m.startBillingPeriod,
         percentage: m.percentage,
       }));
