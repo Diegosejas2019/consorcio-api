@@ -32,6 +32,7 @@ const app = require('../src/app');
 const dbHelper = require('./helpers/dbHelper');
 const { createAdminWithToken, createOwnerWithToken } = require('./helpers/factories');
 const OrganizationDocument = require('../src/models/OrganizationDocument');
+const OrganizationFeature = require('../src/models/OrganizationFeature');
 const { cloudinary } = require('../src/config/cloudinary');
 
 const FAKE_PDF = Buffer.from('%PDF-1.4 fake document');
@@ -313,5 +314,21 @@ describe('Organization documents', () => {
       expect.objectContaining({ resource_type: 'raw', type: 'upload' })
     );
     expect(global.fetch).toHaveBeenCalledWith('https://signed.example.com/documento.pdf');
+  });
+
+  test('bloquea el modulo si la feature documents esta deshabilitada', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    await OrganizationFeature.findOneAndUpdate(
+      { organization: orgId, featureKey: 'documents' },
+      { enabled: false },
+      { upsert: true, new: true }
+    );
+
+    const res = await request(app)
+      .get('/api/organization-documents')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.message).toContain('documentacion');
   });
 });
