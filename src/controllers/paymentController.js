@@ -19,6 +19,23 @@ const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const ADMIN_OWNER_STATUSES = new Set(['all', 'debtor', 'up_to_date', 'pending_review']);
 const ADMIN_OWNER_SORTS = new Set(['debt_first', 'name', 'unit', 'last_payment']);
 
+const normalizeArray = (value) => {
+  if (value === undefined || value === null || value === '') return [];
+  if (Array.isArray(value)) return value.flatMap(normalizeArray);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.flatMap(normalizeArray);
+    } catch {
+      // Plain FormData value.
+    }
+    return value.split(',').map(v => v.trim()).filter(Boolean);
+  }
+  return [value];
+};
+
+const uniqueValues = (values) => [...new Set(values.map(v => String(v).trim()).filter(Boolean))];
+
 const getCloudinaryRawPublicIdFromUrl = (url) => {
   if (!url) return null;
   try {
@@ -384,7 +401,21 @@ exports.createPayment = async (req, res, next) => {
     let { month, ownerNote } = req.body;
     let { amount } = req.body;
     let balanceAmount = Number(req.body.balanceAmount || 0);
+    const requestedPeriods = uniqueValues([
+      ...normalizeArray(req.body.periods),
+      ...normalizeArray(month),
+    ]);
+    if (requestedPeriods.length > 0) {
+      month = requestedPeriods[0];
+    }
     const ownerId = req.user.role === 'owner' ? req.user._id : req.body.ownerId;
+
+    if (requestedPeriods.length > 0 && balanceAmount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El saldo anterior debe pagarse en un comprobante separado.',
+      });
+    }
 
     // Parse extraordinaryIds: puede venir como string JSON, array, o múltiples campos
     let extraordinaryIds = req.body.extraordinaryIds;
@@ -415,6 +446,15 @@ exports.createPayment = async (req, res, next) => {
     }
 
     const monthlyFee = org?.monthlyFee ?? 0;
+    if (requestedPeriods.length > 0) {
+      const invalidPeriod = requestedPeriods.find(period => !PERIOD_RE.test(period));
+      if (invalidPeriod) {
+        return res.status(400).json({
+          success: false,
+          message: 'Uno o mas periodos tienen formato invalido.',
+        });
+      }
+    }
 
     if (balanceAmount > 0) {
       const currentDebt = Math.abs(Math.min(Number(ownerMembership?.balance || 0), 0));
@@ -436,7 +476,9 @@ exports.createPayment = async (req, res, next) => {
     }
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
-    if (month) {
+    const paymentMonths = requestedPeriods.length > 0 ? requestedPeriods : (month ? [month] : []);
+
+    if (paymentMonths.length > 0) {
       const currentPeriod = currentYYYYMM();
       if (month > currentPeriod) {
         return res.status(400).json({
@@ -455,6 +497,23 @@ exports.createPayment = async (req, res, next) => {
     }
 
     // Si no viene amount, calcularlo desde las unidades (solo si hay período mensual)
+    if (requestedPeriods.length > 1) {
+      const currentPeriod = currentYYYYMM();
+      const startBilling = ownerMembership?.startBillingPeriod;
+      if (requestedPeriods.some(period => period > currentPeriod)) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se pueden registrar pagos de periodos futuros.',
+        });
+      }
+      if (startBilling && requestedPeriods.some(period => period < startBilling)) {
+        return res.status(400).json({
+          success: false,
+          message: `No se pueden registrar pagos anteriores al periodo de inicio de cobro del propietario (${startBilling}).`,
+        });
+      }
+    }
+
     if (amount === undefined || amount === null || amount === '') {
       if (month) {
         amount = activeUnits.length > 0
@@ -502,7 +561,7 @@ exports.createPayment = async (req, res, next) => {
       const existing = await Payment.findOne({
         organization: req.orgId,
         owner: ownerId,
-        month,
+        month: { $in: paymentMonths },
         status: { $in: ['pending', 'approved'] },
       });
       if (existing) {
@@ -524,8 +583,46 @@ exports.createPayment = async (req, res, next) => {
       };
     }
 
+    const monthlyAmount = activeUnits.length > 0
+      ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+      : monthlyFee;
+    const extraordinaryTotal = extraordinaryItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
     if (!month && extraordinaryIds.length === 0 && balanceAmount > 0) {
       amount = balanceAmount;
+    }
+
+    if (paymentMonths.length > 1) {
+      const unitsSnapshot = activeUnits.map(u => u._id);
+      const breakdownSnapshot = activeUnits.map(u => ({
+        unit:   u._id,
+        name:   u.name,
+        amount: calcUnitFee(u, monthlyFee),
+      }));
+      const basePaymentData = {
+        organization:  req.orgId,
+        owner:         ownerId,
+        membership:    ownerMembership?._id,
+        receipt:       receiptData,
+        ownerNote,
+        paymentMethod: 'manual',
+        type:          'monthly',
+        units:         unitsSnapshot,
+        breakdown:     breakdownSnapshot,
+        createdBy:     req.user._id,
+      };
+      const payments = await Payment.create(paymentMonths.map((paymentMonth, index) => ({
+        ...basePaymentData,
+        month:              paymentMonth,
+        amount:             monthlyAmount + (index === 0 ? extraordinaryTotal : 0),
+        extraordinaryItems: index === 0 ? extraordinaryItems : [],
+      })));
+      const payment = payments[0];
+
+      await payment.populate('owner', 'name unit email');
+      logger.info(`Comprobante creado: ${payment._id} - ${payment.owner.name} - ${paymentMonths.join(',')}`);
+
+      return res.status(201).json({ success: true, data: { payment, payments } });
     }
 
     const paymentType = (!month && extraordinaryIds.length === 0)
@@ -810,8 +907,15 @@ exports.deletePayment = async (req, res, next) => {
     }
 
     if (payment.receipt?.publicId) {
-      const resourceType = payment.receipt.mimetype === 'application/pdf' ? 'raw' : 'image';
-      await cloudinary.uploader.destroy(payment.receipt.publicId, { resource_type: resourceType });
+      const sharedReceipt = await Payment.exists({
+        _id: { $ne: payment._id },
+        organization: req.orgId,
+        'receipt.publicId': payment.receipt.publicId,
+      });
+      if (!sharedReceipt) {
+        const resourceType = payment.receipt.mimetype === 'application/pdf' ? 'raw' : 'image';
+        await cloudinary.uploader.destroy(payment.receipt.publicId, { resource_type: resourceType });
+      }
     }
 
     await payment.deleteOne();
