@@ -76,6 +76,18 @@ const formatReceiptDownloadDate = (date = new Date()) => {
   }).format(date).replace(/\//g, '-');
 };
 
+const getOwnerPaymentContext = async ({ organizationId, ownerId }) => {
+  const membership = await OrganizationMember.findOne({
+    user:         ownerId,
+    organization: organizationId,
+    role:         'owner',
+    isActive:     true,
+  }).populate('user', 'name email unit startBillingPeriod');
+
+  if (!membership?.user) return null;
+  return { owner: membership.user, membership };
+};
+
 const buildAvailablePaymentItems = async ({ organizationId, owner, membership }) => {
   const [org, activePayments, ownerUnits, allOrgUnits] = await Promise.all([
     Organization.findById(organizationId).select('paymentPeriods feePeriodCode monthlyFee'),
@@ -384,10 +396,35 @@ exports.getPayment = async (req, res, next) => {
 // ── GET /api/payments/available-items — períodos y extraordinarios disponibles ─
 exports.getAvailableItems = async (req, res, next) => {
   try {
+    let owner = req.user;
+    let membership = req.membership;
+
+    if (req.user.role !== 'owner' && !req.query.ownerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Selecciona un propietario para consultar conceptos disponibles.',
+      });
+    }
+
+    if (req.user.role !== 'owner' && req.query.ownerId) {
+      const ctx = await getOwnerPaymentContext({
+        organizationId: req.orgId,
+        ownerId:        req.query.ownerId,
+      });
+      if (!ctx) {
+        return res.status(404).json({
+          success: false,
+          message: 'Propietario no encontrado en esta organizacion.',
+        });
+      }
+      owner = ctx.owner;
+      membership = ctx.membership;
+    }
+
     const { periods, extraordinary } = await buildAvailablePaymentItems({
       organizationId: req.orgId,
-      owner:          req.user,
-      membership:     req.membership,
+      owner,
+      membership,
     });
     res.json({ success: true, data: { periods, extraordinary } });
   } catch (err) {
@@ -408,7 +445,8 @@ exports.createPayment = async (req, res, next) => {
     if (requestedPeriods.length > 0) {
       month = requestedPeriods[0];
     }
-    const ownerId = req.user.role === 'owner' ? req.user._id : req.body.ownerId;
+    const isOwnerUser = req.user.role === 'owner';
+    const ownerId = isOwnerUser ? req.user._id : req.body.ownerId;
 
     if (requestedPeriods.length > 0 && balanceAmount > 0) {
       return res.status(400).json({
@@ -426,13 +464,35 @@ exports.createPayment = async (req, res, next) => {
 
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
+    if (isOwnerUser && !req.file) {
+      return res.status(400).json({ success: false, message: 'Adjunta el comprobante para registrar el pago.' });
+    }
+
     // Cargar unidades activas del propietario para calcular monto y breakdown
-    const [org, activeUnits, ownerMembership, allOrgUnits] = await Promise.all([
+    const [org, activeUnits, membershipDoc, allOrgUnits] = await Promise.all([
       Organization.findById(req.orgId).select('monthlyFee feePeriodCode'),
       Unit.find({ owner: ownerId, active: true, organization: req.orgId }).sort({ name: 1 }),
-      OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner' }).select('startBillingPeriod balance'),
+      OrganizationMember.findOne({ user: ownerId, organization: req.orgId, role: 'owner', isActive: true }).select('startBillingPeriod balance'),
       Unit.find({ organization: req.orgId, active: true }).lean(),
     ]);
+    let ownerMembership = membershipDoc;
+
+    if (!ownerMembership) {
+      const legacyOwner = await User.findOne({
+        _id:          ownerId,
+        organization: req.orgId,
+        role:         'owner',
+        isActive:     true,
+      }).select('startBillingPeriod balance');
+      if (!legacyOwner) {
+        return res.status(404).json({ success: false, message: 'Propietario no encontrado en esta organizacion.' });
+      }
+      ownerMembership = {
+        _id:                undefined,
+        startBillingPeriod: legacyOwner.startBillingPeriod,
+        balance:            legacyOwner.balance,
+      };
+    }
 
     if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0) {
       if (!amount || Number(amount) < 1) {
