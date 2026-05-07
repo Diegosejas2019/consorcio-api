@@ -130,12 +130,13 @@ describe('GET /api/payments - items disponibles para pagar', () => {
     expect(res.body.data.extraordinary[0].amount).toBe(2000); // 2 unidades × $1000
   });
 
-  test('fixed_total: divide el monto entre las unidades activas', async () => {
+  test('fixed_total: divide el monto entre las unidades asignadas', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
-    // 1 unidad del owner, 2 unidades totales en la org
+    // 1 unidad del owner, 2 unidades asignadas en la org y 1 unidad vacia
     await Unit.create({ organization: orgId, owner: user._id, name: 'Lote A', active: true });
     const otherOwner = { _id: new (require('mongoose').Types.ObjectId)() };
     await Unit.create({ organization: orgId, owner: otherOwner._id, name: 'Lote B', active: true });
+    await Unit.create({ organization: orgId, name: 'Lote C', active: true });
 
     await Expense.create({
       organization: orgId,
@@ -152,7 +153,7 @@ describe('GET /api/payments - items disponibles para pagar', () => {
     const res = await request(app).get('/api/payments').set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data.extraordinary[0].amount).toBe(5000); // 10000 / 2 unidades × 1
+    expect(res.body.data.extraordinary[0].amount).toBe(5000); // 10000 / 2 unidades asignadas x 1
   });
 
   test('by_coefficient: calcula monto ponderado por coeficiente', async () => {

@@ -24,7 +24,8 @@ exports.calculateExtraordinaryAmountForOwner = (expense, ownerUnits, allOrgUnits
       // Backward compat: owner sin unidades ve el monto total completo
       return { amountForOwner: expense.amount, breakdown: [] };
     }
-    const totalUnits   = applicableAll.length || 1;
+    const assignedUnits = applicableAll.filter(unit => unit.owner);
+    const totalUnits   = assignedUnits.length || applicableAll.length || 1;
     const amountPerUnit = round2(expense.amount / totalUnits);
     return {
       amountForOwner: round2(amountPerUnit * applicableOwner.length),
