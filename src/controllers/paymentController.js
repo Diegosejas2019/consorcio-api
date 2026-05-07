@@ -143,6 +143,60 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
   return { periods, extraordinary };
 };
 
+const applyApprovedPaymentEffects = async (payment, reviewerId) => {
+  const ownerId = payment.owner?._id || payment.owner;
+  if (payment.type === 'balance') {
+    const updatedMember = await OrganizationMember.findOneAndUpdate(
+      { user: ownerId, organization: payment.organization, role: 'owner' },
+      { $inc: { balance: payment.amount } },
+      { new: true }
+    );
+    if ((updatedMember?.balance ?? -1) >= 0) {
+      await OrganizationMember.updateOne(
+        { user: ownerId, organization: payment.organization, role: 'owner' },
+        { isDebtor: false, balance: 0 }
+      );
+    }
+  } else {
+    await OrganizationMember.updateOne(
+      { user: ownerId, organization: payment.organization, role: 'owner' },
+      { isDebtor: false, balance: 0 }
+    );
+  }
+
+  if (!payment.systemReceipt?.url) {
+    receiptService.generateAndStoreReceipt(payment._id)
+      .then(async (updatedPayment) => {
+        const receiptUrl = updatedPayment.systemReceipt?.url;
+        await Promise.allSettled([
+          emailService.sendReceiptEmail(payment.owner, updatedPayment, receiptUrl),
+          emailService.sendPaymentApproved(payment.owner, updatedPayment),
+          firebaseService.sendToUser(ownerId, {
+            title: 'Pago aprobado ✓',
+            body:  `Tu comprobante de ${payment.monthFormatted} fue aprobado por el administrador.`,
+            data:  { type: 'payment_approved', paymentId: payment._id.toString() },
+          }),
+        ]);
+      })
+      .catch(err => logger.error(`[approvePayment] Error generando recibo ${payment._id}: ${err.message}`));
+  } else {
+    Promise.allSettled([
+      emailService.sendPaymentApproved(payment.owner, payment),
+      firebaseService.sendToUser(ownerId, {
+        title: 'Pago aprobado ✓',
+        body:  `Tu comprobante de ${payment.monthFormatted} fue aprobado por el administrador.`,
+        data:  { type: 'payment_approved', paymentId: payment._id.toString() },
+      }),
+    ]).then(results => {
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') logger.warn(`Notificación ${i} falló: ${r.reason?.message}`);
+      });
+    });
+  }
+
+  logger.info('Payment approved', { paymentId: payment._id, approvedBy: reviewerId });
+};
+
 const summarizePaymentForAdmin = payment => ({
   id:                  payment._id,
   _id:                 payment._id,
@@ -447,6 +501,7 @@ exports.createPayment = async (req, res, next) => {
     }
     const isOwnerUser = req.user.role === 'owner';
     const ownerId = isOwnerUser ? req.user._id : req.body.ownerId;
+    const createdByAdmin = !isOwnerUser;
 
     if (requestedPeriods.length > 0 && balanceAmount > 0) {
       return res.status(400).json({
@@ -670,6 +725,12 @@ exports.createPayment = async (req, res, next) => {
         units:         unitsSnapshot,
         breakdown:     breakdownSnapshot,
         createdBy:     req.user._id,
+        ...(createdByAdmin ? {
+          status:     'approved',
+          reviewedBy: req.user._id,
+          reviewedAt: new Date(),
+          approvedBy: req.user._id,
+        } : {}),
       };
       const payments = await Payment.create(paymentMonths.map((paymentMonth, index) => ({
         ...basePaymentData,
@@ -680,6 +741,9 @@ exports.createPayment = async (req, res, next) => {
       const payment = payments[0];
 
       await payment.populate('owner', 'name unit email');
+      if (createdByAdmin) {
+        await Promise.all(payments.map(p => applyApprovedPaymentEffects(p, req.user._id)));
+      }
       logger.info(`Comprobante creado: ${payment._id} - ${payment.owner.name} - ${paymentMonths.join(',')}`);
 
       return res.status(201).json({ success: true, data: { payment, payments } });
@@ -711,9 +775,18 @@ exports.createPayment = async (req, res, next) => {
       breakdown:         breakdownSnapshot,
       extraordinaryItems,
       createdBy:         req.user._id,
+      ...(createdByAdmin ? {
+        status:     'approved',
+        reviewedBy: req.user._id,
+        reviewedAt: new Date(),
+        approvedBy: req.user._id,
+      } : {}),
     });
 
     await payment.populate('owner', 'name unit email');
+    if (createdByAdmin) {
+      await applyApprovedPaymentEffects(payment, req.user._id);
+    }
     logger.info(`Comprobante creado: ${payment._id} — ${payment.owner.name} — ${month}`);
 
     res.status(201).json({ success: true, data: { payment } });
