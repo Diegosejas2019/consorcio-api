@@ -228,6 +228,32 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.body.data.payment.units.map(String)).toEqual([unit._id.toString()]);
   });
 
+  test('permite pagar saldo anterior de varias unidades en un comprobante', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    await OrganizationMember.create({
+      user: user._id,
+      organization: orgId,
+      role: 'owner',
+      isActive: true,
+    });
+    const units = await Unit.create([
+      { organization: orgId, owner: user._id, name: 'Lote deuda 1', balance: -5000, isDebtor: true },
+      { organization: orgId, owner: user._id, name: 'Lote deuda 2', balance: -7000, isDebtor: true },
+    ]);
+
+    const res = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('balanceAmount', '12000')
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.payment.type).toBe('balance');
+    expect(res.body.data.payment.amount).toBe(12000);
+    expect(res.body.data.payment.units.map(String).sort()).toEqual(units.map(u => u._id.toString()).sort());
+    expect(res.body.data.payment.breakdown.map(item => item.amount)).toEqual([5000, 7000]);
+  });
+
   test('al aprobar saldo anterior cancela la deuda sin dejar saldo positivo', async () => {
     const { user, orgId } = await createOwnerWithToken();
     const { token: adminToken } = await createAdminWithToken(orgId);

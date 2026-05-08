@@ -706,12 +706,6 @@ exports.createPayment = async (req, res, next) => {
         balanceUnitsForPayment = activeUnits.filter(unit => requestedBalanceUnitIds.includes((unit._id || unit.id).toString()));
       } else {
         balanceUnitsForPayment = activeUnits.filter(unit => Math.max(0, -normalizeDebtBalance(unit.balance)) > 0);
-        if (balanceUnitsForPayment.length !== 1) {
-          return res.status(400).json({
-            success: false,
-            message: 'Selecciona una única unidad para pagar el saldo anterior.',
-          });
-        }
       }
 
       const currentDebt = balanceUnitsForPayment.reduce((sum, unit) => (
