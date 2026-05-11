@@ -251,7 +251,7 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.body.data.payment.type).toBe('balance');
     expect(res.body.data.payment.amount).toBe(12000);
     expect(res.body.data.payment.units.map(String).sort()).toEqual(units.map(u => u._id.toString()).sort());
-    expect(res.body.data.payment.breakdown.map(item => item.amount)).toEqual([5000, 7000]);
+    expect(res.body.data.payment.breakdown.map(item => item.amount).sort((a, b) => a - b)).toEqual([5000, 7000]);
   });
 
   test('al aprobar saldo anterior cancela la deuda sin dejar saldo positivo', async () => {

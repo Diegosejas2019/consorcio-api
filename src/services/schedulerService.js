@@ -6,14 +6,27 @@ const Unit               = require('../models/Unit');
 const firebase     = require('./firebaseService');
 const emailService = require('./emailService');
 const logger       = require('../config/logger');
+const { currentYYYYMM } = require('../utils/periods');
+
+function resolveReminderPeriod(org) {
+  if (org.feePeriodCode) return org.feePeriodCode;
+
+  const currentPeriod = currentYYYYMM();
+  const periods = Array.isArray(org.paymentPeriods)
+    ? org.paymentPeriods.filter(Boolean)
+    : [];
+
+  if (periods.includes(currentPeriod)) return currentPeriod;
+
+  return periods
+    .filter(period => period <= currentPeriod)
+    .sort()
+    .at(-1);
+}
 
 // ── Lógica central — reutilizable por cron y endpoint manual ─
 async function sendDueDateReminders(org) {
-  let month = org.feePeriodCode;
-  if (!month) {
-    const periods = Array.isArray(org.paymentPeriods) ? org.paymentPeriods.filter(Boolean) : [];
-    month = periods[periods.length - 1];
-  }
+  const month = resolveReminderPeriod(org);
   if (!month) {
     logger.warn(`[Scheduler] Org ${org._id} sin feePeriodCode configurado, se omite.`);
     return { sent: 0, noToken: 0, skipped: true };
@@ -99,4 +112,4 @@ function initScheduler() {
   logger.info('[Scheduler] Cron inicializado — se ejecuta diariamente a las 09:00 UTC');
 }
 
-module.exports = { initScheduler, sendDueDateReminders };
+module.exports = { initScheduler, sendDueDateReminders, resolveReminderPeriod };

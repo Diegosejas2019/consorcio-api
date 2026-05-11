@@ -28,10 +28,42 @@ const dbHelper = require('../helpers/dbHelper');
 const { createAdminWithToken, createOwnerWithToken } = require('../helpers/factories');
 const Organization       = require('../../src/models/Organization');
 const OrganizationMember = require('../../src/models/OrganizationMember');
+const firebaseService    = require('../../src/services/firebaseService');
 
 beforeAll(() => dbHelper.connect());
 afterAll(() => dbHelper.disconnect());
-afterEach(() => dbHelper.clear());
+afterEach(async () => {
+  delete process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE;
+  jest.clearAllMocks();
+  await dbHelper.clear();
+});
+
+describe('resolveReminderPeriod', () => {
+  test('sin feePeriodCode usa el mes actual si paymentPeriods tiene todo el anio', () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-05';
+    const { resolveReminderPeriod } = require('../../src/services/schedulerService');
+
+    const month = resolveReminderPeriod({
+      feePeriodCode: '',
+      paymentPeriods: [
+        '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06',
+        '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12',
+      ],
+    });
+
+    expect(month).toBe('2026-05');
+  });
+
+  test('sin feePeriodCode no usa periodos futuros como fallback', () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-05';
+    const { resolveReminderPeriod } = require('../../src/services/schedulerService');
+
+    expect(resolveReminderPeriod({
+      feePeriodCode: '',
+      paymentPeriods: ['2026-04', '2026-12'],
+    })).toBe('2026-04');
+  });
+});
 
 describe('POST /api/payments/send-reminders', () => {
   test('admin puede enviar recordatorios manualmente', async () => {
@@ -95,7 +127,6 @@ describe('POST /api/payments/send-reminders', () => {
   });
 
   test('envía push a owners con token FCM no pagados', async () => {
-    const firebaseService = require('../../src/services/firebaseService');
     const { token: adminToken, orgId } = await createAdminWithToken();
     await Organization.findByIdAndUpdate(orgId, { feePeriodCode: '2025-04', monthlyFee: 15000 });
 
