@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const multer = require('multer');
 const ctrl   = require('../controllers/ownerController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 
 const excelUpload = multer({
   storage: multer.memoryStorage(),
@@ -24,6 +24,7 @@ router.post('/',     restrictTo('admin'), ctrl.createOwner);
 router.get('/bulk/template', restrictTo('admin'), ctrl.downloadBulkTemplate);
 router.post('/bulk',          restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
+router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), ctrl.updateOwner);
 router.delete('/:id',    restrictTo('admin'), ctrl.deleteOwner);

@@ -3,10 +3,15 @@ const OrganizationMember = require('../models/OrganizationMember');
 const Organization = require('../models/Organization');
 const Payment = require('../models/Payment');
 const Unit    = require('../models/Unit');
+const Notice  = require('../models/Notice');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
+const { orgToConfigView } = require('./configController');
+const { buildAvailablePaymentItems } = require('./paymentController');
+const { calcUnitFee } = require('./unitController');
+const { withIsRead } = require('./noticeController');
 const {
   computeTotalOwedByUnits,
   computeUnitsBalance,
@@ -15,6 +20,12 @@ const {
   summarizeUnitDebts,
 } = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
+
+function clampLimit(value, fallback, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
 
 // Campos del User que son identidad global (no datos financieros por org)
 const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'phone', 'phones', 'role', 'organization', 'createdBy', 'isActive']);
@@ -276,6 +287,88 @@ exports.getAllOwners = async (req, res, next) => {
       success: true,
       data: { owners },
       pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// GET /api/owners/me/summary - datos agregados para primera carga owner.
+exports.getMySummary = async (req, res, next) => {
+  try {
+    const paymentsLimit = clampLimit(req.query.paymentsLimit, 50, 100);
+    const noticesLimit = clampLimit(req.query.noticesLimit, 3, 20);
+    const ownerId = req.user._id;
+    const membership = req.membership || await OrganizationMember.findOne({
+      user:         ownerId,
+      organization: req.orgId,
+      role:         'owner',
+      isActive:     true,
+    });
+
+    if (!membership) {
+      return res.status(404).json({
+        success: false,
+        message: 'Propietario no encontrado en esta organizacion.',
+      });
+    }
+
+    const [org, payments, units, availableItems, notices] = await Promise.all([
+      Organization.findById(req.orgId).select('+mpAccessToken paymentPeriods monthlyFee feeAmount feePeriodLabel feePeriodCode lateFeeType lateFeePercent lateFeeFixed dueDayOfMonth name address cuit adminEmail adminPhone bankName bankAccount bankCbu bankHolder feeLabel memberLabel unitLabel businessType slug'),
+      Payment.find({ organization: req.orgId, owner: ownerId })
+        .populate('owner', 'name unit email')
+        .populate('reviewedBy', 'name')
+        .populate('extraordinaryItems.expense', 'description amount date attachments')
+        .sort({ createdAt: -1 })
+        .limit(paymentsLimit)
+        .select('-__v'),
+      Unit.find({ owner: ownerId, organization: req.orgId, active: true })
+        .populate('owner', 'name unit email')
+        .sort({ name: 1 })
+        .select('-__v'),
+      buildAvailablePaymentItems({
+        organizationId: req.orgId,
+        owner:          req.user,
+        membership,
+      }),
+      Notice.find({ organization: req.orgId })
+        .populate('author', 'name')
+        .sort({ createdAt: -1 })
+        .limit(noticesLimit)
+        .select('-__v'),
+    ]);
+
+    if (!org) {
+      return res.status(404).json({
+        success: false,
+        message: 'Organizacion no configurada.',
+      });
+    }
+
+    const config = orgToConfigView(org, false);
+    const enrichedUnits = units.map(unitDoc => {
+      const unit = unitDoc.toJSON();
+      return {
+        ...unit,
+        status: unit.active === false ? 'inactive' : (unit.owner ? 'occupied' : unit.status || 'available'),
+        finalFee: calcUnitFee(unitDoc, org.monthlyFee ?? 0),
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        config,
+        membership: membership.toObject ? membership.toObject() : membership,
+        units: enrichedUnits,
+        payments,
+        availableItems,
+        notices: notices.map(notice => withIsRead(notice, ownerId)),
+      },
+      pagination: {
+        payments: { limit: paymentsLimit },
+        notices:  { limit: noticesLimit },
+      },
     });
   } catch (err) {
     next(err);

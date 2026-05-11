@@ -64,6 +64,7 @@ function orgToConfigView(org, includePublicKey = false) {
   if (includePublicKey) data.mpPublicKey = org.mpPublicKey;
   return data;
 }
+exports.orgToConfigView = orgToConfigView;
 
 // Mapea los nombres legacy del frontend a los campos reales del modelo
 const FIELD_MAP = {

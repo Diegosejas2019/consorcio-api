@@ -200,6 +200,7 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
 
   return { periods, extraordinary };
 };
+exports.buildAvailablePaymentItems = buildAvailablePaymentItems;
 
 async function applyBalancePaymentToUnits(payment) {
   const ownerId = payment.owner?._id || payment.owner;

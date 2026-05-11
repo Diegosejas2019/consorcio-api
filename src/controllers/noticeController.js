@@ -13,6 +13,7 @@ function withIsRead(notice, userId) {
   delete obj.readBy;
   return obj;
 }
+exports.withIsRead = withIsRead;
 
 // ── GET /api/notices ──────────────────────────────────────────
 exports.getNotices = async (req, res, next) => {
