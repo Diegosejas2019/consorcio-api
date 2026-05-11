@@ -812,13 +812,42 @@ exports.getStats = async (req, res, next) => {
   try {
     const orgFilter = { organization: req.orgId };
 
-    const [totalOwners, debtors, payments] = await Promise.all([
-      OrganizationMember.countDocuments({ organization: req.orgId, role: 'owner', isActive: true }),
-      Unit.distinct('owner', { organization: req.orgId, active: true, isDebtor: true, owner: { $ne: null } }),
-      Payment.find({ ...orgFilter, status: 'approved' }).select('amount month'),
+    const [memberships, org, units, payments] = await Promise.all([
+      OrganizationMember.find({ organization: req.orgId, role: 'owner', isActive: true })
+        .select('user balance startBillingPeriod percentage')
+        .lean(),
+      Organization.findById(req.orgId).select('paymentPeriods monthlyFee').lean(),
+      Unit.find({ organization: req.orgId, active: true })
+        .select('owner customFee coefficient balance isDebtor startBillingPeriod')
+        .lean(),
+      Payment.find({ ...orgFilter, status: 'approved' }).select('owner amount month units status').lean(),
     ]);
 
+    const totalOwners = memberships.length;
     const totalCollected = payments.reduce((sum, p) => sum + p.amount, 0);
+    const unitsByOwner = {};
+    units.forEach(unit => {
+      if (!unit.owner) return;
+      const ownerId = unit.owner.toString();
+      (unitsByOwner[ownerId] ||= []).push(unit);
+    });
+    const paymentsByOwner = {};
+    payments.forEach(payment => {
+      if (!payment.owner) return;
+      const ownerId = payment.owner.toString();
+      (paymentsByOwner[ownerId] ||= []).push(payment);
+    });
+    const debtors = memberships.filter(membership => {
+      const ownerId = membership.user?.toString();
+      if (!ownerId) return false;
+      const totalOwed = computeTotalOwedByUnits(
+        membership,
+        paymentsByOwner[ownerId] || [],
+        unitsByOwner[ownerId] || [],
+        org || {}
+      );
+      return totalOwed > 0.01;
+    }).length;
 
     const monthlyAgg = await Payment.aggregate([
       { $match: { ...orgFilter, status: 'approved' } },
@@ -831,9 +860,9 @@ exports.getStats = async (req, res, next) => {
       success: true,
       data: {
         totalOwners,
-        debtors: debtors.length,
-        upToDate: totalOwners - debtors.length,
-        complianceRate: totalOwners > 0 ? Math.round(((totalOwners - debtors.length) / totalOwners) * 100) : 0,
+        debtors,
+        upToDate: totalOwners - debtors,
+        complianceRate: totalOwners > 0 ? Math.round(((totalOwners - debtors) / totalOwners) * 100) : 0,
         totalCollected,
         pendingPayments: await Payment.countDocuments({ ...orgFilter, status: 'pending' }),
         monthlyStats: monthlyAgg,
