@@ -25,6 +25,9 @@ const employeeSchema = new mongoose.Schema(
     startDate:   { type: Date },
     endDate:     { type: Date },
     isActive:    { type: Boolean, default: true },
+    isOnLeave:   { type: Boolean, default: false },
+    leaveNote:   { type: String, trim: true },
+    schedule:    { type: String, trim: true },
     notes:       { type: String, trim: true },
     documents: [{
       url:      { type: String },

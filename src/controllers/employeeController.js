@@ -23,11 +23,12 @@ const mapUploadedDocuments = (files = []) => files.map(f => ({
 // ── GET /api/employees ────────────────────────────────────────
 exports.getEmployees = async (req, res, next) => {
   try {
-    const { search, role, isActive } = req.query;
+    const { search, role, isActive, isOnLeave } = req.query;
 
     const filter = { organization: req.orgId };
     if (role) filter.role = role;
     if (isActive !== undefined) filter.isActive = isActive === 'true';
+    if (isOnLeave !== undefined) filter.isOnLeave = isOnLeave === 'true';
 
     if (search) {
       const re = new RegExp(search, 'i');
@@ -45,7 +46,7 @@ exports.getEmployees = async (req, res, next) => {
 // ── POST /api/employees ───────────────────────────────────────
 exports.createEmployee = async (req, res, next) => {
   try {
-    const allowed = ['name', 'documentNumber', 'phone', 'email', 'role', 'customRole', 'startDate', 'endDate', 'notes'];
+    const allowed = ['name', 'documentNumber', 'phone', 'email', 'role', 'customRole', 'startDate', 'endDate', 'notes', 'schedule', 'isOnLeave', 'leaveNote'];
     const data = { organization: req.orgId, createdBy: req.user._id };
     allowed.forEach(f => { if (req.body[f] !== undefined) data[f] = req.body[f]; });
     if (req.files?.length) data.documents = mapUploadedDocuments(req.files);
@@ -72,7 +73,7 @@ exports.getEmployee = async (req, res, next) => {
 // ── PATCH /api/employees/:id ──────────────────────────────────
 exports.updateEmployee = async (req, res, next) => {
   try {
-    const allowed = ['name', 'documentNumber', 'phone', 'email', 'role', 'customRole', 'startDate', 'endDate', 'notes', 'isActive'];
+    const allowed = ['name', 'documentNumber', 'phone', 'email', 'role', 'customRole', 'startDate', 'endDate', 'notes', 'isActive', 'schedule', 'isOnLeave', 'leaveNote'];
     const setFields = { updatedBy: req.user._id };
     allowed.forEach(f => { if (req.body[f] !== undefined) setFields[f] = req.body[f]; });
     const updateQuery = { $set: setFields };
