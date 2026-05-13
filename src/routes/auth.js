@@ -34,6 +34,7 @@ router.post('/select-organization',
 
 router.get('/me',            protect, ctrl.getMe);
 router.patch('/update-password', protect, ctrl.updatePassword);
+router.post('/change-temporary-password', protect, ctrl.changeTempPassword);
 router.patch('/fcm-token',   protect, ctrl.updateFcmToken);
 
 router.post('/forgot-password',

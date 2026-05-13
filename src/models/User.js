@@ -99,6 +99,15 @@ const userSchema = new mongoose.Schema(
     lastLogin: Date,
     passwordChangedAt: Date,
 
+    // — Contraseña temporal —
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
+    },
+    temporaryPasswordCreatedAt: {
+      type: Date,
+    },
+
     // — Reset de contraseña —
     passwordResetToken: {
       type: String,
@@ -107,6 +116,20 @@ const userSchema = new mongoose.Schema(
     passwordResetExpires: {
       type: Date,
       select: false,
+    },
+
+    // — Cambio de email (pendiente de confirmación) —
+    pendingEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
+    emailChangeToken: {
+      type: String,
+      select: false,
+    },
+    emailChangeTokenExpiresAt: {
+      type: Date,
     },
   },
   {

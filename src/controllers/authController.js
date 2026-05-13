@@ -64,17 +64,22 @@ exports.login = async (req, res, next) => {
     }
 
     if (memberships.length === 1) {
-      const m = memberships[0];
-      const token = signToken(user._id, {
-        organizationId: m.organization._id,
-        role:           m.role,
-        membershipId:   m._id,
+      const m = signToken(user._id, {
+        organizationId: memberships[0].organization._id,
+        role:           memberships[0].role,
+        membershipId:   memberships[0]._id,
       });
+      const membership = memberships[0];
       user.password = undefined;
       user.fcmToken = undefined;
-      user.role     = normalizeRole(m.role);
-      logger.info(`Login exitoso: ${user.email} [${m.role}] org=${m.organization.name}`);
-      return res.json({ success: true, token, data: { user, membership: m } });
+      user.role     = normalizeRole(membership.role);
+      logger.info(`Login exitoso: ${user.email} [${membership.role}] org=${membership.organization.name}`);
+      return res.json({
+        success: true,
+        token: m,
+        mustChangePassword: user.mustChangePassword || false,
+        data: { user, membership },
+      });
     }
 
     // Múltiples membresías → pedir selección de organización
@@ -269,11 +274,65 @@ exports.selectOrganization = async (req, res, next) => {
       membershipId:   membership._id,
     });
 
+    const fullUser = await User.findById(req.user._id).select('mustChangePassword');
     req.user.password = undefined;
     req.user.fcmToken = undefined;
     req.user.role     = normalizeRole(membership.role);
     logger.info(`Organización seleccionada: ${req.user.email} [${membership.role}] org=${membership.organization.name}`);
-    res.json({ success: true, token, data: { user: req.user, membership } });
+    res.json({
+      success: true,
+      token,
+      mustChangePassword: fullUser?.mustChangePassword || false,
+      data: { user: req.user, membership },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/auth/change-temporary-password ──────────────────
+exports.changeTempPassword = async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword) {
+      return res.status(400).json({ success: false, message: 'La contraseña actual es obligatoria.' });
+    }
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+    }
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Las contraseñas no coinciden.' });
+    }
+
+    const user = await User.findById(req.user.id).select('+password');
+    if (!(await user.comparePassword(currentPassword))) {
+      return res.status(401).json({ success: false, message: 'La contraseña actual es incorrecta.' });
+    }
+    if (await user.comparePassword(newPassword)) {
+      return res.status(400).json({ success: false, message: 'La nueva contraseña no puede ser igual a la contraseña temporal.' });
+    }
+
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    await user.save();
+
+    // Emitir nuevo token para que el JWT no quede invalidado por passwordChangedAt
+    const orgContext = req.membership
+      ? {
+          organizationId: req.membership.organization._id,
+          role:           req.membership.role,
+          membershipId:   req.membership._id,
+        }
+      : null;
+    const newToken = signToken(user._id, orgContext);
+
+    logger.info(`[ChangeTempPassword] Contraseña temporal cambiada para ${user.email}`);
+    res.json({
+      success:  true,
+      token:    newToken,
+      message:  'Contraseña cambiada correctamente. Ya podés usar la aplicación.',
+    });
   } catch (err) {
     next(err);
   }

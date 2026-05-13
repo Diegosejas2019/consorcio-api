@@ -497,7 +497,11 @@ exports.createOwner = async (req, res, next) => {
           }
           const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
           Object.assign(existingInactive, inactiveUpdate, { isActive: true });
-          if (tempPassword) existingInactive.password = tempPassword;
+          if (tempPassword) {
+            existingInactive.password = tempPassword;
+            existingInactive.mustChangePassword = true;
+            existingInactive.temporaryPasswordCreatedAt = new Date();
+          }
           await existingInactive.save();
           existingInactive.password = undefined;
           owner = existingInactive;
@@ -514,6 +518,8 @@ exports.createOwner = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'La contraseña es obligatoria para nuevos propietarios.' });
       }
       const userCreateData = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
+      userCreateData.mustChangePassword = true;
+      userCreateData.temporaryPasswordCreatedAt = new Date();
       owner = await User.create(userCreateData);
       logger.info(`Propietario creado: ${owner.email} [org: ${req.orgId}]`);
       owner.password = undefined;
@@ -563,7 +569,7 @@ exports.createOwner = async (req, res, next) => {
 exports.updateOwner = async (req, res, next) => {
   try {
     const memberFields = ['isDebtor', 'percentage', 'startBillingPeriod'];
-    const userFields   = ['name', 'phone', 'phones', 'isActive'];
+    const userFields   = ['name', 'phone', 'phones', 'isActive', 'email'];
 
     const userUpdate   = {};
     const memberUpdate = {};
@@ -574,6 +580,25 @@ exports.updateOwner = async (req, res, next) => {
       }
     });
     Object.assign(userUpdate, normalizePhonesInput(req.body));
+
+    // Validar cambio de email: no debe estar en uso por otro usuario activo
+    if (userUpdate.email) {
+      userUpdate.email = userUpdate.email.toLowerCase().trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userUpdate.email)) {
+        return res.status(400).json({ success: false, message: 'El email ingresado no es válido.' });
+      }
+      const emailConflict = await User.findOne({
+        _id: { $ne: req.params.id },
+        email: userUpdate.email,
+        isActive: true,
+      }).select('_id');
+      if (emailConflict) {
+        return res.status(400).json({
+          success: false,
+          message: 'El email ya está en uso por otro usuario.',
+        });
+      }
+    }
 
     const membership = await OrganizationMember.findOne({
       user: req.params.id,
@@ -790,7 +815,11 @@ exports.bulkCreateOwners = async (req, res, next) => {
             const rawPassword = ownerData.password;
             const inactiveUpdate = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
             Object.assign(existingInactive, inactiveUpdate, { isActive: true });
-            if (rawPassword) existingInactive.password = rawPassword;
+            if (rawPassword) {
+              existingInactive.password = rawPassword;
+              existingInactive.mustChangePassword = true;
+              existingInactive.temporaryPasswordCreatedAt = new Date();
+            }
             await existingInactive.save();
             existingInactive.password = undefined;
             owner = existingInactive;
@@ -802,6 +831,8 @@ exports.bulkCreateOwners = async (req, res, next) => {
             }
             const rawPassword = ownerData.password;
             const bulkCreateData = Object.fromEntries(Object.entries(ownerData).filter(([k]) => USER_FIELDS.has(k)));
+            bulkCreateData.mustChangePassword = true;
+            bulkCreateData.temporaryPasswordCreatedAt = new Date();
             owner = await User.create(bulkCreateData);
             logger.info(`Bulk: propietario creado ${owner.email} [org: ${req.orgId}]`);
             owner.password = undefined;

@@ -41,7 +41,7 @@ exports.protect = async (req, res, next) => {
 
     // 4. Verificar que el usuario siga existiendo (popular organización)
     const user = await User.findById(decoded.id)
-      .select('+passwordChangedAt')
+      .select('+passwordChangedAt +mustChangePassword')
       .populate('organization', '-mpPublicKey -mpAccessToken -mpWebhookSecret');
 
     if (!user) {
@@ -56,6 +56,19 @@ exports.protect = async (req, res, next) => {
     // 6. Verificar si la contraseña cambió después de emitir el JWT
     if (user.changedPasswordAfter(decoded.iat)) {
       return res.status(401).json({ success: false, message: 'Contraseña cambiada recientemente. Iniciá sesión nuevamente.' });
+    }
+
+    // 6b. Bloquear si debe cambiar contraseña temporal (solo permite rutas de auth esenciales)
+    if (user.mustChangePassword) {
+      const ALLOWED_PATHS = ['/api/auth/change-temporary-password', '/api/auth/me'];
+      const isAllowed = ALLOWED_PATHS.some(p => req.originalUrl.includes(p));
+      if (!isAllowed) {
+        return res.status(403).json({
+          success: false,
+          mustChangePassword: true,
+          message: 'Debés cambiar tu contraseña temporal antes de continuar.',
+        });
+      }
     }
 
     // 7. Actualizar lastLogin
