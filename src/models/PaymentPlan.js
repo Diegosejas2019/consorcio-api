@@ -8,6 +8,49 @@ const includedPeriodSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const debtSnapshotSchema = new mongoose.Schema(
+  {
+    periods: {
+      type: [{
+        month:  { type: String, match: /^\d{4}-(0[1-9]|1[0-2])$/ },
+        amount: { type: Number, default: 0 },
+      }],
+      default: [],
+      _id: false,
+    },
+    extraordinaryItems: {
+      type: [{
+        expenseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Expense' },
+        title:     { type: String },
+        amount:    { type: Number, default: 0 },
+      }],
+      default: [],
+      _id: false,
+    },
+    balanceItems: {
+      type: [{
+        unit:   { type: mongoose.Schema.Types.ObjectId, ref: 'Unit' },
+        name:   { type: String },
+        amount: { type: Number, default: 0 },
+      }],
+      default: [],
+      _id: false,
+    },
+    debtItems: {
+      type: [{
+        debtItem:    { type: mongoose.Schema.Types.ObjectId, ref: 'OwnerDebtItem' },
+        type:        { type: String },
+        description: { type: String },
+        amount:      { type: Number, default: 0 },
+        currency:    { type: String, enum: ['ARS', 'USD'], default: 'ARS' },
+      }],
+      default: [],
+      _id: false,
+    },
+  },
+  { _id: false }
+);
+
 const paymentPlanSchema = new mongoose.Schema(
   {
     organization: {
@@ -60,6 +103,7 @@ const paymentPlanSchema = new mongoose.Schema(
       default: [],
       _id: false,
     },
+    debtSnapshot: { type: debtSnapshotSchema, default: () => ({}) },
 
     requestComment: { type: String, maxlength: 500 },
     adminComment:   { type: String, maxlength: 500 },

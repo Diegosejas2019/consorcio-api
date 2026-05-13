@@ -11,6 +11,10 @@ const { sendWelcome } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const { orgToConfigView } = require('./configController');
 const { buildAvailablePaymentItems } = require('./paymentController');
+const {
+  getOwnerDebtOptions,
+  getPlanSummariesByOwner,
+} = require('../services/paymentPlanDebtService');
 const { calcUnitFee } = require('./unitController');
 const { withIsRead } = require('./noticeController');
 const {
@@ -230,7 +234,7 @@ exports.getAllOwners = async (req, res, next) => {
     const paged = memberships.slice((page - 1) * limit, page * limit);
     const ownerIds = paged.map(m => m.user._id);
 
-    const [lastPayments, approvedMonthlyPayments, activePlans] = await Promise.all([
+    const [lastPayments, approvedMonthlyPayments, activePlans, planSummariesByOwner] = await Promise.all([
       Payment.aggregate([
         { $match: { owner: { $in: ownerIds }, status: 'approved' } },
         { $sort: { createdAt: -1 } },
@@ -255,6 +259,10 @@ exports.getAllOwners = async (req, res, next) => {
         status: { $in: ['requested', 'approved', 'active'] },
         isActive: true,
       }).select('owner').lean(),
+      getPlanSummariesByOwner({
+        organizationId: req.orgId,
+        ownerIds,
+      }),
     ]);
 
     const lastPaymentByOwner = lastPayments.reduce((map, p) => {
@@ -273,7 +281,13 @@ exports.getAllOwners = async (req, res, next) => {
     let owners = paged.map(m => {
       const ownerId  = m.user._id.toString();
       const ownerUnits = unitFeesByOwner[ownerId] || [];
-      const totalOwed = computeTotalOwedByUnits(m, paymentsByOwner[ownerId] || [], ownerUnits, org);
+      const planSummary = planSummariesByOwner[ownerId] || {};
+      const rawTotalOwed = computeTotalOwedByUnits(m, paymentsByOwner[ownerId] || [], ownerUnits, org);
+      const excludedExtraAmount = (planSummary.plans || [])
+        .filter(({ plan }) => ['requested', 'approved', 'active', 'completed'].includes(plan.status))
+        .flatMap(({ debt }) => debt.extraordinaryItems || [])
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const totalOwed = Math.max(0, rawTotalOwed - Math.max(0, Number(planSummary.excludedDebtAmount || 0) - excludedExtraAmount));
       const balance = computeUnitsBalance(ownerUnits);
       return {
         ...m.user,
@@ -289,7 +303,9 @@ exports.getAllOwners = async (req, res, next) => {
         units:              unitsByOwner[ownerId] ?? [],
         unitDebts:          summarizeUnitDebts(ownerUnits),
         totalOwed,
-        hasActivePlan:      activePlanOwnerSet.has(ownerId),
+        plannedDebtAmount:  Number(planSummary.plannedDebtAmount || 0),
+        hasActivePlan:      activePlanOwnerSet.has(ownerId) || Boolean(planSummary.activePlanSummary),
+        activePlanSummary:  planSummary.activePlanSummary || null,
       };
     });
 
@@ -419,11 +435,19 @@ exports.getOwner = async (req, res, next) => {
         .lean(),
     ]);
     const approvedPayments = payments.filter(p => p.status === 'approved' && p.month);
+    const planSummariesByOwner = await getPlanSummariesByOwner({
+      organizationId: req.orgId,
+      ownerIds: [membership.user._id],
+    });
+    const planSummary = planSummariesByOwner[membership.user._id.toString()] || {};
     owner.balance = computeUnitsBalance(ownerUnits);
-    owner.balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+    owner.balanceOwed = Math.max(0, computeUnitsBalanceOwed(ownerUnits) - Number(planSummary.plannedBalanceAmount || 0));
     owner.isDebtor = owner.balanceOwed > 0;
     owner.unitDebts = summarizeUnitDebts(ownerUnits);
-    owner.totalOwed = computeTotalOwedByUnits(membership, approvedPayments, ownerUnits, org || {});
+    owner.totalOwed = Math.max(0, computeTotalOwedByUnits(membership, approvedPayments, ownerUnits, org || {}) - Number(planSummary.excludedDebtAmount || 0));
+    owner.plannedDebtAmount = Number(planSummary.plannedDebtAmount || 0);
+    owner.hasActivePlan = Boolean(planSummary.activePlanSummary);
+    owner.activePlanSummary = planSummary.activePlanSummary || null;
 
     res.json({ success: true, data: { owner, payments } });
   } catch (err) {
@@ -434,41 +458,22 @@ exports.getOwner = async (req, res, next) => {
 // ── GET /api/owners/:id/available-items — conceptos vencidos (admin) ──
 exports.getOwnerAvailableItems = async (req, res, next) => {
   try {
-    const membership = await OrganizationMember.findOne({
-      user:         req.params.id,
-      organization: req.orgId,
-      role:         'owner',
-      isActive:     true,
-    });
-    if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
-
-    const [user, org, ownerUnits] = await Promise.all([
-      User.findById(req.params.id).select('name email unit unitId startBillingPeriod'),
-      Organization.findById(req.orgId).select('monthlyFee'),
-      Unit.find({ owner: req.params.id, organization: req.orgId, active: true }).lean(),
-    ]);
-    if (!user) return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
-
-    const { periods, extraordinary } = await buildAvailablePaymentItems({
+    const options = await getOwnerDebtOptions({
       organizationId: req.orgId,
-      owner:          user,
-      membership,
+      ownerId: req.params.id,
     });
-
-    const monthlyFee = org?.monthlyFee ?? 0;
-    const periodFee  = ownerUnits.length > 0
-      ? ownerUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
-      : monthlyFee;
-
-    const balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+    if (!options) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
 
     res.json({
       success: true,
       data: {
-        periods,
-        periodFee,
-        extraordinary,
-        balanceDebt: balanceOwed > 0 ? balanceOwed : 0,
+        periods: options.periods,
+        periodItems: options.periodItems,
+        periodFee: options.periodItems[0]?.amount || 0,
+        extraordinary: options.extraordinary,
+        balanceDebt: options.balanceDebt,
+        balanceUnits: options.balanceUnits,
+        debtItems: options.debtItems,
       },
     });
   } catch (err) {

@@ -5,6 +5,11 @@ const Organization            = require('../models/Organization');
 const User                    = require('../models/User');
 const OrganizationMember      = require('../models/OrganizationMember');
 const receiptService          = require('../services/receiptService');
+const {
+  buildPlanDebtSnapshot,
+  markDebtItemsIncluded,
+  releaseDebtItemsFromPlan,
+} = require('../services/paymentPlanDebtService');
 const logger                  = require('../config/logger');
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -77,18 +82,15 @@ const formatPlan = (plan, installments = []) => {
 // ── POST /api/payment-plans/request (owner) ────────────────────
 exports.requestPlan = async (req, res, next) => {
   try {
-    const { includedPeriods, originalDebtAmount, currency, requestComment } = req.body;
+    const { includedPeriods = [], extraordinaryItems = [], balanceDebt, balanceUnitIds, debtItemIds, currency, requestComment } = req.body;
 
-    if (!Array.isArray(includedPeriods) || includedPeriods.length === 0) {
+    if (!Array.isArray(includedPeriods)) {
       return res.status(400).json({ success: false, message: 'Debes incluir al menos un período en la solicitud.' });
     }
     for (const p of includedPeriods) {
       if (!p.month || !PERIOD_RE.test(p.month)) {
         return res.status(400).json({ success: false, message: `Período con formato inválido: ${p.month}.` });
       }
-    }
-    if (!originalDebtAmount || Number(originalDebtAmount) <= 0) {
-      return res.status(400).json({ success: false, message: 'El monto original de deuda debe ser mayor a cero.' });
     }
 
     const existing = await PaymentPlan.findOne({
@@ -104,24 +106,34 @@ exports.requestPlan = async (req, res, next) => {
       });
     }
 
+    const snapshot = await buildPlanDebtSnapshot({
+      organizationId: req.orgId,
+      ownerId: req.user._id,
+      selection: { includedPeriods, extraordinaryItems, balanceDebt, balanceUnitIds, debtItemIds },
+    });
+    if (!snapshot || snapshot.originalDebtAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'SeleccionÃ¡ al menos una deuda disponible para incluir en el plan.' });
+    }
+
     const plan = await PaymentPlan.create({
       organization:       req.orgId,
       owner:              req.user._id,
       requestedBy:        'owner',
       status:             'requested',
       currency:           currency || 'ARS',
-      originalDebtAmount: Number(originalDebtAmount),
+      originalDebtAmount: snapshot.originalDebtAmount,
       interestType:       'none',
       interestValue:      0,
       interestAmount:     0,
-      totalAmount:        Number(originalDebtAmount),
-      includedPeriods:    includedPeriods.map(p => ({
-        month:          p.month,
-        originalAmount: Number(p.originalAmount || 0),
-      })),
+      totalAmount:        snapshot.originalDebtAmount,
+      includedPeriods:    snapshot.includedPeriods,
+      balanceDebt:        snapshot.balanceDebt,
+      extraordinaryItems: snapshot.extraordinaryItems,
+      debtSnapshot:       snapshot.debtSnapshot,
       requestComment: requestComment?.trim() || undefined,
       createdBy:      req.user._id,
     });
+    await markDebtItemsIncluded(snapshot.debtSnapshot);
 
     res.status(201).json({
       success: true,
@@ -276,8 +288,35 @@ exports.approvePlan = async (req, res, next) => {
     if (plan.status !== 'requested') {
       return res.status(400).json({ success: false, message: `El plan no está en estado "Solicitado" (estado actual: ${planStatusLabel(plan.status)}).` });
     }
-    if (!plan.includedPeriods || plan.includedPeriods.length === 0) {
-      return res.status(400).json({ success: false, message: 'El plan no tiene períodos incluidos.' });
+
+    if (!plan.debtSnapshot || (
+      !(plan.debtSnapshot.periods || []).length
+      && !(plan.debtSnapshot.extraordinaryItems || []).length
+      && !(plan.debtSnapshot.balanceItems || []).length
+      && !(plan.debtSnapshot.debtItems || []).length
+    )) {
+      const snapshot = await buildPlanDebtSnapshot({
+        organizationId: req.orgId,
+        ownerId: plan.owner,
+        selection: {
+          includedPeriods: plan.includedPeriods || [],
+          extraordinaryItems: plan.extraordinaryItems || [],
+          balanceDebt: plan.balanceDebt,
+        },
+        excludePlanId: plan._id,
+      });
+      if (snapshot && snapshot.originalDebtAmount > 0) {
+        plan.originalDebtAmount = snapshot.originalDebtAmount;
+        plan.totalAmount = snapshot.originalDebtAmount;
+        plan.includedPeriods = snapshot.includedPeriods;
+        plan.balanceDebt = snapshot.balanceDebt;
+        plan.extraordinaryItems = snapshot.extraordinaryItems;
+        plan.debtSnapshot = snapshot.debtSnapshot;
+        await markDebtItemsIncluded(snapshot.debtSnapshot);
+      }
+    }
+    if (!plan.originalDebtAmount || Number(plan.originalDebtAmount) <= 0) {
+      return res.status(400).json({ success: false, message: 'El plan no tiene deuda disponible incluida.' });
     }
 
     const count          = Number(installmentsCount);
@@ -348,6 +387,7 @@ exports.rejectPlan = async (req, res, next) => {
     plan.rejectedBy      = req.user._id;
     plan.rejectedAt      = new Date();
     await plan.save();
+    await releaseDebtItemsFromPlan(plan);
 
     logger.info(`[paymentPlan] Plan ${plan._id} rechazado por ${req.user._id}`);
     res.json({ success: true, message: 'Plan rechazado.', data: { plan } });
@@ -361,9 +401,11 @@ exports.createPlan = async (req, res, next) => {
   try {
     const {
       ownerId,
-      includedPeriods,
-      extraordinaryItems,
+      includedPeriods = [],
+      extraordinaryItems = [],
       balanceDebt,
+      balanceUnitIds,
+      debtItemIds,
       originalDebtAmount,
       currency,
       installmentsCount,
@@ -377,16 +419,13 @@ exports.createPlan = async (req, res, next) => {
     if (!ownerId) {
       return res.status(400).json({ success: false, message: 'El propietario es obligatorio.' });
     }
-    if (!Array.isArray(includedPeriods) || includedPeriods.length === 0) {
+    if (!Array.isArray(includedPeriods || [])) {
       return res.status(400).json({ success: false, message: 'Debes incluir al menos un período.' });
     }
     for (const p of includedPeriods) {
       if (!p.month || !PERIOD_RE.test(p.month)) {
         return res.status(400).json({ success: false, message: `Período con formato inválido: ${p.month}.` });
       }
-    }
-    if (!originalDebtAmount || Number(originalDebtAmount) <= 0) {
-      return res.status(400).json({ success: false, message: 'El monto original de deuda debe ser mayor a cero.' });
     }
     if (!installmentsCount || Number(installmentsCount) < 1) {
       return res.status(400).json({ success: false, message: 'La cantidad de cuotas debe ser al menos 1.' });
@@ -421,7 +460,15 @@ exports.createPlan = async (req, res, next) => {
     const count          = Number(installmentsCount);
     const iType          = interestType || 'none';
     const iValue         = Number(interestValue || 0);
-    const origAmount     = Number(originalDebtAmount);
+    const snapshot       = await buildPlanDebtSnapshot({
+      organizationId: req.orgId,
+      ownerId,
+      selection: { includedPeriods, extraordinaryItems, balanceDebt, balanceUnitIds, debtItemIds },
+    });
+    if (!snapshot || snapshot.originalDebtAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'SeleccionÃ¡ al menos una deuda disponible para incluir en el plan.' });
+    }
+    const origAmount     = Number(snapshot.originalDebtAmount);
     const interestAmount = calcInterest(origAmount, iType, iValue);
     const totalAmount    = origAmount + interestAmount;
     const installmentAmt = Math.round((totalAmount / count) * 100) / 100;
@@ -440,14 +487,10 @@ exports.createPlan = async (req, res, next) => {
       installmentsCount: count,
       startDate:         new Date(startDate),
       frequency:         'monthly',
-      includedPeriods:   includedPeriods.map(p => ({
-        month:          p.month,
-        originalAmount: Number(p.originalAmount || 0),
-      })),
-      balanceDebt: Number(balanceDebt || 0),
-      extraordinaryItems: Array.isArray(extraordinaryItems)
-        ? extraordinaryItems.map(e => ({ expenseId: e.expenseId || e.id, title: e.title, amount: Number(e.amount || 0) }))
-        : [],
+      includedPeriods:   snapshot.includedPeriods,
+      balanceDebt:       snapshot.balanceDebt,
+      extraordinaryItems: snapshot.extraordinaryItems,
+      debtSnapshot:      snapshot.debtSnapshot,
       requestComment: requestComment?.trim() || undefined,
       adminComment:   adminComment?.trim() || undefined,
       createdBy:      req.user._id,
@@ -469,6 +512,7 @@ exports.createPlan = async (req, res, next) => {
     }));
 
     await PaymentPlanInstallment.insertMany(installmentsData);
+    await markDebtItemsIncluded(snapshot.debtSnapshot);
 
     const installments = await PaymentPlanInstallment.find({ paymentPlan: plan._id }).sort({ installmentNumber: 1 });
     await plan.populate('owner', 'name email unit');
@@ -502,6 +546,7 @@ exports.cancelPlan = async (req, res, next) => {
       { paymentPlan: plan._id, status: { $in: ['pending', 'overdue'] } },
       { $set: { status: 'cancelled' } }
     );
+    await releaseDebtItemsFromPlan(plan);
 
     logger.info(`[paymentPlan] Plan ${plan._id} cancelado por ${req.user._id}`);
     res.json({ success: true, message: 'Plan cancelado. Las cuotas pendientes fueron canceladas.' });
@@ -534,7 +579,8 @@ exports.registerInstallmentPayment = async (req, res, next) => {
       amount:        installment.amount,
       status:        'approved',
       paymentMethod: 'manual',
-      type:          'balance',
+      type:          'installment',
+      installmentId: installment._id,
       ownerNote:     `Cuota ${installment.installmentNumber} de ${plan.installmentsCount} — Plan de pagos`,
       createdBy:     req.user._id,
       approvedBy:    req.user._id,
@@ -639,3 +685,4 @@ exports.submitInstallmentPayment = async (req, res, next) => {
     next(err);
   }
 };
+

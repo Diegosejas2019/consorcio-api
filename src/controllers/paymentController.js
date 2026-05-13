@@ -13,6 +13,11 @@ const firebaseService = require('../services/firebaseService');
 const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
 const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
+const {
+  buildBillableUnitsContext,
+  getOwnerDebtOptions,
+  getPlanSummariesByOwner,
+} = require('../services/paymentPlanDebtService');
 const { currentYYYYMM } = require('../utils/periods');
 const {
   calculateUnitFee,
@@ -100,117 +105,17 @@ const getOwnerPaymentContext = async ({ organizationId, ownerId }) => {
   return { owner: membership.user, membership };
 };
 
-const buildBillableUnitsContext = (memberships = [], units = []) => {
-  const allUnits = [...units];
-  const unitsByOwner = {};
-  units.forEach(unit => {
-    if (!unit.owner) return;
-    const key = unit.owner.toString();
-    (unitsByOwner[key] ||= []).push(unit);
-  });
-
-  memberships.forEach(membership => {
-    const user = membership.user;
-    if (!user) return;
-    const ownerId = (user._id || user).toString();
-    if (unitsByOwner[ownerId]?.length) return;
-    if (!user.unit && !user.unitId) return;
-    const legacyUnit = {
-      _id:         user.unitId || user._id,
-      name:        user.unit || 'Unidad',
-      owner:       user._id,
-      coefficient: membership.percentage > 0 ? membership.percentage : 1,
-      active:      true,
-      legacy:      true,
-    };
-    unitsByOwner[ownerId] = [legacyUnit];
-    allUnits.push(legacyUnit);
-  });
-
-  return { allUnits, unitsByOwner };
-};
-
 const buildAvailablePaymentItems = async ({ organizationId, owner, membership }) => {
-  const [org, activePayments, rawOwnerUnits, rawOrgUnits, memberships] = await Promise.all([
-    Organization.findById(organizationId).select('paymentPeriods feePeriodCode monthlyFee'),
-    Payment.find({
-      organization: organizationId,
-      owner:        owner._id,
-      status:       { $in: ['pending', 'approved'] },
-    }).select('month extraordinaryItems units status'),
-    Unit.find({ owner: owner._id, organization: organizationId, active: true }).lean(),
-    Unit.find({ organization: organizationId, active: true }).lean(),
-    OrganizationMember.find({ organization: organizationId, role: 'owner', isActive: true })
-      .select('user percentage')
-      .populate('user', 'unit unitId')
-      .lean(),
-  ]);
-  const { allUnits: allOrgUnits, unitsByOwner } = buildBillableUnitsContext(memberships, rawOrgUnits);
-  let ownerUnits = unitsByOwner[owner._id.toString()] || rawOwnerUnits;
-  if (!ownerUnits.length && (owner.unit || owner.unitId)) {
-    ownerUnits = [{
-      _id: owner.unitId || owner._id,
-      name: owner.unit || 'Unidad',
-      owner: owner._id,
-      coefficient: membership?.percentage > 0 ? membership.percentage : 1,
-      active: true,
-      legacy: true,
-    }];
-  }
-
-  const paidExtraIds = new Set(
-    activePayments.flatMap(p => (p.extraordinaryItems || [])
-      .map(e => e.expense?.toString())
-      .filter(Boolean))
-  );
-
-  // Períodos bloqueados por un plan de pagos activo del propietario
-  const activePlans = await PaymentPlan.find({
-    organization: organizationId,
-    owner:        owner._id,
-    status:       { $in: ['approved', 'active'] },
-    isActive:     true,
-  }).select('includedPeriods extraordinaryItems balanceDebt').lean();
-  const blockedMonths     = new Set(activePlans.flatMap(p => p.includedPeriods.map(ip => ip.month)));
-  const planExtraIds      = new Set(activePlans.flatMap(p => (p.extraordinaryItems || []).map(e => e.expenseId?.toString()).filter(Boolean)));
-
-  const currentPeriod = currentYYYYMM();
-  const periods = [...new Set(ownerUnits.flatMap(unit => {
-    const paidMonths = getPaidMonthsForUnit(unit, activePayments, ['pending', 'approved']);
-    const startBilling = unit.startBillingPeriod || membership?.startBillingPeriod || owner.startBillingPeriod;
-    return (org?.paymentPeriods || [])
-      .filter(p => !paidMonths.has(p) && !blockedMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
-  }))].sort();
-
-  const extras = await Expense.find({
-    organization: organizationId,
-    expenseType:  'extraordinary',
-    isChargeable: true,
-    isActive:     { $ne: false },
-  }).select('_id description amount date extraordinaryBillingMode unitAmount appliesToAllOwners targetUnits').sort({ date: -1, createdAt: -1 }).lean();
-
-  const extraordinary = extras
-    .filter(e => !paidExtraIds.has(e._id.toString()) && !planExtraIds.has(e._id.toString()))
-    .map(e => {
-      const { amountForOwner } = calculateExtraordinaryAmountForOwner(e, ownerUnits, allOrgUnits);
-      // Omitir si el owner no tiene unidades aplicables (solo en modos que requieren unidades)
-      if (amountForOwner === 0 && (e.extraordinaryBillingMode === 'per_unit' || e.extraordinaryBillingMode === 'by_coefficient')) {
-        return null;
-      }
-      return {
-        id:                      e._id,
-        _id:                     e._id,
-        title:                   e.description,
-        description:             e.description,
-        amount:                  amountForOwner,
-        extraordinaryBillingMode: e.extraordinaryBillingMode || 'fixed_total',
-        period:                  e.date ? e.date.toISOString().slice(0, 7) : null,
-        date:                    e.date,
-      };
-    })
-    .filter(Boolean);
-
-  return { periods, extraordinary };
+  const debtOptions = await getOwnerDebtOptions({ organizationId, ownerId: owner._id });
+  if (!debtOptions) return { periods: [], periodItems: [], extraordinary: [], balanceDebt: 0, balanceUnits: [], debtItems: [] };
+  return {
+    periods: debtOptions.periods,
+    periodItems: debtOptions.periodItems,
+    extraordinary: debtOptions.extraordinary,
+    balanceDebt: debtOptions.balanceDebt,
+    balanceUnits: debtOptions.balanceUnits,
+    debtItems: debtOptions.debtItems,
+  };
 };
 exports.buildAvailablePaymentItems = buildAvailablePaymentItems;
 
@@ -361,6 +266,10 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
     ]);
 
     const { allUnits: billableUnits, unitsByOwner } = buildBillableUnitsContext(memberships, units);
+    const planSummariesByOwner = await getPlanSummariesByOwner({
+      organizationId: req.orgId,
+      ownerIds,
+    });
 
     const paymentsByOwner = {};
     payments.forEach(payment => {
@@ -373,6 +282,9 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
       const ownerId = owner._id.toString();
       const ownerUnits = unitsByOwner[ownerId] || [];
       const ownerPayments = paymentsByOwner[ownerId] || [];
+      const planSummary = planSummariesByOwner[ownerId] || {};
+      const blockedMonths = new Set(planSummary.blockedMonths || []);
+      const blockedExtraIds = new Set(planSummary.blockedExtraIds || []);
       const paidPeriods = [...new Set(ownerUnits.flatMap(unit =>
         [...getPaidMonthsForUnit(unit, ownerPayments, ['approved'])]
       ))]
@@ -386,7 +298,7 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
       ))].sort();
       const unpaidPeriods = [...new Set(ownerUnits.flatMap(unit =>
         getUnpaidPeriodsForUnit(unit, membership, ownerPayments, org || {}, ['approved'])
-      ))].sort();
+      ))].filter(month => !blockedMonths.has(month)).sort();
       const paidExtraIds = new Set(
         ownerPayments
           .filter(p => ['pending', 'approved'].includes(p.status))
@@ -395,7 +307,7 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
             .filter(Boolean))
       );
       const extraordinaryOwed = chargeableExpenses
-        .filter(expense => !paidExtraIds.has(expense._id.toString()))
+        .filter(expense => !paidExtraIds.has(expense._id.toString()) && !blockedExtraIds.has(expense._id.toString()))
         .map(expense => {
           const { amountForOwner } = calculateExtraordinaryAmountForOwner(expense, ownerUnits, billableUnits);
           if (amountForOwner === 0 && ['per_unit', 'by_coefficient'].includes(expense.extraordinaryBillingMode)) {
@@ -410,9 +322,15 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
           };
         })
         .filter(Boolean);
-      const balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+      const rawBalanceOwed = computeUnitsBalanceOwed(ownerUnits);
+      const balanceOwed = Math.max(0, rawBalanceOwed - Number(planSummary.plannedBalanceAmount || 0));
       const extraordinaryTotal = extraordinaryOwed.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-      const totalOwed = computeTotalOwedByUnits(membership, ownerPayments, ownerUnits, org || {}) + extraordinaryTotal;
+      const excludedExtraAmount = (planSummary.plans || [])
+        .filter(({ plan }) => ['requested', 'approved', 'active', 'completed'].includes(plan.status))
+        .flatMap(({ debt }) => debt.extraordinaryItems || [])
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const rawTotalOwed = computeTotalOwedByUnits(membership, ownerPayments, ownerUnits, org || {}) + extraordinaryTotal;
+      const totalOwed = Math.max(0, rawTotalOwed - Math.max(0, Number(planSummary.excludedDebtAmount || 0) - excludedExtraAmount));
       const lastPaymentRaw = ownerPayments.find(p => p.status === 'approved');
 
       return {
@@ -432,6 +350,9 @@ exports.getAdminOwnersPayments = async (req, res, next) => {
         unitDebts:            summarizeUnitDebts(ownerUnits),
         extraordinaryOwed,
         totalOwed,
+        plannedDebtAmount:    Number(planSummary.plannedDebtAmount || 0),
+        hasActivePlan:        Boolean(planSummary.activePlanSummary),
+        activePlanSummary:    planSummary.activePlanSummary || null,
         paidPeriods,
         unpaidPeriods,
         pendingPayments,
@@ -605,12 +526,12 @@ exports.getAvailableItems = async (req, res, next) => {
       membership = ctx.membership;
     }
 
-    const { periods, extraordinary } = await buildAvailablePaymentItems({
+    const availableItems = await buildAvailablePaymentItems({
       organizationId: req.orgId,
       owner,
       membership,
     });
-    res.json({ success: true, data: { periods, extraordinary } });
+    res.json({ success: true, data: availableItems });
   } catch (err) {
     next(err);
   }
@@ -1336,3 +1257,4 @@ exports.sendReminders = async (req, res, next) => {
     next(err);
   }
 };
+
