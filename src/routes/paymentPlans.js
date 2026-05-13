@@ -25,6 +25,7 @@ router.post('/admin',         restrictTo('admin'), ctrl.createPlan);
 router.post('/admin/:id/approve', restrictTo('admin'), ctrl.approvePlan);
 router.post('/admin/:id/reject',  restrictTo('admin'), ctrl.rejectPlan);
 router.patch('/admin/:id/cancel', restrictTo('admin'), ctrl.cancelPlan);
+router.delete('/admin/:id',       restrictTo('admin'), ctrl.deletePlan);
 
 // ── Installments ───────────────────────────────────────────────
 router.post('/admin/installments/:id/register-payment', restrictTo('admin'), ctrl.registerInstallmentPayment);

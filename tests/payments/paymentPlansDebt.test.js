@@ -38,6 +38,7 @@ const { createAdminWithToken, createOwnerWithToken } = require('../helpers/facto
 const Organization = require('../../src/models/Organization');
 const OrganizationMember = require('../../src/models/OrganizationMember');
 const Payment = require('../../src/models/Payment');
+const PaymentPlan = require('../../src/models/PaymentPlan');
 const PaymentPlanInstallment = require('../../src/models/PaymentPlanInstallment');
 const Unit = require('../../src/models/Unit');
 const User = require('../../src/models/User');
@@ -161,5 +162,64 @@ describe('planes de pago y deuda financiada', () => {
     const payment = await Payment.findById(payRes.body.data.payment._id);
     expect(payment.type).toBe('installment');
     expect(payment.installmentId.toString()).toBe(installment._id.toString());
+  });
+
+  test('admin elimina un plan sin cuotas pagadas y libera la deuda', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const { user } = await createOwnerInOrg(orgId, { balance: -1200 });
+    const planRes = await request(app)
+      .post('/api/payment-plans/admin')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        ownerId: user._id,
+        balanceDebt: 1200,
+        installmentsCount: 3,
+        startDate: '2026-06-01',
+      });
+
+    expect(planRes.status).toBe(201);
+
+    const deleteRes = await request(app)
+      .delete(`/api/payment-plans/admin/${planRes.body.data.plan._id}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(deleteRes.status).toBe(200);
+    const plan = await PaymentPlan.findById(planRes.body.data.plan._id);
+    expect(plan.isActive).toBe(false);
+
+    const ownersRes = await request(app)
+      .get('/api/payments/admin/owners?limit=10')
+      .set('Authorization', `Bearer ${token}`);
+    const owner = ownersRes.body.data.owners.find(item => item.id === user._id.toString());
+    expect(owner.totalOwed).toBe(1200);
+    expect(owner.plannedDebtAmount).toBe(0);
+  });
+
+  test('admin no puede eliminar un plan con cuotas pagadas', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const { user } = await createOwnerInOrg(orgId, { balance: -900 });
+    const planRes = await request(app)
+      .post('/api/payment-plans/admin')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        ownerId: user._id,
+        balanceDebt: 900,
+        installmentsCount: 2,
+        startDate: '2026-06-01',
+      });
+
+    const installment = await PaymentPlanInstallment.findOne({ paymentPlan: planRes.body.data.plan._id });
+    await request(app)
+      .post(`/api/payment-plans/admin/installments/${installment._id}/register-payment`)
+      .set('Authorization', `Bearer ${token}`);
+
+    const deleteRes = await request(app)
+      .delete(`/api/payment-plans/admin/${planRes.body.data.plan._id}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(deleteRes.status).toBe(400);
+    expect(deleteRes.body.message).toContain('cuotas pagadas');
+    const plan = await PaymentPlan.findById(planRes.body.data.plan._id);
+    expect(plan.isActive).toBe(true);
   });
 });

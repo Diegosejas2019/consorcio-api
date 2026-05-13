@@ -555,6 +555,47 @@ exports.cancelPlan = async (req, res, next) => {
   }
 };
 
+// ── DELETE /api/admin/payment-plans/:id (admin) ─────────────────────────
+exports.deletePlan = async (req, res, next) => {
+  try {
+    const plan = await PaymentPlan.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!plan || !plan.isActive) {
+      return res.status(404).json({ success: false, message: 'Plan no encontrado.' });
+    }
+
+    const hasPaidInstallments = await PaymentPlanInstallment.exists({
+      paymentPlan: plan._id,
+      $or: [{ status: 'paid' }, { paymentId: { $exists: true, $ne: null } }],
+    });
+    if (hasPaidInstallments) {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede eliminar un plan con cuotas pagadas. Podés cancelarlo para conservar el historial.',
+      });
+    }
+
+    plan.isActive = false;
+    plan.deletedAt = new Date();
+    plan.cancelledBy = req.user._id;
+    plan.cancelledAt = new Date();
+    if (!['rejected', 'cancelled', 'completed'].includes(plan.status)) {
+      plan.status = 'cancelled';
+    }
+    await plan.save();
+
+    await PaymentPlanInstallment.updateMany(
+      { paymentPlan: plan._id, status: { $in: ['pending', 'overdue'] } },
+      { $set: { status: 'cancelled' } }
+    );
+    await releaseDebtItemsFromPlan(plan);
+
+    logger.info(`[paymentPlan] Plan ${plan._id} eliminado por ${req.user._id}`);
+    res.json({ success: true, message: 'Plan eliminado correctamente.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── POST /api/admin/payment-plan-installments/:id/register-payment (admin) ─
 exports.registerInstallmentPayment = async (req, res, next) => {
   try {
