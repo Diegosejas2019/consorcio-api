@@ -4,6 +4,7 @@ const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Unit               = require('../models/Unit');
 const Organization       = require('../models/Organization');
+const PaymentPlan        = require('../models/PaymentPlan');
 const { calcUnitFee } = require('./unitController');
 const { cloudinary }  = require('../config/cloudinary');
 const emailService    = require('../services/emailService');
@@ -162,12 +163,21 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
       .filter(Boolean))
   );
 
+  // Períodos bloqueados por un plan de pagos activo del propietario
+  const activePlans = await PaymentPlan.find({
+    organization: organizationId,
+    owner:        owner._id,
+    status:       { $in: ['approved', 'active'] },
+    isActive:     true,
+  }).select('includedPeriods').lean();
+  const blockedMonths = new Set(activePlans.flatMap(p => p.includedPeriods.map(ip => ip.month)));
+
   const currentPeriod = currentYYYYMM();
   const periods = [...new Set(ownerUnits.flatMap(unit => {
     const paidMonths = getPaidMonthsForUnit(unit, activePayments, ['pending', 'approved']);
     const startBilling = unit.startBillingPeriod || membership?.startBillingPeriod || owner.startBillingPeriod;
     return (org?.paymentPeriods || [])
-      .filter(p => !paidMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
+      .filter(p => !paidMonths.has(p) && !blockedMonths.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
   }))].sort();
 
   const extras = await Expense.find({

@@ -3,6 +3,8 @@ const Organization       = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
 const Payment            = require('../models/Payment');
 const Unit               = require('../models/Unit');
+const PaymentPlan             = require('../models/PaymentPlan');
+const PaymentPlanInstallment  = require('../models/PaymentPlanInstallment');
 const firebase     = require('./firebaseService');
 const emailService = require('./emailService');
 const logger       = require('../config/logger');
@@ -94,11 +96,61 @@ async function sendDueDateReminders(org) {
   return { sent: tokens.length, noToken: unpaidMembers.length - tokens.length, emailSent, emailFailed };
 }
 
+// ── Lógica de cuotas vencidas y planes ───────────────────────
+async function checkPaymentPlanInstallments() {
+  try {
+    const now = new Date();
+
+    // Marcar cuotas pending con dueDate pasada como overdue
+    const overdueResult = await PaymentPlanInstallment.updateMany(
+      { status: 'pending', dueDate: { $lt: now } },
+      { $set: { status: 'overdue' } }
+    );
+    if (overdueResult.modifiedCount > 0) {
+      logger.info(`[Scheduler] ${overdueResult.modifiedCount} cuota(s) marcadas como overdue`);
+    }
+
+    // Detectar planes active con todas las cuotas pagas/canceladas → completed
+    const activePlans = await PaymentPlan.find({ status: 'active' }).select('_id').lean();
+    for (const plan of activePlans) {
+      const installments = await PaymentPlanInstallment.find({ paymentPlan: plan._id }).lean();
+      if (installments.length === 0) continue;
+      const allDone = installments.every(i => i.status === 'paid' || i.status === 'cancelled');
+      const anyPaid = installments.some(i => i.status === 'paid');
+      if (allDone && anyPaid) {
+        await PaymentPlan.updateOne({ _id: plan._id }, { $set: { status: 'completed' } });
+        logger.info(`[Scheduler] Plan ${plan._id} marcado como completed`);
+      }
+    }
+
+    // Detectar planes active con cuotas overdue por más de 30 días → defaulted
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const defaultedInstallments = await PaymentPlanInstallment.find({
+      status:  'overdue',
+      dueDate: { $lt: thirtyDaysAgo },
+    }).distinct('paymentPlan');
+
+    if (defaultedInstallments.length > 0) {
+      const result = await PaymentPlan.updateMany(
+        { _id: { $in: defaultedInstallments }, status: 'active' },
+        { $set: { status: 'defaulted' } }
+      );
+      if (result.modifiedCount > 0) {
+        logger.info(`[Scheduler] ${result.modifiedCount} plan(es) marcados como defaulted`);
+      }
+    }
+  } catch (err) {
+    logger.error(`[Scheduler] Error procesando cuotas: ${err.message}`, { stack: err.stack });
+  }
+}
+
 // ── Cron: diario a las 09:00 UTC ─────────────────────────────
 function initScheduler() {
   cron.schedule('0 9 * * *', async () => {
     logger.info('[Scheduler] Ejecutando verificación de vencimientos...');
     try {
+      await checkPaymentPlanInstallments();
+
       const today = new Date().getDate(); // día del mes actual (1-31)
       const orgs  = await Organization.find({ dueDayOfMonth: today });
       logger.info(`[Scheduler] ${orgs.length} org(s) con vencimiento hoy (día ${today})`);
@@ -112,4 +164,4 @@ function initScheduler() {
   logger.info('[Scheduler] Cron inicializado — se ejecuta diariamente a las 09:00 UTC');
 }
 
-module.exports = { initScheduler, sendDueDateReminders, resolveReminderPeriod };
+module.exports = { initScheduler, sendDueDateReminders, resolveReminderPeriod, checkPaymentPlanInstallments };

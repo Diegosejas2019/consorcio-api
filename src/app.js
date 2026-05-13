@@ -108,6 +108,7 @@ app.use('/api/support-tickets', require('./routes/supportTickets'));
 app.use('/api/employees',       require('./routes/employees'));
 app.use('/api/salaries',        require('./routes/salaries'));
 app.use('/api/salary-payments', require('./routes/salaryPaymentRoutes'));
+app.use('/api/payment-plans',  require('./routes/paymentPlans'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
