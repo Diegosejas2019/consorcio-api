@@ -1,6 +1,7 @@
-const router = require('express').Router();
-const multer = require('multer');
-const ctrl   = require('../controllers/ownerController');
+const router    = require('express').Router();
+const multer    = require('multer');
+const ctrl      = require('../controllers/ownerController');
+const debtCtrl  = require('../controllers/ownerDebtItemController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 
 const excelUpload = multer({
@@ -28,6 +29,8 @@ router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), ctrl.updateOwner);
 router.delete('/:id',    restrictTo('admin'), ctrl.deleteOwner);
-router.post('/:id/notify', restrictTo('admin'), ctrl.notifyOwner);
+router.post('/:id/notify',      restrictTo('admin'), ctrl.notifyOwner);
+router.post('/:id/debt-items',  restrictTo('admin'), debtCtrl.createDebtItem);
+router.get('/:id/debt-items',   restrictTo('admin'), debtCtrl.getDebtItemsByOwner);
 
 module.exports = router;
