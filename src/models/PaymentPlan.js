@@ -50,6 +50,15 @@ const paymentPlanSchema = new mongoose.Schema(
     frequency:         { type: String, enum: ['monthly'], default: 'monthly' },
 
     includedPeriods: { type: [includedPeriodSchema], default: [] },
+    extraordinaryItems: {
+      type: [{
+        expenseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Expense' },
+        title:     { type: String },
+        amount:    { type: Number, default: 0 },
+      }],
+      default: [],
+      _id: false,
+    },
 
     requestComment: { type: String, maxlength: 500 },
     adminComment:   { type: String, maxlength: 500 },

@@ -362,6 +362,7 @@ exports.createPlan = async (req, res, next) => {
     const {
       ownerId,
       includedPeriods,
+      extraordinaryItems,
       originalDebtAmount,
       currency,
       installmentsCount,
@@ -442,6 +443,9 @@ exports.createPlan = async (req, res, next) => {
         month:          p.month,
         originalAmount: Number(p.originalAmount || 0),
       })),
+      extraordinaryItems: Array.isArray(extraordinaryItems)
+        ? extraordinaryItems.map(e => ({ expenseId: e.expenseId || e.id, title: e.title, amount: Number(e.amount || 0) }))
+        : [],
       requestComment: requestComment?.trim() || undefined,
       adminComment:   adminComment?.trim() || undefined,
       createdBy:      req.user._id,
