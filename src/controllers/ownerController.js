@@ -1,7 +1,8 @@
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Organization = require('../models/Organization');
-const Payment = require('../models/Payment');
+const Payment     = require('../models/Payment');
+const PaymentPlan = require('../models/PaymentPlan');
 const Unit    = require('../models/Unit');
 const Notice  = require('../models/Notice');
 const logger  = require('../config/logger');
@@ -229,7 +230,7 @@ exports.getAllOwners = async (req, res, next) => {
     const paged = memberships.slice((page - 1) * limit, page * limit);
     const ownerIds = paged.map(m => m.user._id);
 
-    const [lastPayments, approvedMonthlyPayments] = await Promise.all([
+    const [lastPayments, approvedMonthlyPayments, activePlans] = await Promise.all([
       Payment.aggregate([
         { $match: { owner: { $in: ownerIds }, status: 'approved' } },
         { $sort: { createdAt: -1 } },
@@ -248,6 +249,12 @@ exports.getAllOwners = async (req, res, next) => {
         status: 'approved',
         month: { $exists: true, $ne: null },
       }).select('owner month units status').lean(),
+      PaymentPlan.find({
+        organization: req.orgId,
+        owner: { $in: ownerIds },
+        status: { $in: ['requested', 'approved', 'active'] },
+        isActive: true,
+      }).select('owner').lean(),
     ]);
 
     const lastPaymentByOwner = lastPayments.reduce((map, p) => {
@@ -260,6 +267,8 @@ exports.getAllOwners = async (req, res, next) => {
       (map[key] ||= []).push(p);
       return map;
     }, {});
+
+    const activePlanOwnerSet = new Set(activePlans.map(p => p.owner.toString()));
 
     let owners = paged.map(m => {
       const ownerId  = m.user._id.toString();
@@ -280,6 +289,7 @@ exports.getAllOwners = async (req, res, next) => {
         units:              unitsByOwner[ownerId] ?? [],
         unitDebts:          summarizeUnitDebts(ownerUnits),
         totalOwed,
+        hasActivePlan:      activePlanOwnerSet.has(ownerId),
       };
     });
 
