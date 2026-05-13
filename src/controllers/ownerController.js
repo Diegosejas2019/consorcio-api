@@ -1,3 +1,4 @@
+const crypto             = require('crypto');
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Organization = require('../models/Organization');
@@ -7,7 +8,7 @@ const Unit    = require('../models/Unit');
 const Notice  = require('../models/Notice');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
-const { sendWelcome } = require('../services/emailService');
+const { sendWelcome, sendEmail } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const { orgToConfigView } = require('./configController');
 const { buildAvailablePaymentItems } = require('./paymentController');
@@ -25,6 +26,7 @@ const {
   summarizeUnitDebts,
 } = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function clampLimit(value, fallback, max) {
   const parsed = Number(value);
@@ -629,7 +631,7 @@ exports.createOwner = async (req, res, next) => {
 exports.updateOwner = async (req, res, next) => {
   try {
     const memberFields = ['isDebtor', 'percentage', 'startBillingPeriod'];
-    const userFields   = ['name', 'phone', 'phones', 'isActive', 'email'];
+    const userFields   = ['name', 'phone', 'phones', 'isActive'];
 
     const userUpdate   = {};
     const memberUpdate = {};
@@ -719,6 +721,111 @@ exports.updateOwner = async (req, res, next) => {
 };
 
 // ── DELETE /api/owners/:id — desactivar (soft delete) ─────────
+exports.requestEmailChange = async (req, res, next) => {
+  try {
+    const newEmail = String(req.body.newEmail || '').toLowerCase().trim();
+    if (!EMAIL_RE.test(newEmail)) {
+      return res.status(400).json({ success: false, message: 'El email ingresado no es válido.' });
+    }
+    if (newEmail === req.user.email) {
+      return res.status(400).json({ success: false, message: 'El nuevo email debe ser distinto al actual.' });
+    }
+
+    const conflict = await User.findOne({
+      _id: { $ne: req.user._id },
+      email: newEmail,
+      isActive: true,
+    }).select('_id');
+    if (conflict) {
+      return res.status(400).json({ success: false, message: 'El email ya está en uso por otro usuario.' });
+    }
+
+    const user = await User.findById(req.user._id).select('+emailChangeToken');
+    user.pendingEmail = newEmail;
+    const token = user.createEmailChangeToken();
+    await user.save({ validateBeforeSave: false });
+
+    if (process.env.BREVO_API_KEY) {
+      const confirmUrl = `${process.env.APP_BASE_URL || ''}/confirm-email-change?token=${token}`;
+      try {
+        await sendEmail({
+          to: newEmail,
+          subject: 'Confirmá tu nuevo email | GestionAr',
+          html: `
+            <p>Hola ${user.name},</p>
+            <p>Recibimos una solicitud para cambiar el email de acceso de tu cuenta en GestionAr.</p>
+            <p>Para confirmar el cambio, abrí este enlace:</p>
+            <p><a href="${confirmUrl}">${confirmUrl}</a></p>
+            <p>Si no solicitaste este cambio, podés ignorar este mensaje.</p>
+          `,
+        });
+      } catch (emailErr) {
+        user.pendingEmail = undefined;
+        user.emailChangeToken = undefined;
+        user.emailChangeTokenExpiresAt = undefined;
+        await user.save({ validateBeforeSave: false });
+        logger.error(`[EmailChange] Error enviando confirmación a ${newEmail}: ${emailErr.message}`);
+        return res.status(502).json({
+          success: false,
+          message: 'No pudimos enviar el email de confirmación. Intentá nuevamente más tarde.',
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: process.env.BREVO_API_KEY
+        ? 'Te enviamos un email para confirmar el cambio.'
+        : 'Solicitud registrada. El envío de email de confirmación no está configurado.',
+      ...(process.env.NODE_ENV === 'test' ? { data: { token } } : {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.confirmEmailChange = async (req, res, next) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'El token de confirmación es obligatorio.' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      _id: req.user._id,
+      emailChangeToken: hashedToken,
+      emailChangeTokenExpiresAt: { $gt: Date.now() },
+    }).select('+emailChangeToken');
+
+    if (!user || !user.pendingEmail) {
+      return res.status(400).json({ success: false, message: 'El enlace de confirmación es inválido o ya expiró.' });
+    }
+
+    const conflict = await User.findOne({
+      _id: { $ne: user._id },
+      email: user.pendingEmail,
+      isActive: true,
+    }).select('_id');
+    if (conflict) {
+      return res.status(400).json({ success: false, message: 'El email ya está en uso por otro usuario.' });
+    }
+
+    const oldEmail = user.email;
+    user.email = user.pendingEmail;
+    user.pendingEmail = undefined;
+    user.emailChangeToken = undefined;
+    user.emailChangeTokenExpiresAt = undefined;
+    user.emailVerifiedAt = new Date();
+    await user.save({ validateBeforeSave: false });
+
+    logger.info(`[EmailChange] Email actualizado para user=${user._id}: ${oldEmail} -> ${user.email}`);
+    res.json({ success: true, message: 'Email actualizado correctamente.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.deleteOwner = async (req, res, next) => {
   try {
     const membership = await OrganizationMember.findOneAndUpdate(

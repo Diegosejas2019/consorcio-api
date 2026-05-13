@@ -72,7 +72,7 @@ exports.protect = async (req, res, next) => {
     }
 
     // 7. Actualizar lastLogin
-    await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
+    await User.findByIdAndUpdate(user._id, { lastLogin: new Date(), lastLoginAt: new Date() });
 
     req.user = user;
     req.user.role = normalizeRole(req.user.role);
@@ -222,6 +222,7 @@ exports.sendTokenResponse = (user, statusCode, res) => {
   res.status(statusCode).json({
     success: true,
     token,
+    mustChangePassword: user.mustChangePassword || false,
     data: { user },
   });
 };

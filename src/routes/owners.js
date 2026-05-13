@@ -25,6 +25,8 @@ router.post('/',     restrictTo('admin'), ctrl.createOwner);
 router.get('/bulk/template', restrictTo('admin'), ctrl.downloadBulkTemplate);
 router.post('/bulk',          restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
+router.post('/me/request-email-change', restrictTo('owner'), requireOrg, ctrl.requestEmailChange);
+router.post('/me/confirm-email-change', restrictTo('owner'), requireOrg, ctrl.confirmEmailChange);
 router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
 router.get('/:id/available-items', restrictTo('admin'), ctrl.getOwnerAvailableItems);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)

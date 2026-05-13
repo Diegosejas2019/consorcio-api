@@ -7,6 +7,9 @@ const { sendPasswordReset } = require('../services/emailService');
 const { normalizeRole, isSuperAdminRole } = require('../utils/roles');
 const logger = require('../config/logger');
 
+const markLogin = (userId, extra = {}) =>
+  User.findByIdAndUpdate(userId, { ...extra, lastLogin: new Date(), lastLoginAt: new Date() });
+
 
 // ── POST /api/auth/login ──────────────────────────────────────
 exports.login = async (req, res, next) => {
@@ -33,9 +36,9 @@ exports.login = async (req, res, next) => {
 
     // Guardar FCM token si se proveyó (para push notifications)
     if (fcmToken && fcmToken !== user.fcmToken) {
-      await User.findByIdAndUpdate(user._id, { fcmToken, lastLogin: new Date() });
+      await markLogin(user._id, { fcmToken });
     } else {
-      await User.findByIdAndUpdate(user._id, { lastLogin: new Date() });
+      await markLogin(user._id);
     }
 
     // Buscar membresías activas del usuario
@@ -89,6 +92,7 @@ exports.login = async (req, res, next) => {
       success:                       true,
       requiresOrganizationSelection: true,
       selectionToken,
+      mustChangePassword: user.mustChangePassword || false,
       organizations: memberships.map(m => ({
         membershipId:     m._id,
         organizationId:   m.organization._id,
@@ -226,6 +230,7 @@ exports.resetPassword = async (req, res, next) => {
 
     // Actualizar contraseña y limpiar campos de reset
     user.password             = newPassword;
+    user.mustChangePassword   = false;
     user.passwordResetToken   = undefined;
     user.passwordResetExpires = undefined;
     await user.save();
@@ -315,6 +320,7 @@ exports.changeTempPassword = async (req, res, next) => {
 
     user.password = newPassword;
     user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
     await user.save();
 
     // Emitir nuevo token para que el JWT no quede invalidado por passwordChangedAt
