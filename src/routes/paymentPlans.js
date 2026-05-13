@@ -2,6 +2,7 @@ const router   = require('express').Router();
 const mongoose = require('mongoose');
 const ctrl     = require('../controllers/paymentPlanController');
 const { protect, restrictTo } = require('../middleware/auth');
+const { upload } = require('../config/cloudinary');
 
 router.use(protect);
 
@@ -15,6 +16,7 @@ router.param('id', (req, res, next, id) => {
 // ── Owner ──────────────────────────────────────────────────────
 router.post('/request', ctrl.requestPlan);
 router.get('/my',       ctrl.getMyPlans);
+router.post('/installments/:id/pay', upload.single('receipt'), ctrl.submitInstallmentPayment);
 
 // ── Admin ──────────────────────────────────────────────────────
 router.get('/admin',          restrictTo('admin'), ctrl.listPlans);

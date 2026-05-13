@@ -580,3 +580,62 @@ exports.registerInstallmentPayment = async (req, res, next) => {
     next(err);
   }
 };
+
+// ── POST /api/payment-plans/installments/:id/pay (owner) ───────
+exports.submitInstallmentPayment = async (req, res, next) => {
+  try {
+    const installment = await PaymentPlanInstallment.findOne({
+      _id:          req.params.id,
+      organization: req.orgId,
+      owner:        req.user._id,
+    });
+    if (!installment) return res.status(404).json({ success: false, message: 'Cuota no encontrada.' });
+    if (installment.status === 'paid') {
+      return res.status(400).json({ success: false, message: 'Esta cuota ya fue pagada.' });
+    }
+    if (installment.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: 'Esta cuota está cancelada.' });
+    }
+
+    const existingPending = await Payment.findOne({
+      installmentId: installment._id,
+      status:        'pending',
+    });
+    if (existingPending) {
+      return res.status(400).json({ success: false, message: 'Ya existe un comprobante pendiente de revisión para esta cuota.' });
+    }
+
+    const plan = await PaymentPlan.findOne({ _id: installment.paymentPlan, organization: req.orgId });
+    if (!plan) return res.status(404).json({ success: false, message: 'Plan no encontrado.' });
+
+    const receiptData = req.file ? {
+      url:      req.file.path,
+      publicId: req.file.filename,
+      filename: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size:     req.file.size,
+    } : undefined;
+
+    const payment = await Payment.create({
+      organization:  req.orgId,
+      owner:         req.user._id,
+      amount:        installment.amount,
+      status:        'pending',
+      paymentMethod: 'manual',
+      type:          'installment',
+      installmentId: installment._id,
+      ownerNote:     `Cuota ${installment.installmentNumber} de ${plan.installmentsCount} — Plan de pagos`,
+      createdBy:     req.user._id,
+      receipt:       receiptData,
+    });
+
+    logger.info(`[paymentPlan] Owner ${req.user._id} subió comprobante para cuota ${installment._id} — pago ${payment._id}`);
+    res.status(201).json({
+      success: true,
+      message: 'Comprobante enviado. Quedará pendiente de revisión por el administrador.',
+      data: { payment },
+    });
+  } catch (err) {
+    next(err);
+  }
+};

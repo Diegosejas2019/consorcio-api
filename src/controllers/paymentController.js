@@ -1,10 +1,11 @@
-const Payment            = require('../models/Payment');
-const Expense            = require('../models/Expense');
-const User               = require('../models/User');
-const OrganizationMember = require('../models/OrganizationMember');
-const Unit               = require('../models/Unit');
-const Organization       = require('../models/Organization');
-const PaymentPlan        = require('../models/PaymentPlan');
+const Payment                 = require('../models/Payment');
+const Expense                 = require('../models/Expense');
+const User                    = require('../models/User');
+const OrganizationMember      = require('../models/OrganizationMember');
+const Unit                    = require('../models/Unit');
+const Organization             = require('../models/Organization');
+const PaymentPlan             = require('../models/PaymentPlan');
+const PaymentPlanInstallment  = require('../models/PaymentPlanInstallment');
 const { calcUnitFee } = require('./unitController');
 const { cloudinary }  = require('../config/cloudinary');
 const emailService    = require('../services/emailService');
@@ -975,6 +976,29 @@ exports.approvePayment = async (req, res, next) => {
     await payment.save();
 
     await applyApprovedPaymentEffects(payment, req.user._id, { notify: false });
+
+    // Si es un pago de cuota de plan, marcar la cuota como pagada
+    if (payment.installmentId) {
+      const installment = await PaymentPlanInstallment.findById(payment.installmentId);
+      if (installment && installment.status !== 'paid') {
+        installment.status    = 'paid';
+        installment.paidAt    = new Date();
+        installment.paymentId = payment._id;
+        await installment.save();
+
+        const plan = await PaymentPlan.findById(installment.paymentPlan);
+        if (plan) {
+          const allInstallments = await PaymentPlanInstallment.find({ paymentPlan: plan._id });
+          const allDone = allInstallments.every(i => i.status === 'paid' || i.status === 'cancelled');
+          const anyPaid = allInstallments.some(i => i.status === 'paid');
+          if (allDone && anyPaid) {
+            plan.status = 'completed';
+            await plan.save();
+            logger.info(`[paymentPlan] Plan ${plan._id} completado al aprobar pago ${payment._id}`);
+          }
+        }
+      }
+    }
 
     // Generar recibo del sistema de forma asíncrona (no bloquea la aprobación)
     if (!payment.systemReceipt?.url) {

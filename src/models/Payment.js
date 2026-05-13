@@ -66,7 +66,14 @@ const paymentSchema = new mongoose.Schema(
     // ── Tipo de pago ──────────────────────────────────────────
     type: {
       type: String,
-      enum: ['monthly', 'extraordinary', 'balance'],
+      enum: ['monthly', 'extraordinary', 'balance', 'installment'],
+    },
+
+    // ── Plan de pagos (solo type=installment) ─────────────────
+    installmentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PaymentPlanInstallment',
+      index: true,
     },
 
     // ── MercadoPago ───────────────────────────────────────────
@@ -137,7 +144,11 @@ paymentSchema.index({ organization: 1, month: 1, status: 1 });
 
 // ── Virtual: mes formateado ──────────────────────────────────
 paymentSchema.virtual('monthFormatted').get(function () {
-  if (!this.month) return this.type === 'balance' ? 'Saldo anterior' : 'Extraordinario';
+  if (!this.month) {
+    if (this.type === 'balance') return 'Saldo anterior';
+    if (this.type === 'installment') return 'Cuota plan de pagos';
+    return 'Extraordinario';
+  }
   const months = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
     'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
