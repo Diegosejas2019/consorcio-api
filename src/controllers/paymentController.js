@@ -169,8 +169,9 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
     owner:        owner._id,
     status:       { $in: ['approved', 'active'] },
     isActive:     true,
-  }).select('includedPeriods').lean();
-  const blockedMonths = new Set(activePlans.flatMap(p => p.includedPeriods.map(ip => ip.month)));
+  }).select('includedPeriods extraordinaryItems balanceDebt').lean();
+  const blockedMonths     = new Set(activePlans.flatMap(p => p.includedPeriods.map(ip => ip.month)));
+  const planExtraIds      = new Set(activePlans.flatMap(p => (p.extraordinaryItems || []).map(e => e.expenseId?.toString()).filter(Boolean)));
 
   const currentPeriod = currentYYYYMM();
   const periods = [...new Set(ownerUnits.flatMap(unit => {
@@ -188,7 +189,7 @@ const buildAvailablePaymentItems = async ({ organizationId, owner, membership })
   }).select('_id description amount date extraordinaryBillingMode unitAmount appliesToAllOwners targetUnits').sort({ date: -1, createdAt: -1 }).lean();
 
   const extraordinary = extras
-    .filter(e => !paidExtraIds.has(e._id.toString()))
+    .filter(e => !paidExtraIds.has(e._id.toString()) && !planExtraIds.has(e._id.toString()))
     .map(e => {
       const { amountForOwner } = calculateExtraordinaryAmountForOwner(e, ownerUnits, allOrgUnits);
       // Omitir si el owner no tiene unidades aplicables (solo en modos que requieren unidades)
