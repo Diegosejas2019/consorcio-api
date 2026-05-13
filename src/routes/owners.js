@@ -26,6 +26,7 @@ router.get('/bulk/template', restrictTo('admin'), ctrl.downloadBulkTemplate);
 router.post('/bulk',          restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
 router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
+router.get('/:id/available-items', restrictTo('admin'), ctrl.getOwnerAvailableItems);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), ctrl.updateOwner);
 router.delete('/:id',    restrictTo('admin'), ctrl.deleteOwner);

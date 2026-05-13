@@ -421,6 +421,51 @@ exports.getOwner = async (req, res, next) => {
   }
 };
 
+// ── GET /api/owners/:id/available-items — conceptos vencidos (admin) ──
+exports.getOwnerAvailableItems = async (req, res, next) => {
+  try {
+    const membership = await OrganizationMember.findOne({
+      user:         req.params.id,
+      organization: req.orgId,
+      role:         'owner',
+      isActive:     true,
+    });
+    if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
+
+    const [user, org, ownerUnits] = await Promise.all([
+      User.findById(req.params.id).select('name email unit unitId startBillingPeriod'),
+      Organization.findById(req.orgId).select('monthlyFee'),
+      Unit.find({ owner: req.params.id, organization: req.orgId, active: true }).lean(),
+    ]);
+    if (!user) return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
+
+    const { periods, extraordinary } = await buildAvailablePaymentItems({
+      organizationId: req.orgId,
+      owner:          user,
+      membership,
+    });
+
+    const monthlyFee = org?.monthlyFee ?? 0;
+    const periodFee  = ownerUnits.length > 0
+      ? ownerUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+      : monthlyFee;
+
+    const balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+
+    res.json({
+      success: true,
+      data: {
+        periods,
+        periodFee,
+        extraordinary,
+        balanceDebt: balanceOwed > 0 ? balanceOwed : 0,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── POST /api/owners — crear propietario (admin) ──────────────
 exports.createOwner = async (req, res, next) => {
   try {
