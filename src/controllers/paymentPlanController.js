@@ -363,6 +363,7 @@ exports.createPlan = async (req, res, next) => {
       ownerId,
       includedPeriods,
       extraordinaryItems,
+      balanceDebt,
       originalDebtAmount,
       currency,
       installmentsCount,
@@ -443,6 +444,7 @@ exports.createPlan = async (req, res, next) => {
         month:          p.month,
         originalAmount: Number(p.originalAmount || 0),
       })),
+      balanceDebt: Number(balanceDebt || 0),
       extraordinaryItems: Array.isArray(extraordinaryItems)
         ? extraordinaryItems.map(e => ({ expenseId: e.expenseId || e.id, title: e.title, amount: Number(e.amount || 0) }))
         : [],

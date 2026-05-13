@@ -50,6 +50,7 @@ const paymentPlanSchema = new mongoose.Schema(
     frequency:         { type: String, enum: ['monthly'], default: 'monthly' },
 
     includedPeriods: { type: [includedPeriodSchema], default: [] },
+    balanceDebt: { type: Number, default: 0 },
     extraordinaryItems: {
       type: [{
         expenseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Expense' },
