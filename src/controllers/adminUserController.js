@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const User = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
+const Unit = require('../models/Unit');
 const { sendAdminWelcome } = require('../services/emailService');
 const logger = require('../config/logger');
 const {
@@ -10,6 +11,8 @@ const {
   getEffectivePermissions,
   normalizeAdminRole,
 } = require('../utils/adminPermissions');
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function tempPassword() {
   return `Temp${crypto.randomBytes(4).toString('hex')}!`;
@@ -48,6 +51,36 @@ function serializeMembership(membership) {
     updatedAt: membership.updatedAt,
     disabledAt: membership.disabledAt || null,
   };
+}
+
+async function upsertAdminMembership({ user, orgId, adminRole, actorId }) {
+  const existing = await OrganizationMember.findOne({
+    user: user._id,
+    organization: orgId,
+    role: 'admin',
+  });
+  if (existing?.isActive) {
+    const err = new Error('Este usuario ya es administrador de la organización.');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const membership = existing || new OrganizationMember({
+    user: user._id,
+    organization: orgId,
+    role: 'admin',
+    createdBy: actorId,
+  });
+  membership.adminRole = adminRole;
+  membership.isActive = true;
+  membership.deactivatedByOrganization = false;
+  membership.disabledAt = undefined;
+  membership.disabledBy = undefined;
+  membership.reactivatedAt = existing ? new Date() : undefined;
+  membership.updatedBy = actorId;
+  await membership.save();
+  await membership.populate('user', 'name email isActive lastLoginAt createdAt');
+  return { membership, reactivated: Boolean(existing) };
 }
 
 exports.getMyPermissions = async (req, res) => {
@@ -93,14 +126,121 @@ exports.listAdmins = async (req, res, next) => {
   }
 };
 
+exports.searchOwnersForAdminInvite = async (req, res, next) => {
+  try {
+    const query = String(req.query.query || '').trim();
+    const re = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
+
+    const memberships = await OrganizationMember.find({
+      organization: req.orgId,
+      role: 'owner',
+      isActive: true,
+    })
+      .populate('user', 'name email unit isActive')
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+
+    const activeOwners = memberships.filter(m => m.user && m.user.isActive !== false);
+    const ownerIds = activeOwners.map(m => m.user._id);
+    const [units, adminMemberships] = await Promise.all([
+      Unit.find({ organization: req.orgId, owner: { $in: ownerIds }, active: true })
+        .select('owner name')
+        .sort({ name: 1 })
+        .lean(),
+      OrganizationMember.find({
+        organization: req.orgId,
+        user: { $in: ownerIds },
+        role: 'admin',
+        isActive: true,
+      }).select('user').lean(),
+    ]);
+
+    const unitsByOwner = {};
+    units.forEach(unit => {
+      const ownerId = unit.owner.toString();
+      (unitsByOwner[ownerId] ||= []).push(unit.name);
+    });
+    const adminIds = new Set(adminMemberships.map(m => m.user.toString()));
+
+    const owners = activeOwners
+      .map(membership => {
+        const user = membership.user;
+        const ownerId = user._id.toString();
+        const unitNames = unitsByOwner[ownerId] || (user.unit ? [user.unit] : []);
+        return {
+          ownerId: user._id,
+          membershipId: membership._id,
+          name: user.name,
+          email: user.email,
+          unitNames,
+          primaryUnit: unitNames[0] || user.unit || '',
+          isAdminActive: adminIds.has(ownerId),
+        };
+      })
+      .filter(owner => !re || re.test(owner.name || '') || re.test(owner.email || '') || owner.unitNames.some(unit => re.test(unit || '')))
+      .slice(0, 30);
+
+    res.json({ success: true, data: { owners } });
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.inviteAdmin = async (req, res, next) => {
   try {
+    const mode = req.body.mode || 'new_user';
     const name = String(req.body.name || '').trim();
     const email = String(req.body.email || '').trim().toLowerCase();
     const adminRole = req.body.role || 'read_only';
 
+    if (!['new_user', 'existing_owner'].includes(mode)) {
+      return res.status(400).json({ success: false, message: 'El tipo de invitacion no es valido.' });
+    }
+
+    if (mode === 'existing_owner') {
+      if (!ADMIN_ROLES.includes(adminRole)) {
+        return res.status(400).json({ success: false, message: 'El rol seleccionado no es valido.' });
+      }
+      if (!req.body.ownerId) {
+        return res.status(400).json({ success: false, message: 'Selecciona un propietario.' });
+      }
+
+      const ownerMembership = await OrganizationMember.findOne({
+        user: req.body.ownerId,
+        organization: req.orgId,
+        role: 'owner',
+        isActive: true,
+      }).populate('user', 'name email isActive lastLoginAt createdAt');
+
+      if (!ownerMembership?.user || ownerMembership.user.isActive === false) {
+        return res.status(404).json({ success: false, message: 'El propietario seleccionado no pertenece a esta organización.' });
+      }
+
+      try {
+        const { membership, reactivated } = await upsertAdminMembership({
+          user: ownerMembership.user,
+          orgId: req.orgId,
+          adminRole,
+          actorId: req.user._id,
+        });
+        return res.status(reactivated ? 200 : 201).json({
+          success: true,
+          message: 'Administrador agregado correctamente.',
+          data: { admin: serializeMembership(membership) },
+        });
+      } catch (err) {
+        if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+        logger.error(`No se pudo asociar propietario como administrador: ${err.message}`);
+        return res.status(500).json({ success: false, message: 'No se pudo asociar el propietario como administrador.' });
+      }
+    }
+
     if (!name || !email) {
       return res.status(400).json({ success: false, message: 'Nombre y email son obligatorios.' });
+    }
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ success: false, message: 'Ingresa un email valido.' });
     }
     if (!ADMIN_ROLES.includes(adminRole)) {
       return res.status(400).json({ success: false, message: 'El rol seleccionado no es válido.' });

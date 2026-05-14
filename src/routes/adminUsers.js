@@ -6,6 +6,7 @@ const { requirePermission } = require('../middleware/permissions');
 router.use(protect, requireOrg, restrictTo('admin'));
 
 router.get('/permissions/me', ctrl.getMyPermissions);
+router.get('/owners/search', requirePermission('admins.create'), ctrl.searchOwnersForAdminInvite);
 router.get('/users', requirePermission('admins.read'), ctrl.listAdmins);
 router.post('/users/invite', requirePermission('admins.create'), ctrl.inviteAdmin);
 router.patch('/users/:userId/role', requirePermission('admins.update'), ctrl.updateAdminRole);

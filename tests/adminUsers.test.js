@@ -9,6 +9,8 @@ const { createAdminWithToken } = require('./helpers/factories');
 const { signToken } = require('../src/middleware/auth');
 const User = require('../src/models/User');
 const OrganizationMember = require('../src/models/OrganizationMember');
+const Organization = require('../src/models/Organization');
+const Unit = require('../src/models/Unit');
 const emailService = require('../src/services/emailService');
 
 beforeAll(() => dbHelper.connect());
@@ -146,6 +148,12 @@ describe('usuarios administradores y permisos internos', () => {
       .get('/api/payments')
       .set('Authorization', `Bearer ${communications.token}`);
     expect(payments.status).toBe(403);
+
+    const invite = await request(app)
+      .post('/api/admin/users/invite')
+      .set('Authorization', `Bearer ${readOnly.token}`)
+      .send({ mode: 'new_user', name: 'Sin Permiso', email: 'sin-permiso@test.com', role: 'read_only' });
+    expect(invite.status).toBe(403);
   });
 
   test('no permite dejar la organización sin administrador principal activo', async () => {
@@ -159,5 +167,150 @@ describe('usuarios administradores y permisos internos', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.message).toContain('administrador principal');
+  });
+
+  test('busca propietarios por nombre, email y unidad dentro de la organizacion', async () => {
+    const { user, token, orgId } = await createAdminWithToken();
+    await addAdminMembership(user._id, orgId, 'owner_admin');
+
+    const owner = await User.create({
+      name: 'Carla Propietaria',
+      email: 'carla@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: orgId,
+      isActive: true,
+    });
+    const membership = await OrganizationMember.create({
+      user: owner._id,
+      organization: orgId,
+      role: 'owner',
+      isActive: true,
+    });
+    await Unit.create({ organization: orgId, owner: owner._id, name: 'Lote Norte', active: true });
+
+    const otherOrg = await Organization.create({ name: 'Otra organizacion', slug: 'otra-organizacion', type: 'building' });
+    const otherOwner = await User.create({
+      name: 'Carla Externa',
+      email: 'carla-externa@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: otherOrg._id,
+      isActive: true,
+    });
+    await OrganizationMember.create({
+      user: otherOwner._id,
+      organization: otherOrg._id,
+      role: 'owner',
+      isActive: true,
+    });
+    await Unit.create({ organization: otherOrg._id, owner: otherOwner._id, name: 'Lote Norte', active: true });
+
+    const res = await request(app)
+      .get('/api/admin/owners/search?query=norte')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.owners).toHaveLength(1);
+    expect(res.body.data.owners[0]).toEqual(expect.objectContaining({
+      ownerId: owner._id.toString(),
+      membershipId: membership._id.toString(),
+      name: 'Carla Propietaria',
+      email: 'carla@test.com',
+      primaryUnit: 'Lote Norte',
+      isAdminActive: false,
+    }));
+  });
+
+  test('asocia propietario existente como administrador sin duplicar usuario ni modificar password', async () => {
+    const { user, token, orgId } = await createAdminWithToken();
+    await addAdminMembership(user._id, orgId, 'owner_admin');
+
+    const owner = await User.create({
+      name: 'Propietario Admin',
+      email: 'propietario-admin@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: orgId,
+      isActive: true,
+      mustChangePassword: false,
+    });
+    await OrganizationMember.create({
+      user: owner._id,
+      organization: orgId,
+      role: 'owner',
+      isActive: true,
+    });
+    const before = await User.findById(owner._id).select('+password mustChangePassword');
+
+    const res = await request(app)
+      .post('/api/admin/users/invite')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ mode: 'existing_owner', ownerId: owner._id, role: 'billing_manager' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.admin.role).toBe('billing_manager');
+    const after = await User.findById(owner._id).select('+password mustChangePassword');
+    expect(after.password).toBe(before.password);
+    expect(after.mustChangePassword).toBe(false);
+    expect(await User.countDocuments({ email: 'propietario-admin@test.com' })).toBe(1);
+    expect(emailService.sendAdminWelcome).not.toHaveBeenCalled();
+
+    const memberships = await OrganizationMember.find({ user: owner._id, organization: orgId });
+    expect(memberships.map((membership) => membership.role).sort()).toEqual(['admin', 'owner']);
+    expect(memberships.find((membership) => membership.role === 'admin').adminRole).toBe('billing_manager');
+  });
+
+  test('rechaza propietario de otra organizacion y admin duplicado', async () => {
+    const { user, token, orgId } = await createAdminWithToken();
+    await addAdminMembership(user._id, orgId, 'owner_admin');
+
+    const otherOrg = await Organization.create({ name: 'Organizacion externa', slug: 'organizacion-externa', type: 'building' });
+    const externalOwner = await User.create({
+      name: 'Owner Externo',
+      email: 'owner-externo@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: otherOrg._id,
+      isActive: true,
+    });
+    await OrganizationMember.create({
+      user: externalOwner._id,
+      organization: otherOrg._id,
+      role: 'owner',
+      isActive: true,
+    });
+
+    const externalRes = await request(app)
+      .post('/api/admin/users/invite')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ mode: 'existing_owner', ownerId: externalOwner._id, role: 'billing_manager' });
+
+    expect(externalRes.status).toBe(404);
+    expect(externalRes.body.message).toBe('El propietario seleccionado no pertenece a esta organización.');
+
+    const ownerAdmin = await User.create({
+      name: 'Owner Ya Admin',
+      email: 'owner-ya-admin@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: orgId,
+      isActive: true,
+    });
+    await OrganizationMember.create({
+      user: ownerAdmin._id,
+      organization: orgId,
+      role: 'owner',
+      isActive: true,
+    });
+    await addAdminMembership(ownerAdmin._id, orgId, 'read_only');
+
+    const duplicateRes = await request(app)
+      .post('/api/admin/users/invite')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ mode: 'existing_owner', ownerId: ownerAdmin._id, role: 'billing_manager' });
+
+    expect(duplicateRes.status).toBe(409);
+    expect(duplicateRes.body.message).toBe('Este usuario ya es administrador de la organización.');
   });
 });
