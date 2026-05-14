@@ -15,6 +15,8 @@ const excelUpload = multer({
   },
 });
 
+router.post('/confirm-email-change', ctrl.confirmEmailChange);
+
 // Todas las rutas requieren auth
 router.use(protect);
 
@@ -27,6 +29,7 @@ router.post('/bulk',          restrictTo('admin'), excelUpload.single('file'), c
 
 router.post('/me/request-email-change', restrictTo('owner'), requireOrg, ctrl.requestEmailChange);
 router.post('/me/confirm-email-change', restrictTo('owner'), requireOrg, ctrl.confirmEmailChange);
+router.post('/me/cancel-email-change', restrictTo('owner'), requireOrg, ctrl.cancelEmailChange);
 router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
 router.get('/:id/available-items', restrictTo('admin'), ctrl.getOwnerAvailableItems);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)

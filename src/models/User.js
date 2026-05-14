@@ -129,7 +129,17 @@ const userSchema = new mongoose.Schema(
       type: String,
       select: false,
     },
+    emailChangeTokenHash: {
+      type: String,
+      select: false,
+    },
     emailChangeTokenExpiresAt: {
+      type: Date,
+    },
+    emailChangeRequestedAt: {
+      type: Date,
+    },
+    emailChangedAt: {
       type: Date,
     },
     emailVerifiedAt: {
@@ -220,8 +230,11 @@ userSchema.methods.createPasswordResetToken = function () {
 // ── Método: generar token de cambio de email ─────────────────────
 userSchema.methods.createEmailChangeToken = function () {
   const token = crypto.randomBytes(32).toString('hex');
-  this.emailChangeToken = crypto.createHash('sha256').update(token).digest('hex');
+  const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+  this.emailChangeToken = hashedToken; // legacy: mantener compatibilidad con solicitudes existentes
+  this.emailChangeTokenHash = hashedToken;
   this.emailChangeTokenExpiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 horas
+  this.emailChangeRequestedAt = new Date();
   return token;
 };
 

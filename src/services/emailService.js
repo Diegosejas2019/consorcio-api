@@ -650,6 +650,26 @@ exports.sendPasswordReset = async (user, resetUrl) => {
   });
 };
 
+exports.sendEmailChangeConfirmation = async (user, newEmail, confirmUrl, expiresLabel = '24 horas') => {
+  const html = baseTemplate(`
+    <p>Hola <strong>${user.name}</strong>,</p>
+    <p>Recibimos una solicitud para cambiar el email de acceso de tu cuenta en GestionAr.</p>
+    <p>Para confirmar el cambio, hacé clic en el siguiente botón:</p>
+    <a href="${confirmUrl}" class="btn" target="_blank">Confirmar nuevo email</a>
+    <div class="highlight">
+      <p>Nuevo email: ${newEmail}</p>
+      <p>El enlace vence en ${expiresLabel}.</p>
+    </div>
+    <p>Si no solicitaste este cambio, podés ignorar este mensaje. Tu email actual seguirá funcionando.</p>
+    <p style="margin-top:20px; font-size:13px; color:#6b7280;">Si el botón no funciona, copiá este enlace en tu navegador:<br>${confirmUrl}</p>
+  `);
+
+  return sendEmail({
+    to:      newEmail,
+    subject: 'Confirmá tu nuevo email en GestionAr',
+    html,
+  });
+};
 exports.sendReceiptEmail = async (owner, payment, receiptUrl) => {
   const html = baseTemplate(`
     <p>Hola <strong>${owner.name}</strong>,</p>

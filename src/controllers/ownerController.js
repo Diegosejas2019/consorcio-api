@@ -8,7 +8,7 @@ const Unit    = require('../models/Unit');
 const Notice  = require('../models/Notice');
 const logger  = require('../config/logger');
 const { sendToUser } = require('../services/firebaseService');
-const { sendWelcome, sendEmail } = require('../services/emailService');
+const { sendWelcome, sendEmailChangeConfirmation } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
 const { orgToConfigView } = require('./configController');
 const { buildAvailablePaymentItems } = require('./paymentController');
@@ -737,46 +737,37 @@ exports.requestEmailChange = async (req, res, next) => {
       isActive: true,
     }).select('_id');
     if (conflict) {
-      return res.status(400).json({ success: false, message: 'El email ya está en uso por otro usuario.' });
+      return res.status(400).json({
+        success: false,
+        message: 'El email ingresado ya está asociado a otro usuario. Contactá a la administración.',
+      });
     }
 
-    const user = await User.findById(req.user._id).select('+emailChangeToken');
+    const user = await User.findById(req.user._id).select('+emailChangeToken +emailChangeTokenHash');
     user.pendingEmail = newEmail;
     const token = user.createEmailChangeToken();
     await user.save({ validateBeforeSave: false });
 
-    if (process.env.BREVO_API_KEY) {
-      const confirmUrl = `${process.env.APP_BASE_URL || ''}/confirm-email-change?token=${token}`;
-      try {
-        await sendEmail({
-          to: newEmail,
-          subject: 'Confirmá tu nuevo email | GestionAr',
-          html: `
-            <p>Hola ${user.name},</p>
-            <p>Recibimos una solicitud para cambiar el email de acceso de tu cuenta en GestionAr.</p>
-            <p>Para confirmar el cambio, abrí este enlace:</p>
-            <p><a href="${confirmUrl}">${confirmUrl}</a></p>
-            <p>Si no solicitaste este cambio, podés ignorar este mensaje.</p>
-          `,
-        });
-      } catch (emailErr) {
-        user.pendingEmail = undefined;
-        user.emailChangeToken = undefined;
-        user.emailChangeTokenExpiresAt = undefined;
-        await user.save({ validateBeforeSave: false });
-        logger.error(`[EmailChange] Error enviando confirmación a ${newEmail}: ${emailErr.message}`);
-        return res.status(502).json({
-          success: false,
-          message: 'No pudimos enviar el email de confirmación. Intentá nuevamente más tarde.',
-        });
-      }
+    const confirmUrl = `${process.env.APP_BASE_URL || ''}/confirm-email-change?token=${token}`;
+    try {
+      await sendEmailChangeConfirmation(user, newEmail, confirmUrl, '24 horas');
+    } catch (emailErr) {
+      user.pendingEmail = undefined;
+      user.emailChangeToken = undefined;
+      user.emailChangeTokenHash = undefined;
+      user.emailChangeTokenExpiresAt = undefined;
+      user.emailChangeRequestedAt = undefined;
+      await user.save({ validateBeforeSave: false });
+      logger.error(`[EmailChange] Error enviando confirmación a ${newEmail}: ${emailErr.message}`);
+      return res.status(502).json({
+        success: false,
+        message: 'No pudimos enviar el email de confirmación. Intentá nuevamente más tarde.',
+      });
     }
 
     res.json({
       success: true,
-      message: process.env.BREVO_API_KEY
-        ? 'Te enviamos un email para confirmar el cambio.'
-        : 'Solicitud registrada. El envío de email de confirmación no está configurado.',
+      message: 'Te enviamos un correo de confirmación a tu nuevo email.',
       ...(process.env.NODE_ENV === 'test' ? { data: { token } } : {}),
     });
   } catch (err) {
@@ -793,12 +784,23 @@ exports.confirmEmailChange = async (req, res, next) => {
 
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
     const user = await User.findOne({
-      _id: req.user._id,
-      emailChangeToken: hashedToken,
-      emailChangeTokenExpiresAt: { $gt: Date.now() },
-    }).select('+emailChangeToken');
+      $or: [
+        { emailChangeTokenHash: hashedToken },
+        { emailChangeToken: hashedToken },
+      ],
+    }).select('+emailChangeToken +emailChangeTokenHash');
 
     if (!user || !user.pendingEmail) {
+      return res.status(400).json({ success: false, message: 'El enlace de confirmación es inválido o ya expiró.' });
+    }
+
+    if (!user.emailChangeTokenExpiresAt || user.emailChangeTokenExpiresAt <= Date.now()) {
+      user.pendingEmail = undefined;
+      user.emailChangeToken = undefined;
+      user.emailChangeTokenHash = undefined;
+      user.emailChangeTokenExpiresAt = undefined;
+      user.emailChangeRequestedAt = undefined;
+      await user.save({ validateBeforeSave: false });
       return res.status(400).json({ success: false, message: 'El enlace de confirmación es inválido o ya expiró.' });
     }
 
@@ -808,19 +810,49 @@ exports.confirmEmailChange = async (req, res, next) => {
       isActive: true,
     }).select('_id');
     if (conflict) {
-      return res.status(400).json({ success: false, message: 'El email ya está en uso por otro usuario.' });
+      return res.status(400).json({
+        success: false,
+        message: 'El email ingresado ya está asociado a otro usuario. Contactá a la administración.',
+      });
     }
 
     const oldEmail = user.email;
     user.email = user.pendingEmail;
     user.pendingEmail = undefined;
     user.emailChangeToken = undefined;
+    user.emailChangeTokenHash = undefined;
     user.emailChangeTokenExpiresAt = undefined;
+    user.emailChangeRequestedAt = undefined;
+    user.emailChangedAt = new Date();
     user.emailVerifiedAt = new Date();
     await user.save({ validateBeforeSave: false });
 
     logger.info(`[EmailChange] Email actualizado para user=${user._id}: ${oldEmail} -> ${user.email}`);
-    res.json({ success: true, message: 'Email actualizado correctamente.' });
+    res.json({
+      success: true,
+      message: 'Tu email fue actualizado correctamente.',
+      data: { email: user.email },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.cancelEmailChange = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id).select('+emailChangeToken +emailChangeTokenHash');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
+    }
+
+    user.pendingEmail = undefined;
+    user.emailChangeToken = undefined;
+    user.emailChangeTokenHash = undefined;
+    user.emailChangeTokenExpiresAt = undefined;
+    user.emailChangeRequestedAt = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    res.json({ success: true, message: 'La solicitud de cambio de email fue cancelada.' });
   } catch (err) {
     next(err);
   }

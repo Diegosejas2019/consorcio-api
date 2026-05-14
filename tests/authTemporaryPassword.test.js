@@ -1,6 +1,7 @@
 jest.mock('../src/services/emailService', () => ({
   sendWelcome: jest.fn().mockResolvedValue(null),
   sendEmail: jest.fn().mockResolvedValue(null),
+  sendEmailChangeConfirmation: jest.fn().mockResolvedValue(null),
   sendPasswordReset: jest.fn().mockResolvedValue(null),
 }));
 
@@ -168,29 +169,76 @@ describe('cambio seguro de email', () => {
 
     expect(requestRes.status).toBe(200);
     expect(requestRes.body.data.token).toBeTruthy();
-    const pending = await User.findById(user._id).select('+emailChangeToken');
+    const pending = await User.findById(user._id).select('+emailChangeToken +emailChangeTokenHash');
     expect(pending.pendingEmail).toBe('owner-nuevo@test.com');
     expect(pending.emailChangeToken).toBeTruthy();
+    expect(pending.emailChangeTokenHash).toBeTruthy();
+    expect(pending.emailChangeRequestedAt).toBeTruthy();
+
+    const oldLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'owner-cambio@test.com', password: 'password123' });
+    expect(oldLogin.status).toBe(200);
+
+    const newLoginBeforeConfirm = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'owner-nuevo@test.com', password: 'password123' });
+    expect(newLoginBeforeConfirm.status).toBe(401);
 
     const confirmRes = await request(app)
-      .post('/api/owners/me/confirm-email-change')
-      .set('Authorization', `Bearer ${token}`)
+      .post('/api/owners/confirm-email-change')
       .send({ token: requestRes.body.data.token });
 
     expect(confirmRes.status).toBe(200);
-    const updated = await User.findById(user._id).select('+emailChangeToken');
+    const updated = await User.findById(user._id).select('+emailChangeToken +emailChangeTokenHash');
     expect(updated.email).toBe('owner-nuevo@test.com');
     expect(updated.pendingEmail).toBeUndefined();
     expect(updated.emailChangeToken).toBeUndefined();
+    expect(updated.emailChangeTokenHash).toBeUndefined();
+    expect(updated.emailChangedAt).toBeTruthy();
     expect(updated.emailVerifiedAt).toBeTruthy();
+
+    const oldLoginAfterConfirm = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'owner-cambio@test.com', password: 'password123' });
+    expect(oldLoginAfterConfirm.status).toBe(401);
+
+    const newLoginAfterConfirm = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'owner-nuevo@test.com', password: 'password123' });
+    expect(newLoginAfterConfirm.status).toBe(200);
+  });
+
+  test('owner puede cancelar solicitud pendiente de cambio de email', async () => {
+    const { user, token } = await createOwnerWithToken({ email: 'owner-cancel@test.com' });
+
+    const requestRes = await request(app)
+      .post('/api/owners/me/request-email-change')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ newEmail: 'owner-cancel-nuevo@test.com' });
+    expect(requestRes.status).toBe(200);
+
+    const cancelRes = await request(app)
+      .post('/api/owners/me/cancel-email-change')
+      .set('Authorization', `Bearer ${token}`);
+    expect(cancelRes.status).toBe(200);
+
+    const cancelled = await User.findById(user._id).select('+emailChangeToken +emailChangeTokenHash');
+    expect(cancelled.pendingEmail).toBeUndefined();
+    expect(cancelled.emailChangeToken).toBeUndefined();
+    expect(cancelled.emailChangeTokenHash).toBeUndefined();
+
+    const confirmAfterCancel = await request(app)
+      .post('/api/owners/confirm-email-change')
+      .send({ token: requestRes.body.data.token });
+    expect(confirmAfterCancel.status).toBe(400);
   });
 
   test('confirmación de email falla con token inválido o email tomado', async () => {
     const { user, token } = await createOwnerWithToken({ email: 'owner-token@test.com' });
 
     const invalid = await request(app)
-      .post('/api/owners/me/confirm-email-change')
-      .set('Authorization', `Bearer ${token}`)
+      .post('/api/owners/confirm-email-change')
       .send({ token: 'invalido' });
     expect(invalid.status).toBe(400);
 
@@ -200,8 +248,7 @@ describe('cambio seguro de email', () => {
       .send({ newEmail: 'expirado@test.com' });
     await User.findByIdAndUpdate(user._id, { emailChangeTokenExpiresAt: new Date(Date.now() - 1000) });
     const expired = await request(app)
-      .post('/api/owners/me/confirm-email-change')
-      .set('Authorization', `Bearer ${token}`)
+      .post('/api/owners/confirm-email-change')
       .send({ token: expiredRequest.body.data.token });
     expect(expired.status).toBe(400);
 
@@ -220,12 +267,11 @@ describe('cambio seguro de email', () => {
     });
 
     const conflict = await request(app)
-      .post('/api/owners/me/confirm-email-change')
-      .set('Authorization', `Bearer ${token}`)
+      .post('/api/owners/confirm-email-change')
       .send({ token: requestRes.body.data.token });
 
     expect(conflict.status).toBe(400);
-    expect(conflict.body.message).toContain('uso');
+    expect(conflict.body.message).toContain('asociado');
     const unchanged = await User.findById(user._id);
     expect(unchanged.email).toBe('owner-token@test.com');
   });
