@@ -182,6 +182,59 @@ Virtual: `totalVotes`, `statusLabel`.
 Registro del voto de cada propietario. Índice único `{ vote, owner }` para garantizar un voto por persona.
 Campos: `vote`, `organization`, `owner`, `optionIndex`.
 
+### OrganizationMember
+Membresía de un usuario en una organización. Reemplaza los campos de membresía que antes vivían en `User`.
+Campos: `user`, `organization`, `role` (`owner`|`admin`|`superadmin`), `adminRole` (`owner_admin`|`read_only`|`billing_manager`|`communications_manager`), `permissions` (array de strings), `balance`, `isDebtor`, `startBillingPeriod` (YYYY-MM), `percentage`, `isActive`, `deactivatedByOrganization`, `deactivatedAt`, `reactivatedAt`.
+Índice único `{ user, organization, role }`.
+
+### OrganizationDocument
+Documentos de la organización (reglamento, seguros, mapas, contratos, etc.) accesibles a propietarios o solo admin.
+Categorías: `regulation` | `map` | `rules` | `assembly` | `insurance` | `payment` | `contract` | `other`.
+Visibilidad: `admin` (solo admin) | `owners` (visible a propietarios).
+Archivo en Cloudinary: `{ url, publicId, filename, mimetype, size }`.
+Virtuales: `categoryLabel`, `visibilityLabel`, `fileTypeLabel`, `formattedSize`.
+Feature flag: `documents` (si deshabilitado, devuelve 403 en todos los endpoints).
+
+### SupportTicket
+Tickets de soporte que usuarios envían al equipo de GestionAr (scope: superadmin).
+Tipos: `bug` | `question` | `payment_issue` | `suggestion` | `other`.
+Estados: `open` | `in_progress` | `resolved` | `closed`.
+Prioridades: `low` | `medium` | `high`.
+Campos: `organizationId`, `userId`, `userRole`, `type`, `title`, `description`, `status`, `priority`, `context` (`{ route, userAgent, action, metadata }`), `adminResponse`, `resolvedAt`.
+Virtuales: `typeLabel`, `statusLabel`, `priorityLabel`.
+
+### AuditLog
+Log de acciones administrativas sensibles (scope: superadmin).
+Acciones: `organization_deactivated` | `organization_reactivated`.
+Campos: `organization`, `action`, `performedBy`, `reason`.
+
+### OwnerDebtItem
+Deudas adicionales de un propietario (saldo anterior o ajuste manual).
+Tipos: `previous_balance` | `manual_adjustment`.
+Estados: `pending` | `paid` | `includedInPaymentPlan` | `cancelled`.
+Campos: `organization`, `owner`, `type`, `description`, `amount`, `currency` (`ARS`), `status`, `originDate`, `dueDate`, `createdBy`, `cancelledBy`, `cancellationReason`, `cancelledAt`, `paidAt`, `paymentId`, `receiptId`.
+
+### PaymentPlan
+Plan de pago para que un propietario deudor salde en cuotas.
+Estados: `requested` | `approved` | `active` | `completed` | `rejected` | `cancelled` | `defaulted`.
+Campos: `organization`, `owner`, `requestedBy` (`owner`|`admin`), `status`, `currency`, `originalDebtAmount`, `interestType` (`none`|`percentage`|`fixed`), `interestValue`, `interestAmount`, `totalAmount`, `installmentsCount`, `startDate`, `frequency` (`monthly`), `includedPeriods` (array `{ month, originalAmount }`), `balanceDebt`, `extraordinaryItems`, `debtSnapshot`, `requestComment`, `adminComment`, `rejectionReason`.
+
+### PaymentPlanInstallment
+Cuota individual de un plan de pago.
+Estados: `pending` | `paid` | `overdue` | `cancelled`.
+Campos: `organization`, `paymentPlan`, `owner`, `installmentNumber`, `dueDate`, `amount`, `currency`, `status`, `paidAt`, `paymentId`, `receiptId`.
+
+### SalaryPayment
+Pago individual dentro de un sueldo (adelantos, pagos parciales, ajustes).
+Tipos: `advance` | `salary_payment` | `adjustment`.
+Campos: `organization`, `salary`, `employee`, `period`, `type`, `amount`, `paymentDate`, `paymentMethod` (`cash`|`transfer`), `note`.
+Virtuales: `typeLabel`, `paymentMethodLabel`.
+
+### VisitLog
+Log de check-in / check-out de visitas.
+Acciones: `check_in` | `check_out`.
+Campos: `organization`, `visit`, `action`, `performedBy`, `performedByName`, `performedByRole`, `comment`, `visitorName`, `ownerId`, `ownerName`, `unitLabel`, `timestamp`.
+
 ## Endpoints
 
 | Método | Ruta | Acceso |
@@ -257,8 +310,13 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | PATCH | `/api/providers/:id` | admin |
 | DELETE | `/api/providers/:id` | admin |
 | GET | `/api/visits` | autenticado (owner: las suyas) |
+| GET | `/api/visits/today` | admin (visitas de hoy para portería) |
+| GET | `/api/visits/history` | admin (historial paginado) |
 | POST | `/api/visits` | owner |
 | PATCH | `/api/visits/:id/status` | admin |
+| POST | `/api/visits/:id/check-in` | admin (registra ingreso + crea VisitLog) |
+| POST | `/api/visits/:id/check-out` | admin (registra egreso + crea VisitLog) |
+| GET | `/api/visits/:id/logs` | admin (logs de check-in/out) |
 | DELETE | `/api/visits/:id` | autenticado |
 | GET | `/api/spaces` | autenticado |
 | POST | `/api/spaces` | admin |
@@ -282,6 +340,43 @@ Campos: `vote`, `organization`, `owner`, `optionIndex`.
 | POST | `/api/mercadopago/preference` | autenticado |
 | POST | `/api/mercadopago/webhook` | público (MP) |
 | GET | `/api/mercadopago/payment/:mpPaymentId` | autenticado |
+| GET | `/api/organization-documents` | autenticado + feature `documents` |
+| POST | `/api/organization-documents` | admin |
+| GET | `/api/organization-documents/:id` | autenticado + feature `documents` |
+| PATCH | `/api/organization-documents/:id` | admin |
+| DELETE | `/api/organization-documents/:id` | admin |
+| GET | `/api/organization-documents/:id/download` | autenticado + feature `documents` |
+| POST | `/api/support-tickets` | autenticado |
+| GET | `/api/support-tickets` | superadmin |
+| GET | `/api/support-tickets/my` | autenticado |
+| PATCH | `/api/support-tickets/:id` | superadmin |
+| DELETE | `/api/support-tickets/:id` | superadmin |
+| GET | `/api/payment-plans/my` | owner |
+| POST | `/api/payment-plans/request` | owner |
+| POST | `/api/payment-plans/installments/:id/pay` | owner (con comprobante) |
+| GET | `/api/payment-plans/admin` | admin |
+| GET | `/api/payment-plans/admin/:id` | admin |
+| POST | `/api/payment-plans/admin` | admin |
+| POST | `/api/payment-plans/admin/:id/approve` | admin |
+| POST | `/api/payment-plans/admin/:id/reject` | admin |
+| PATCH | `/api/payment-plans/admin/:id/cancel` | admin |
+| DELETE | `/api/payment-plans/admin/:id` | admin |
+| POST | `/api/payment-plans/admin/installments/:id/register-payment` | admin |
+| GET | `/api/owners/:id/debt-items` | admin |
+| POST | `/api/owners/:id/debt-items` | admin |
+| PATCH | `/api/debt-items/:id/cancel` | admin |
+| GET | `/api/debt-items/mine` | owner |
+| GET | `/api/salary-payments` | admin |
+| POST | `/api/salary-payments` | admin |
+| DELETE | `/api/salary-payments/:id` | admin |
+| GET | `/api/admin/permissions/me` | admin |
+| GET | `/api/admin/users` | admin |
+| GET | `/api/admin/owners/search` | admin |
+| POST | `/api/admin/users/invite` | admin |
+| PATCH | `/api/admin/users/:userId/role` | admin |
+| PATCH | `/api/admin/users/:userId/disable` | admin |
+| PATCH | `/api/super-admin/users/password` | superadmin |
+| PATCH | `/api/super-admin/organizations/:id/status` | superadmin |
 | GET | `/health` | público |
 | POST | `/api/internal/create-organization` | interno (`x-internal-key` header) |
 
@@ -390,4 +485,3 @@ no en variables de entorno.
 - `fcmToken` y `password` en User tienen `select: false`
 - Mensajes FCM son data-only para compatibilidad Android 14+
 - Errores de usuario siempre en español, sin exponer detalles técnicos
-c
