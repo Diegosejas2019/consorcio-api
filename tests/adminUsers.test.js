@@ -169,6 +169,26 @@ describe('usuarios administradores y permisos internos', () => {
     expect(res.body.message).toContain('administrador principal');
   });
 
+  test('no permite desactivar administradores principales', async () => {
+    const { user, token, orgId } = await createAdminWithToken();
+    await addAdminMembership(user._id, orgId, 'owner_admin');
+    const secondOwnerAdmin = await createAdminInOrg(orgId, 'owner_admin');
+
+    const res = await request(app)
+      .patch(`/api/admin/users/${secondOwnerAdmin.user._id}/disable`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('No se puede desactivar un administrador principal de la organización.');
+
+    const membership = await OrganizationMember.findOne({
+      user: secondOwnerAdmin.user._id,
+      organization: orgId,
+      role: 'admin',
+    });
+    expect(membership.isActive).toBe(true);
+  });
+
   test('busca propietarios por nombre, email y unidad dentro de la organizacion', async () => {
     const { user, token, orgId } = await createAdminWithToken();
     await addAdminMembership(user._id, orgId, 'owner_admin');

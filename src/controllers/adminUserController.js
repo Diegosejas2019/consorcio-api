@@ -371,6 +371,12 @@ exports.disableAdmin = async (req, res, next) => {
     }
 
     const currentRole = normalizeAdminRole(membership);
+    if (currentRole === 'owner_admin') {
+      return res.status(400).json({
+        success: false,
+        message: 'No se puede desactivar un administrador principal de la organización.',
+      });
+    }
     const isSelf = String(membership.user._id) === String(req.user._id);
     if (currentRole === 'owner_admin' && isSelf && await activeOwnerAdminCount(req.orgId) <= 1) {
       return res.status(400).json({
