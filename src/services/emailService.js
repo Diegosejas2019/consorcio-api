@@ -69,6 +69,86 @@ const baseTemplate = (content) => `
 </body>
 </html>`;
 
+const accountSecurityTemplate = ({
+  title,
+  preheader,
+  badge,
+  greeting,
+  intro,
+  detailIcon,
+  detailLabel,
+  detailValue,
+  detailHint,
+  buttonUrl,
+  buttonText,
+  fallbackUrl,
+  ignoreText,
+}) => `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="dark light">
+  <meta name="supported-color-schemes" content="dark light">
+  <title>GestionAr</title>
+  <style>
+    body { margin:0 !important; padding:0 !important; width:100% !important; }
+    table { border-collapse: collapse !important; }
+    a { text-decoration:none; }
+    .btn-primary:hover { background-color:#7de05b !important; }
+    @media only screen and (max-width: 620px) {
+      .wrap { width:100% !important; }
+      .px-32 { padding-left:24px !important; padding-right:24px !important; }
+      .py-40 { padding-top:32px !important; padding-bottom:32px !important; }
+      .h1 { font-size:26px !important; line-height:32px !important; }
+      .btn-td a { display:block !important; }
+    }
+  </style>
+</head>
+<body style="margin:0; padding:0; background-color:#0e1512; font-family:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#eef1ed;">
+  <div style="display:none; max-height:0; overflow:hidden; font-size:1px; line-height:1px; color:#0e1512; opacity:0;">${preheader}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0e1512;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" class="wrap" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px; max-width:560px;">
+          <tr>
+            <td align="left" class="px-32" style="padding:8px 32px 24px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td valign="middle" style="padding-right:10px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td align="center" width="28" height="28" style="width:28px; height:28px; background-color:#9cf27b; border-radius:8px; color:#0e1512; font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:700; line-height:28px;">G</td></tr>
+                    </table>
+                  </td>
+                  <td valign="middle" style="font-family:'Inter Tight', Arial, sans-serif; font-size:20px; font-weight:700; letter-spacing:-0.5px; color:#eef1ed;">Gestion<span style="color:#9cf27b;">Ar</span></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="left" class="px-32 py-40" style="background-color:#18221d; border:1px solid rgba(255,255,255,0.08); border-radius:20px; padding:44px 40px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;"><tr><td style="background-color:rgba(156,242,123,0.12); border-radius:999px; padding:6px 12px; font-family:'Courier New', monospace; font-size:11px; font-weight:500; color:#9cf27b; letter-spacing:0.5px;"><span style="color:#9cf27b;">●</span>&nbsp;&nbsp;${badge}</td></tr></table>
+              <h1 class="h1" style="margin:0 0 16px 0; font-family:'Inter Tight', Arial, sans-serif; font-size:32px; line-height:38px; font-weight:600; letter-spacing:-0.8px; color:#eef1ed;">${title}</h1>
+              <p style="margin:0 0 16px 0; font-family:'Inter', Arial, sans-serif; font-size:16px; line-height:24px; color:#eef1ed;">${greeting}</p>
+              <p style="margin:0 0 12px 0; font-family:'Inter', Arial, sans-serif; font-size:15px; line-height:24px; color:#a8b3ac;">${intro}</p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0;"><tr><td style="background-color:#0e1512; border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:16px 18px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="32" valign="middle" style="padding-right:12px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" width="32" height="32" style="width:32px; height:32px; background-color:rgba(156,242,123,0.12); border-radius:8px; color:#9cf27b; font-family:'Inter Tight', Arial, sans-serif; font-size:14px; font-weight:600; line-height:32px;">${detailIcon}</td></tr></table></td><td valign="middle"><div style="font-family:'Courier New', monospace; font-size:10px; color:#6b7870; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px;">${detailLabel}</div><div style="font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:600; color:#eef1ed; word-break:break-all;">${detailValue}</div><div style="font-family:'Inter', Arial, sans-serif; font-size:13px; color:#a8b3ac; margin-top:6px;">${detailHint}</div></td></tr></table></td></tr></table>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 28px 0;"><tr><td class="btn-td" align="center" bgcolor="#9cf27b" style="background-color:#9cf27b; border-radius:999px;"><a href="${buttonUrl}" class="btn-primary" target="_blank" style="display:inline-block; background-color:#9cf27b; color:#0e1512; font-family:'Inter Tight', Arial, sans-serif; font-size:15px; font-weight:600; line-height:48px; text-align:center; text-decoration:none; padding:0 32px; border-radius:999px; letter-spacing:-0.2px;">${buttonText}&nbsp;&nbsp;→</a></td></tr></table>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 20px 0;"><tr><td style="border-top:1px solid rgba(255,255,255,0.08); font-size:0; line-height:0;">&nbsp;</td></tr></table>
+              <p style="margin:0 0 18px 0; font-family:'Inter', Arial, sans-serif; font-size:14px; line-height:22px; color:#a8b3ac;">${ignoreText}</p>
+              <p style="margin:0 0 8px 0; font-family:'Courier New', monospace; font-size:11px; line-height:16px; color:#6b7870; text-transform:uppercase; letter-spacing:1px;">El boton no funciona?</p>
+              <p style="margin:0; font-family:'Inter', Arial, sans-serif; font-size:13px; line-height:20px; color:#a8b3ac;">Copia y pega este enlace en tu navegador:<br><a href="${fallbackUrl}" target="_blank" style="color:#9cf27b; text-decoration:none; word-break:break-all;">${fallbackUrl}</a></p>
+            </td>
+          </tr>
+          <tr><td class="px-32" style="padding:24px 32px 0 32px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="background-color:#131b17; border:1px solid rgba(255,255,255,0.06); border-radius:16px; padding:20px 22px;"><p style="margin:0 0 10px 0; font-family:'Courier New', monospace; font-size:11px; color:#9cf27b; text-transform:uppercase; letter-spacing:1px; font-weight:500;">CONSEJO DE SEGURIDAD</p><p style="margin:0; font-family:'Inter', Arial, sans-serif; font-size:13px; line-height:20px; color:#a8b3ac;">GestionAr nunca te va a pedir tu contraseña por email, telefono o WhatsApp. Si algo te hace dudar, escribinos a <a href="mailto:${process.env.EMAIL_FROM || 'gestionar.app.info@gmail.com'}" style="color:#9cf27b; text-decoration:none;">${process.env.EMAIL_FROM || 'gestionar.app.info@gmail.com'}</a>.</p></td></tr></table></td></tr>
+          <tr><td class="px-32" style="padding:32px 32px 16px 32px;" align="center"><p style="margin:0 0 8px 0; font-family:'Inter', Arial, sans-serif; font-size:12px; line-height:18px; color:#6b7870; text-align:center;">Este mensaje fue enviado automaticamente. Por favor no respondas a este email.</p><p style="margin:0; font-family:'Courier New', monospace; font-size:11px; line-height:18px; color:#6b7870; text-align:center; letter-spacing:0.5px;">© 2026 GESTIONAR - ADMINISTRACION DE BARRIOS PRIVADOS</p></td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
 // ── Templates específicos ─────────────────────────────────────
 
 exports.sendPaymentApproved = async (owner, payment) => {
@@ -651,6 +731,28 @@ exports.sendPasswordReset = async (user, resetUrl) => {
 };
 
 exports.sendEmailChangeConfirmation = async (user, newEmail, confirmUrl, expiresLabel = '24 horas') => {
+  const modernHtml = accountSecurityTemplate({
+    title: 'Confirma tu <span style="color:#9cf27b; font-style:italic; font-weight:500;">nuevo email</span>',
+    preheader: `Confirma el nuevo email de acceso de tu cuenta GestionAr. El enlace vence en ${expiresLabel}.`,
+    badge: 'SEGURIDAD DE CUENTA',
+    greeting: `Hola <strong style="color:#eef1ed;">${user.name}</strong>,`,
+    intro: 'Recibimos una solicitud para cambiar el email de acceso de tu cuenta en GestionAr. Toca el boton para confirmar el cambio:',
+    detailIcon: '@',
+    detailLabel: 'NUEVO EMAIL',
+    detailValue: newEmail,
+    detailHint: `El enlace vence en ${expiresLabel}.`,
+    buttonUrl: confirmUrl,
+    buttonText: 'Confirmar nuevo email',
+    fallbackUrl: confirmUrl,
+    ignoreText: 'Si no solicitaste este cambio, podes ignorar este email con tranquilidad. Tu email actual seguira funcionando.',
+  });
+
+  return sendEmail({
+    to:      newEmail,
+    subject: 'ConfirmÃ¡ tu nuevo email en GestionAr',
+    html:    modernHtml,
+  });
+
   const html = baseTemplate(`
     <p>Hola <strong>${user.name}</strong>,</p>
     <p>Recibimos una solicitud para cambiar el email de acceso de tu cuenta en GestionAr.</p>
