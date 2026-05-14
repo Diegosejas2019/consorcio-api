@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl   = require('../controllers/authController');
 const { protect, restrictTo, protectSelection } = require('../middleware/auth');
+const { requireAnyPermission } = require('../middleware/permissions');
 const validate = require('../middleware/validate');
 
 router.post('/login',
@@ -15,7 +16,7 @@ router.post('/login',
 
 // Solo admin puede registrar nuevos usuarios
 router.post('/register',
-  protect, restrictTo('admin'),
+  protect, restrictTo('admin'), requireAnyPermission(['owners.create', 'admins.create']),
   [
     body('name').trim().notEmpty().withMessage('Nombre requerido'),
     body('email').isEmail().toLowerCase(),

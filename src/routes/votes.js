@@ -2,18 +2,20 @@ const router   = require('express').Router();
 const { body } = require('express-validator');
 const ctrl     = require('../controllers/voteController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
 const validate = require('../middleware/validate');
 
 router.use(protect, requireOrg);
 
 // ── Listar y obtener ──────────────────────────────────────────
-router.get('/',    ctrl.getVotes);
-router.get('/:id', ctrl.getVote);
+router.get('/',    requirePermissionForAdmin('votes.read'), ctrl.getVotes);
+router.get('/:id', requirePermissionForAdmin('votes.read'), ctrl.getVote);
 
 // ── Crear (admin) ─────────────────────────────────────────────
 router.post(
   '/',
   restrictTo('admin'),
+  requirePermission('votes.create'),
   [
     body('title')
       .trim()
@@ -46,6 +48,7 @@ router.post(
 router.patch(
   '/:id',
   restrictTo('admin'),
+  requirePermission('votes.update'),
   [
     body('title')
       .optional()
@@ -77,10 +80,10 @@ router.patch(
 );
 
 // ── Cerrar votación (admin) ───────────────────────────────────
-router.patch('/:id/close', restrictTo('admin'), ctrl.closeVote);
+router.patch('/:id/close', restrictTo('admin'), requirePermission('votes.close'), ctrl.closeVote);
 
 // ── Eliminar (admin) ──────────────────────────────────────────
-router.delete('/:id', restrictTo('admin'), ctrl.deleteVote);
+router.delete('/:id', restrictTo('admin'), requirePermission('votes.delete'), ctrl.deleteVote);
 
 // ── Emitir voto (owner) ───────────────────────────────────────
 router.post(
@@ -96,6 +99,6 @@ router.post(
 );
 
 // ── Resultados detallados (admin) ─────────────────────────────
-router.get('/:id/results', restrictTo('admin'), ctrl.getResults);
+router.get('/:id/results', restrictTo('admin'), requirePermission('votes.read'), ctrl.getResults);
 
 module.exports = router;

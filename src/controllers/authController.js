@@ -5,6 +5,7 @@ const Unit               = require('../models/Unit');
 const { signToken, signSelectionToken, sendTokenResponse } = require('../middleware/auth');
 const { sendPasswordReset } = require('../services/emailService');
 const { normalizeRole, isSuperAdminRole } = require('../utils/roles');
+const { getEffectivePermissions, normalizeAdminRole } = require('../utils/adminPermissions');
 const logger = require('../config/logger');
 
 const markLogin = (userId, extra = {}) =>
@@ -81,7 +82,12 @@ exports.login = async (req, res, next) => {
         success: true,
         token: m,
         mustChangePassword: user.mustChangePassword || false,
-        data: { user, membership },
+        data: {
+          user,
+          membership,
+          adminRole: normalizeAdminRole(membership),
+          permissions: getEffectivePermissions(membership),
+        },
       });
     }
 
@@ -98,6 +104,7 @@ exports.login = async (req, res, next) => {
         organizationId:   m.organization._id,
         organizationName: m.organization.name,
         role:             normalizeRole(m.role),
+        adminRole:        normalizeAdminRole(m),
       })),
     });
   } catch (err) {
@@ -143,7 +150,16 @@ exports.getMe = async (req, res) => {
     }).select('name coefficient customFee');
   }
 
-  res.json({ success: true, data: { user, membership: req.membership || null, units } });
+  res.json({
+    success: true,
+    data: {
+      user,
+      membership: req.membership || null,
+      units,
+      adminRole: req.membership ? normalizeAdminRole(req.membership) : (user.role === 'admin' ? 'owner_admin' : null),
+      permissions: req.membership ? getEffectivePermissions(req.membership) : [],
+    },
+  });
 };
 
 // ── PATCH /api/auth/update-password ──────────────────────────
@@ -288,7 +304,12 @@ exports.selectOrganization = async (req, res, next) => {
       success: true,
       token,
       mustChangePassword: fullUser?.mustChangePassword || false,
-      data: { user: req.user, membership },
+      data: {
+        user: req.user,
+        membership,
+        adminRole: normalizeAdminRole(membership),
+        permissions: getEffectivePermissions(membership),
+      },
     });
   } catch (err) {
     next(err);

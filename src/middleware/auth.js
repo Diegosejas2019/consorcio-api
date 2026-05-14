@@ -3,6 +3,7 @@ const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const logger             = require('../config/logger');
 const { normalizeRole, isSuperAdminRole, expandRoles } = require('../utils/roles');
+const { getEffectivePermissions, normalizeAdminRole } = require('../utils/adminPermissions');
 
 // ── Verificar JWT ─────────────────────────────────────────────
 exports.protect = async (req, res, next) => {
@@ -97,9 +98,17 @@ exports.protect = async (req, res, next) => {
       req.orgId      = membership.organization._id;
       req.org        = membership.organization;
       req.user.role  = normalizeRole(membership.role);
+      if (req.user.role === 'admin') {
+        req.adminRole = normalizeAdminRole(membership);
+        req.permissions = getEffectivePermissions(membership);
+      }
     } else {
       req.orgId = isSuperAdminRole(req.user.role) ? null : (user.organization?._id ?? null);
       req.org   = isSuperAdminRole(req.user.role) ? null : (user.organization ?? null);
+      if (req.user.role === 'admin') {
+        req.adminRole = 'owner_admin';
+        req.permissions = [];
+      }
     }
 
     if (req.org?.isActive === false) {

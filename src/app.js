@@ -87,6 +87,7 @@ app.get('/health', (req, res) => {
 
 // ── Rutas principales ─────────────────────────────────────────
 app.use('/api/auth',          require('./routes/auth'));
+app.use('/api/admin',         require('./routes/adminUsers'));
 app.use('/api/super-admin',   require('./routes/superAdmin'));
 app.use('/api/organizations', require('./routes/organizations'));
 app.use('/api/owners',        require('./routes/owners'));

@@ -3,6 +3,7 @@ const multer    = require('multer');
 const ctrl      = require('../controllers/ownerController');
 const debtCtrl  = require('../controllers/ownerDebtItemController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/permissions');
 
 const excelUpload = multer({
   storage: multer.memoryStorage(),
@@ -20,23 +21,23 @@ router.post('/confirm-email-change', ctrl.confirmEmailChange);
 // Todas las rutas requieren auth
 router.use(protect);
 
-router.get('/stats',       restrictTo('admin'), ctrl.getStats);
-router.get('/check-email', restrictTo('admin'), ctrl.checkEmail);
-router.get('/',      restrictTo('admin'), ctrl.getAllOwners);
-router.post('/',     restrictTo('admin'), ctrl.createOwner);
-router.get('/bulk/template', restrictTo('admin'), ctrl.downloadBulkTemplate);
-router.post('/bulk',          restrictTo('admin'), excelUpload.single('file'), ctrl.bulkCreateOwners);
+router.get('/stats',       restrictTo('admin'), requirePermission('dashboard.read'), ctrl.getStats);
+router.get('/check-email', restrictTo('admin'), requirePermission('owners.read'), ctrl.checkEmail);
+router.get('/',      restrictTo('admin'), requirePermission('owners.read'), ctrl.getAllOwners);
+router.post('/',     restrictTo('admin'), requirePermission('owners.create'), ctrl.createOwner);
+router.get('/bulk/template', restrictTo('admin'), requirePermission('owners.create'), ctrl.downloadBulkTemplate);
+router.post('/bulk',          restrictTo('admin'), requirePermission('owners.create'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
 router.post('/me/request-email-change', restrictTo('owner'), requireOrg, ctrl.requestEmailChange);
 router.post('/me/confirm-email-change', restrictTo('owner'), requireOrg, ctrl.confirmEmailChange);
 router.post('/me/cancel-email-change', restrictTo('owner'), requireOrg, ctrl.cancelEmailChange);
 router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
-router.get('/:id/available-items', restrictTo('admin'), ctrl.getOwnerAvailableItems);
+router.get('/:id/available-items', restrictTo('admin'), requirePermission('owners.read'), ctrl.getOwnerAvailableItems);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
-router.patch('/:id',     restrictTo('admin'), ctrl.updateOwner);
-router.delete('/:id',    restrictTo('admin'), ctrl.deleteOwner);
-router.post('/:id/notify',      restrictTo('admin'), ctrl.notifyOwner);
-router.post('/:id/debt-items',  restrictTo('admin'), debtCtrl.createDebtItem);
-router.get('/:id/debt-items',   restrictTo('admin'), debtCtrl.getDebtItemsByOwner);
+router.patch('/:id',     restrictTo('admin'), requirePermission('owners.update'), ctrl.updateOwner);
+router.delete('/:id',    restrictTo('admin'), requirePermission('owners.delete'), ctrl.deleteOwner);
+router.post('/:id/notify',      restrictTo('admin'), requirePermission('owners.update'), ctrl.notifyOwner);
+router.post('/:id/debt-items',  restrictTo('admin'), requirePermission('debt.create'), debtCtrl.createDebtItem);
+router.get('/:id/debt-items',   restrictTo('admin'), requirePermission('debt.read'), debtCtrl.getDebtItemsByOwner);
 
 module.exports = router;

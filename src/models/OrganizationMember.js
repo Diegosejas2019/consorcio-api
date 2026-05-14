@@ -20,6 +20,15 @@ const organizationMemberSchema = new Schema(
       enum: ['owner', 'admin', 'superadmin'],
       required: [true, 'El rol es obligatorio'],
     },
+    adminRole: {
+      type: String,
+      enum: ['owner_admin', 'read_only', 'billing_manager', 'communications_manager'],
+      default: undefined,
+    },
+    permissions: [{
+      type: String,
+      trim: true,
+    }],
     balance: {
       type: Number,
       default: 0,
@@ -49,6 +58,15 @@ const organizationMemberSchema = new Schema(
     deactivatedAt: Date,
     reactivatedAt: Date,
     createdBy: {
+      type: ObjectId,
+      ref: 'User',
+    },
+    updatedBy: {
+      type: ObjectId,
+      ref: 'User',
+    },
+    disabledAt: Date,
+    disabledBy: {
       type: ObjectId,
       ref: 'User',
     },
