@@ -3,6 +3,7 @@ const ADMIN_ROLE_LABELS = {
   read_only: 'Solo lectura',
   billing_manager: 'Cobranzas',
   communications_manager: 'Reclamos y avisos',
+  security_guard: 'Vigilador / Portería',
 };
 
 const READ_PERMISSIONS = [
@@ -83,6 +84,9 @@ const ALL_PERMISSIONS = [
   'votes.close',
   'visits.update',
   'visits.delete',
+  'visits.checkIn',
+  'visits.checkOut',
+  'visits.history.read',
   'reservations.update',
   'reservations.delete',
   'spaces.create',
@@ -124,6 +128,12 @@ const ROLE_PERMISSIONS = {
     'notices.read',
     'notices.create',
     'notices.update',
+  ],
+  security_guard: [
+    'visits.read',
+    'visits.checkIn',
+    'visits.checkOut',
+    'visits.history.read',
   ],
 };
 

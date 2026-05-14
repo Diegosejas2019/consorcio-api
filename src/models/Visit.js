@@ -38,6 +38,11 @@ const visitSchema = new mongoose.Schema(
       trim: true,
       maxlength: [500, 'La nota no puede superar 500 caracteres'],
     },
+    guardNote: {
+      type: String,
+      trim: true,
+      maxlength: [500, 'El comentario para portería no puede superar 500 caracteres'],
+    },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
