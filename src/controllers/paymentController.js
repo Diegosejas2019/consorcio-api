@@ -428,7 +428,7 @@ exports.getPayments = async (req, res, next) => {
     const { page = 1, limit = 20, status, month, ownerId, effectiveMonth } = req.query;
 
     const filter = { organization: req.orgId };
-    if (req.user.role === 'owner') filter.owner = req.user._id;
+    if (req.accessType === 'owner') filter.owner = req.ownerId;
     else if (ownerId) filter.owner = ownerId;
     if (status) filter.status = status;
     if (month)  filter.month  = month;
@@ -456,10 +456,10 @@ exports.getPayments = async (req, res, next) => {
     ]);
 
     const data = { payments };
-    if (req.user.role === 'owner') {
+    if (req.accessType === 'owner') {
       const availableItems = await buildAvailablePaymentItems({
         organizationId: req.orgId,
-        owner:          req.user,
+        owner:          { _id: req.ownerId },
         membership:     req.membership,
       });
       data.availableItems = availableItems;
@@ -488,7 +488,7 @@ exports.getPayment = async (req, res, next) => {
 
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
-    if (req.user.role === 'owner' && payment.owner._id.toString() !== req.user.id) {
+    if (req.accessType === 'owner' && payment.owner._id.toString() !== req.ownerId?.toString()) {
       return res.status(403).json({ success: false, message: 'Acceso denegado.' });
     }
 
@@ -504,14 +504,14 @@ exports.getAvailableItems = async (req, res, next) => {
     let owner = req.user;
     let membership = req.membership;
 
-    if (req.user.role !== 'owner' && !req.query.ownerId) {
+    if (req.accessType !== 'owner' && !req.query.ownerId) {
       return res.status(400).json({
         success: false,
         message: 'Selecciona un propietario para consultar conceptos disponibles.',
       });
     }
 
-    if (req.user.role !== 'owner' && req.query.ownerId) {
+    if (req.accessType !== 'owner' && req.query.ownerId) {
       const ctx = await getOwnerPaymentContext({
         organizationId: req.orgId,
         ownerId:        req.query.ownerId,
@@ -550,8 +550,8 @@ exports.createPayment = async (req, res, next) => {
     if (requestedPeriods.length > 0) {
       month = requestedPeriods[0];
     }
-    const isOwnerUser = req.user.role === 'owner';
-    const ownerId = isOwnerUser ? req.user._id : req.body.ownerId;
+    const isOwnerUser = req.accessType === 'owner';
+    const ownerId = isOwnerUser ? req.ownerId : req.body.ownerId;
     const createdByAdmin = !isOwnerUser;
 
     if (requestedPeriods.length > 0 && balanceAmount > 0) {
@@ -1004,10 +1004,10 @@ exports.getReceipt = async (req, res, next) => {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
-    const ownsPayment = payment.owner?.toString() === req.user.id
+    const ownsPayment = payment.owner?.toString() === req.ownerId?.toString()
       || (req.membership?._id && payment.membership?.toString() === req.membership._id.toString());
 
-    if (req.user.role === 'owner' && !ownsPayment) {
+    if (req.accessType === 'owner' && !ownsPayment) {
       return res.status(403).json({ success: false, message: 'Acceso denegado.' });
     }
 
@@ -1061,10 +1061,10 @@ exports.getSystemReceipt = async (req, res, next) => {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
-    const ownsPayment = payment.owner?.toString() === req.user.id
+    const ownsPayment = payment.owner?.toString() === req.ownerId?.toString()
       || (req.membership?._id && payment.membership?.toString() === req.membership._id.toString());
 
-    if (req.user.role === 'owner' && !ownsPayment) {
+    if (req.accessType === 'owner' && !ownsPayment) {
       return res.status(403).json({ success: false, message: 'Acceso denegado.' });
     }
 
@@ -1117,8 +1117,8 @@ exports.deletePayment = async (req, res, next) => {
     const payment = await Payment.findOne({ _id: req.params.id, organization: req.orgId });
     if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado.' });
 
-    if (req.user.role === 'owner') {
-      if (payment.owner.toString() !== req.user.id) {
+    if (req.accessType === 'owner') {
+      if (payment.owner.toString() !== req.ownerId?.toString()) {
         return res.status(403).json({ success: false, message: 'Acceso denegado.' });
       }
       if (payment.status !== 'pending') {

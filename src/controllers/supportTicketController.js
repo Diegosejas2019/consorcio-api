@@ -8,7 +8,7 @@ const allowedUpdateFields = ['status', 'priority', 'adminResponse'];
 
 exports.createTicket = async (req, res, next) => {
   try {
-    if (!['admin', 'owner'].includes(req.user.role)) {
+    if (!['admin', 'owner'].includes(req.accessType)) {
       return res.status(403).json({
         success: false,
         message: 'No tenes permisos para crear tickets de soporte.',
@@ -18,7 +18,7 @@ exports.createTicket = async (req, res, next) => {
     const ticket = await SupportTicket.create({
       organizationId: req.orgId,
       userId: req.user._id,
-      userRole: req.user.role,
+      userRole: req.accessType,
       type: req.body.type,
       title: req.body.title,
       description: req.body.description,

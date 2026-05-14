@@ -24,7 +24,7 @@ const paymentPlanInstallmentSchema = new mongoose.Schema(
     installmentNumber: { type: Number, required: true, min: 1 },
     dueDate:           { type: Date, required: true },
     amount:            { type: Number, required: true, min: 0.01 },
-    currency:          { type: String, enum: ['ARS', 'USD'], default: 'ARS' },
+    currency:          { type: String, enum: ['ARS'], default: 'ARS' },
 
     status: {
       type:    String,

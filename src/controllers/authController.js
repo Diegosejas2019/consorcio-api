@@ -11,6 +11,56 @@ const logger = require('../config/logger');
 const markLogin = (userId, extra = {}) =>
   User.findByIdAndUpdate(userId, { ...extra, lastLogin: new Date(), lastLoginAt: new Date() });
 
+const accessTypeFor = (membership) => (membership.role === 'admin' ? 'admin' : 'owner');
+
+function serializeAccess(membership) {
+  const accessType = accessTypeFor(membership);
+  return {
+    membershipId:     membership._id,
+    organizationId:   membership.organization._id,
+    organizationName: membership.organization.name,
+    role:             normalizeRole(membership.role),
+    accessType,
+    adminRole:        accessType === 'admin' ? normalizeAdminRole(membership) : null,
+    ownerId:          accessType === 'owner' ? membership.user : null,
+  };
+}
+
+async function getActiveMemberships(userId) {
+  const allMemberships = await OrganizationMember.find({ user: userId })
+    .populate('organization', 'name slug businessType isActive');
+  return {
+    allMemberships,
+    memberships: allMemberships.filter(m => m.isActive && m.organization?.isActive !== false),
+  };
+}
+
+function tokenContext(userId, membership) {
+  const accessType = accessTypeFor(membership);
+  return {
+    organizationId: membership.organization._id,
+    role:           membership.role,
+    membershipId:   membership._id,
+    accessType,
+    ownerId:        accessType === 'owner' ? userId : null,
+    adminRole:      accessType === 'admin' ? normalizeAdminRole(membership) : null,
+  };
+}
+
+function authData(user, membership, availableContexts = []) {
+  const accessType = membership ? accessTypeFor(membership) : (isSuperAdminRole(user.role) ? 'super_admin' : normalizeRole(user.role));
+  return {
+    user,
+    membership: membership || null,
+    accessType,
+    organizationId: membership?.organization?._id || user.organization?._id || user.organization || null,
+    ownerId: accessType === 'owner' ? user._id : null,
+    adminRole: membership ? normalizeAdminRole(membership) : (accessType === 'admin' ? 'owner_admin' : null),
+    permissions: membership ? getEffectivePermissions(membership) : [],
+    availableContexts,
+  };
+}
+
 
 // ── POST /api/auth/login ──────────────────────────────────────
 exports.login = async (req, res, next) => {
@@ -51,9 +101,8 @@ exports.login = async (req, res, next) => {
       return sendTokenResponse(user, 200, res);
     }
 
-    const allMemberships = await OrganizationMember.find({ user: user._id })
-      .populate('organization', 'name slug businessType isActive');
-    const memberships = allMemberships.filter(m => m.isActive && m.organization?.isActive !== false);
+    const { allMemberships, memberships } = await getActiveMemberships(user._id);
+    const availableContexts = memberships.map(serializeAccess);
 
     // Sin membresías → superadmin u owner legacy sin OrganizationMember (backward compat)
     if (memberships.length === 0) {
@@ -68,12 +117,8 @@ exports.login = async (req, res, next) => {
     }
 
     if (memberships.length === 1) {
-      const m = signToken(user._id, {
-        organizationId: memberships[0].organization._id,
-        role:           memberships[0].role,
-        membershipId:   memberships[0]._id,
-      });
       const membership = memberships[0];
+      const m = signToken(user._id, tokenContext(user._id, membership));
       user.password = undefined;
       user.fcmToken = undefined;
       user.role     = normalizeRole(membership.role);
@@ -82,12 +127,7 @@ exports.login = async (req, res, next) => {
         success: true,
         token: m,
         mustChangePassword: user.mustChangePassword || false,
-        data: {
-          user,
-          membership,
-          adminRole: normalizeAdminRole(membership),
-          permissions: getEffectivePermissions(membership),
-        },
+        data: authData(user, membership, availableContexts),
       });
     }
 
@@ -99,13 +139,8 @@ exports.login = async (req, res, next) => {
       requiresOrganizationSelection: true,
       selectionToken,
       mustChangePassword: user.mustChangePassword || false,
-      organizations: memberships.map(m => ({
-        membershipId:     m._id,
-        organizationId:   m.organization._id,
-        organizationName: m.organization.name,
-        role:             normalizeRole(m.role),
-        adminRole:        normalizeAdminRole(m),
-      })),
+      organizations: availableContexts,
+      availableContexts,
     });
   } catch (err) {
     next(err);
@@ -118,15 +153,69 @@ exports.register = async (req, res, next) => {
     const { name, email, password, unit, phone, phones, role } = req.body;
 
     // Solo admin puede crear otros admins (nunca superadmin via API)
-    const assignedRole = req.user?.role === 'admin' ? (role === 'admin' ? 'admin' : 'owner') : 'owner';
+    const assignedRole = req.accessType === 'admin' ? (role === 'admin' ? 'admin' : 'owner') : 'owner';
+    const organizationId = req.orgId || req.user?.organization?._id || req.user?.organization;
+    if (!organizationId) {
+      return res.status(400).json({ success: false, message: 'Esta operacion requiere una organizacion activa.' });
+    }
 
-    const user = await User.create({
-      name, email, password, unit, phone, phones,
+    const normalizedEmail = email?.toLowerCase().trim();
+    let user = await User.findOne({ email: normalizedEmail }).select('+password');
+
+    if (user && isSuperAdminRole(user.role)) {
+      return res.status(400).json({ success: false, message: 'No se puede reutilizar este email para una membresia de organizacion.' });
+    }
+
+    if (!user) {
+      user = await User.create({
+        name,
+        email: normalizedEmail,
+        password,
+        unit,
+        phone,
+        phones,
+        role: assignedRole,
+        organization: organizationId,
+      });
+      logger.info(`Nuevo usuario creado: ${user.email} [${user.role}]`);
+    } else {
+      const update = {};
+      if (!user.name && name) update.name = name;
+      if (!user.organization) update.organization = organizationId;
+      if (Object.keys(update).length) {
+        user = await User.findByIdAndUpdate(user._id, update, { new: true }).select('+password');
+      }
+      logger.info(`Usuario existente reutilizado: ${user.email} para rol ${assignedRole}`);
+    }
+
+    const existingMembership = await OrganizationMember.findOne({
+      user: user._id,
+      organization: organizationId,
       role: assignedRole,
-      organization: req.user?.organization?._id ?? req.user?.organization ?? undefined,
     });
+    if (existingMembership?.isActive) {
+      return res.status(400).json({ success: false, message: 'El usuario ya tiene ese acceso activo en esta organizacion.' });
+    }
+    if (existingMembership) {
+      existingMembership.isActive = true;
+      existingMembership.deactivatedByOrganization = false;
+      existingMembership.reactivatedAt = new Date();
+      existingMembership.updatedBy = req.user?._id;
+      if (assignedRole === 'admin') existingMembership.adminRole = existingMembership.adminRole || 'owner_admin';
+      await existingMembership.save();
+    } else {
+      await OrganizationMember.create({
+        user: user._id,
+        organization: organizationId,
+        role: assignedRole,
+        ...(assignedRole === 'admin' ? { adminRole: 'owner_admin' } : {}),
+        createdBy: req.user?._id,
+      });
+    }
 
-    logger.info(`Nuevo usuario creado: ${user.email} [${user.role}]`);
+    user.password = undefined;
+    user.fcmToken = undefined;
+    logger.info(`Membresia registrada: ${user.email} [${assignedRole}]`);
     sendTokenResponse(user, 201, res);
   } catch (err) {
     next(err);
@@ -136,16 +225,18 @@ exports.register = async (req, res, next) => {
 // ── GET /api/auth/me ──────────────────────────────────────────
 exports.getMe = async (req, res) => {
   const user = await User.findById(req.user.id);
+  const { memberships } = await getActiveMemberships(req.user.id);
+  const availableContexts = memberships.map(serializeAccess);
   user.role = normalizeRole(user.role);
   if (req.membership) {
     user.role = normalizeRole(req.membership.role);
   }
 
   let units = [];
-  if (req.membership && req.membership.role === 'owner' && req.membership.organization) {
+  if (req.accessType === 'owner' && req.membership?.organization) {
     units = await Unit.find({
       organization: req.membership.organization,
-      owner: req.user.id,
+      owner: req.ownerId,
       active: true,
     }).select('name coefficient customFee');
   }
@@ -153,11 +244,8 @@ exports.getMe = async (req, res) => {
   res.json({
     success: true,
     data: {
-      user,
-      membership: req.membership || null,
+      ...authData(user, req.membership || null, availableContexts),
       units,
-      adminRole: req.membership ? normalizeAdminRole(req.membership) : (user.role === 'admin' ? 'owner_admin' : null),
-      permissions: req.membership ? getEffectivePermissions(req.membership) : [],
     },
   });
 };
@@ -289,13 +377,11 @@ exports.selectOrganization = async (req, res, next) => {
       });
     }
 
-    const token = signToken(req.user._id, {
-      organizationId: membership.organization._id,
-      role:           membership.role,
-      membershipId:   membership._id,
-    });
+    const token = signToken(req.user._id, tokenContext(req.user._id, membership));
 
     const fullUser = await User.findById(req.user._id).select('mustChangePassword');
+    const { memberships } = await getActiveMemberships(req.user._id);
+    const availableContexts = memberships.map(serializeAccess);
     req.user.password = undefined;
     req.user.fcmToken = undefined;
     req.user.role     = normalizeRole(membership.role);
@@ -304,12 +390,7 @@ exports.selectOrganization = async (req, res, next) => {
       success: true,
       token,
       mustChangePassword: fullUser?.mustChangePassword || false,
-      data: {
-        user: req.user,
-        membership,
-        adminRole: normalizeAdminRole(membership),
-        permissions: getEffectivePermissions(membership),
-      },
+      data: authData(req.user, membership, availableContexts),
     });
   } catch (err) {
     next(err);
@@ -346,11 +427,7 @@ exports.changeTempPassword = async (req, res, next) => {
 
     // Emitir nuevo token para que el JWT no quede invalidado por passwordChangedAt
     const orgContext = req.membership
-      ? {
-          organizationId: req.membership.organization._id,
-          role:           req.membership.role,
-          membershipId:   req.membership._id,
-        }
+      ? tokenContext(user._id, req.membership)
       : null;
     const newToken = signToken(user._id, orgContext);
 

@@ -8,8 +8,8 @@ exports.getVisits = async (req, res, next) => {
 
     const filter = { organization: req.orgId };
 
-    if (req.user.role === 'owner') {
-      filter.owner = req.user._id;
+    if (req.accessType === 'owner') {
+      filter.owner = req.ownerId;
     } else if (ownerFilter) {
       filter.owner = ownerFilter;
     }
@@ -51,11 +51,14 @@ exports.createVisit = async (req, res, next) => {
 
     const visit = await Visit.create({
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
       name,
       type,
       expectedDate,
       note,
+      status:       'approved',
+      approvedBy:   req.user._id,
+      approvedAt:   new Date(),
     });
 
     await visit.populate('owner', 'name unit email');
@@ -100,8 +103,8 @@ exports.deleteVisit = async (req, res, next) => {
     const visit = await Visit.findOne({ _id: req.params.id, organization: req.orgId });
     if (!visit) return res.status(404).json({ success: false, message: 'Visita no encontrada.' });
 
-    if (req.user.role === 'owner') {
-      if (visit.owner.toString() !== req.user.id) {
+    if (req.accessType === 'owner') {
+      if (visit.owner.toString() !== req.ownerId?.toString()) {
         return res.status(403).json({ success: false, message: 'Acceso denegado.' });
       }
       if (visit.status !== 'pending') {

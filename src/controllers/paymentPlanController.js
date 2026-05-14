@@ -83,6 +83,9 @@ const formatPlan = (plan, installments = []) => {
 exports.requestPlan = async (req, res, next) => {
   try {
     const { includedPeriods = [], extraordinaryItems = [], balanceDebt, balanceUnitIds, debtItemIds, currency, requestComment } = req.body;
+    if (currency && currency !== 'ARS') {
+      return res.status(400).json({ success: false, message: 'GestionAr solo admite importes en pesos argentinos.' });
+    }
 
     if (!Array.isArray(includedPeriods)) {
       return res.status(400).json({ success: false, message: 'Debes incluir al menos un período en la solicitud.' });
@@ -95,7 +98,7 @@ exports.requestPlan = async (req, res, next) => {
 
     const existing = await PaymentPlan.findOne({
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
       status:       { $in: ACTIVE_PLAN_STATUSES },
       isActive:     true,
     });
@@ -108,7 +111,7 @@ exports.requestPlan = async (req, res, next) => {
 
     const snapshot = await buildPlanDebtSnapshot({
       organizationId: req.orgId,
-      ownerId: req.user._id,
+      ownerId: req.ownerId,
       selection: { includedPeriods, extraordinaryItems, balanceDebt, balanceUnitIds, debtItemIds },
     });
     if (!snapshot || snapshot.originalDebtAmount <= 0) {
@@ -117,10 +120,10 @@ exports.requestPlan = async (req, res, next) => {
 
     const plan = await PaymentPlan.create({
       organization:       req.orgId,
-      owner:              req.user._id,
+      owner:              req.ownerId,
       requestedBy:        'owner',
       status:             'requested',
-      currency:           currency || 'ARS',
+      currency:           'ARS',
       originalDebtAmount: snapshot.originalDebtAmount,
       interestType:       'none',
       interestValue:      0,
@@ -150,7 +153,7 @@ exports.getMyPlans = async (req, res, next) => {
   try {
     const plans = await PaymentPlan.find({
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
       isActive:     true,
     }).sort({ createdAt: -1 }).lean();
 
@@ -419,6 +422,9 @@ exports.createPlan = async (req, res, next) => {
     if (!ownerId) {
       return res.status(400).json({ success: false, message: 'El propietario es obligatorio.' });
     }
+    if (currency && currency !== 'ARS') {
+      return res.status(400).json({ success: false, message: 'GestionAr solo admite importes en pesos argentinos.' });
+    }
     if (!Array.isArray(includedPeriods || [])) {
       return res.status(400).json({ success: false, message: 'Debes incluir al menos un período.' });
     }
@@ -478,7 +484,7 @@ exports.createPlan = async (req, res, next) => {
       owner:             ownerId,
       requestedBy:       'admin',
       status:            'active',
-      currency:          currency || 'ARS',
+      currency:          'ARS',
       originalDebtAmount: origAmount,
       interestType:      iType,
       interestValue:     iValue,
@@ -674,7 +680,7 @@ exports.submitInstallmentPayment = async (req, res, next) => {
     const installment = await PaymentPlanInstallment.findOne({
       _id:          req.params.id,
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
     });
     if (!installment) return res.status(404).json({ success: false, message: 'Cuota no encontrada.' });
     if (installment.status === 'paid') {
@@ -705,7 +711,7 @@ exports.submitInstallmentPayment = async (req, res, next) => {
 
     const payment = await Payment.create({
       organization:  req.orgId,
-      owner:         req.user._id,
+      owner:         req.ownerId,
       amount:        installment.amount,
       status:        'pending',
       paymentMethod: 'manual',
@@ -716,7 +722,7 @@ exports.submitInstallmentPayment = async (req, res, next) => {
       receipt:       receiptData,
     });
 
-    logger.info(`[paymentPlan] Owner ${req.user._id} subió comprobante para cuota ${installment._id} — pago ${payment._id}`);
+    logger.info(`[paymentPlan] Owner ${req.ownerId} subió comprobante para cuota ${installment._id} — pago ${payment._id}`);
     res.status(201).json({
       success: true,
       message: 'Comprobante enviado. Quedará pendiente de revisión por el administrador.',

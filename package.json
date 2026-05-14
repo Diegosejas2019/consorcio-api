@@ -10,6 +10,7 @@
     "migrate:members": "node src/scripts/migrateOrganizationMembers.js",
     "migrate:payment-membership": "node src/scripts/migratePaymentMembership.js",
     "migrate:unit-debts": "node src/scripts/migrateUnitDebts.js",
+    "report:duplicate-emails": "node src/scripts/reportDuplicateEmails.js",
     "test": "jest --runInBand --forceExit",
     "test:watch": "jest --runInBand --watch",
     "test:coverage": "jest --runInBand --forceExit --coverage"

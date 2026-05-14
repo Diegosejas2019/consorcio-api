@@ -25,11 +25,11 @@ exports.getVotes = async (req, res, next) => {
 
     // Para owners: enriquecer cada voto con si ya votó
     let enriched = votes;
-    if (req.user.role === 'owner') {
+    if (req.accessType === 'owner') {
       const voteIds = votes.map((v) => v._id);
       const responses = await VoteResponse.find({
         vote: { $in: voteIds },
-        owner: req.user._id,
+        owner: req.ownerId,
       }).select('vote optionIndex');
 
       const responseMap = {};
@@ -73,8 +73,8 @@ exports.getVote = async (req, res, next) => {
 
     const obj = vote.toObject();
 
-    if (req.user.role === 'owner') {
-      const response = await VoteResponse.findOne({ vote: vote._id, owner: req.user._id });
+    if (req.accessType === 'owner') {
+      const response = await VoteResponse.findOne({ vote: vote._id, owner: req.ownerId });
       obj.myVote = response ? response.optionIndex : null;
       // Ocultar conteos si la votación sigue abierta, no venció, y el owner no votó aún
       const isExpired = vote.endsAt && new Date() > new Date(vote.endsAt);
@@ -232,7 +232,7 @@ exports.castVote = async (req, res, next) => {
     }
 
     // Verificar si ya votó
-    const existing = await VoteResponse.findOne({ vote: vote._id, owner: req.user._id });
+    const existing = await VoteResponse.findOne({ vote: vote._id, owner: req.ownerId });
     if (existing) {
       return res.status(400).json({ success: false, message: 'Ya emitiste tu voto en esta votación.' });
     }
@@ -241,7 +241,7 @@ exports.castVote = async (req, res, next) => {
     await VoteResponse.create({
       vote:         vote._id,
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
       optionIndex,
     });
 

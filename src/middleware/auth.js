@@ -98,6 +98,8 @@ exports.protect = async (req, res, next) => {
       req.orgId      = membership.organization._id;
       req.org        = membership.organization;
       req.user.role  = normalizeRole(membership.role);
+      req.accessType = membership.role === 'admin' ? 'admin' : 'owner';
+      req.ownerId    = req.accessType === 'owner' ? req.user._id : null;
       if (req.user.role === 'admin') {
         req.adminRole = normalizeAdminRole(membership);
         req.permissions = getEffectivePermissions(membership);
@@ -105,6 +107,8 @@ exports.protect = async (req, res, next) => {
     } else {
       req.orgId = isSuperAdminRole(req.user.role) ? null : (user.organization?._id ?? null);
       req.org   = isSuperAdminRole(req.user.role) ? null : (user.organization ?? null);
+      req.accessType = isSuperAdminRole(req.user.role) ? 'super_admin' : req.user.role;
+      req.ownerId    = req.accessType === 'owner' ? req.user._id : null;
       if (req.user.role === 'admin') {
         req.adminRole = 'owner_admin';
         req.permissions = [];
@@ -129,7 +133,10 @@ exports.protect = async (req, res, next) => {
 exports.restrictTo = (...roles) => {
   const allowedRoles = expandRoles(roles);
   return (req, res, next) => {
-    if (!allowedRoles.includes(normalizeRole(req.user.role))) {
+    const currentRole = req.accessType === 'super_admin'
+      ? normalizeRole(req.user.role)
+      : (req.accessType || normalizeRole(req.user.role));
+    if (!allowedRoles.includes(currentRole)) {
       return res.status(403).json({
         success: false,
         message: 'No tenés permisos para realizar esta acción.',
@@ -155,9 +162,9 @@ exports.requireOrg = (req, res, next) => {
 // ── Propietario solo accede a sus propios datos ───────────────
 exports.ownDataOnly = (paramField = 'id') => {
   return (req, res, next) => {
-    if (req.user.role === 'admin' || isSuperAdminRole(req.user.role)) return next();
+    if (req.accessType === 'admin' || isSuperAdminRole(req.user.role)) return next();
     const targetId = req.params[paramField];
-    if (targetId && targetId !== req.user.id) {
+    if (targetId && targetId !== String(req.ownerId || req.user.id)) {
       return res.status(403).json({
         success: false,
         message: 'Solo podés acceder a tus propios datos.',
@@ -174,6 +181,9 @@ exports.signToken = (userId, orgContext = null) => {
     payload.organizationId = orgContext.organizationId;
     payload.role           = orgContext.role;
     payload.membershipId   = orgContext.membershipId;
+    payload.accessType     = orgContext.accessType || (orgContext.role === 'admin' ? 'admin' : 'owner');
+    if (payload.accessType === 'owner') payload.ownerId = orgContext.ownerId || userId;
+    if (payload.accessType === 'admin' && orgContext.adminRole) payload.adminRole = orgContext.adminRole;
   }
   return jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
@@ -185,7 +195,7 @@ exports.signSelectionToken = (userId) =>
   jwt.sign({ id: userId, pendingOrgSelection: true }, process.env.JWT_SECRET, { expiresIn: '10m' });
 
 // ── Middleware exclusivo para /select-organization ────────────
-// Acepta solo selectionTokens (pendingOrgSelection: true)
+// Acepta selectionTokens y tokens de sesion activos para cambiar de contexto.
 exports.protectSelection = async (req, res, next) => {
   try {
     let token;
@@ -204,12 +214,12 @@ exports.protectSelection = async (req, res, next) => {
         : 'Token inválido.';
       return res.status(401).json({ success: false, message });
     }
-    if (!decoded.pendingOrgSelection) {
-      return res.status(401).json({ success: false, message: 'Token no válido para esta operación.' });
-    }
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).select('+passwordChangedAt');
     if (!user || !user.isActive) {
       return res.status(401).json({ success: false, message: 'El usuario ya no existe o está desactivado.' });
+    }
+    if (!decoded.pendingOrgSelection && user.changedPasswordAfter(decoded.iat)) {
+      return res.status(401).json({ success: false, message: 'Contraseña cambiada recientemente. Iniciá sesión nuevamente.' });
     }
     req.user = user;
     next();
@@ -232,6 +242,14 @@ exports.sendTokenResponse = (user, statusCode, res) => {
     success: true,
     token,
     mustChangePassword: user.mustChangePassword || false,
-    data: { user },
+    data: {
+      user,
+      accessType: isSuperAdminRole(user.role) ? 'super_admin' : user.role,
+      organizationId: user.organization?._id || user.organization || null,
+      ownerId: user.role === 'owner' ? user._id : null,
+      adminRole: user.role === 'admin' ? 'owner_admin' : null,
+      permissions: [],
+      availableContexts: [],
+    },
   });
 };

@@ -35,8 +35,8 @@ const ownerDebtItemSchema = new mongoose.Schema(
     currency: {
       type: String,
       enum: {
-        values: ['ARS', 'USD'],
-        message: 'La moneda debe ser ARS o USD.',
+        values: ['ARS'],
+        message: 'GestionAr solo admite importes en pesos argentinos.',
       },
       required: [true, 'La moneda es obligatoria'],
     },

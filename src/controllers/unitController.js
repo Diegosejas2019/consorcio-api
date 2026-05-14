@@ -72,8 +72,8 @@ exports.getUnits = async (req, res, next) => {
   try {
     const filter = { organization: req.orgId, active: true };
 
-    if (req.user.role === 'owner') {
-      filter.owner = req.user._id;
+    if (req.accessType === 'owner') {
+      filter.owner = req.ownerId;
     } else if (req.query.ownerId) {
       filter.owner = req.query.ownerId;
     }

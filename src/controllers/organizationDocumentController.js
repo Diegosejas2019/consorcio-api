@@ -17,13 +17,13 @@ function buildFileData(file) {
 }
 
 function canAccessDocument(req, document) {
-  return req.user.role !== 'owner' || document.visibility === 'owners';
+  return req.accessType !== 'owner' || document.visibility === 'owners';
 }
 
 function buildDocumentFilter(req) {
   const filter = { organization: req.orgId, isActive: { $ne: false } };
 
-  if (req.user.role === 'owner') {
+  if (req.accessType === 'owner') {
     filter.visibility = 'owners';
   } else if (req.query.visibility) {
     filter.visibility = req.query.visibility;

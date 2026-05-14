@@ -42,7 +42,7 @@ const debtSnapshotSchema = new mongoose.Schema(
         type:        { type: String },
         description: { type: String },
         amount:      { type: Number, default: 0 },
-        currency:    { type: String, enum: ['ARS', 'USD'], default: 'ARS' },
+        currency:    { type: String, enum: ['ARS'], default: 'ARS' },
       }],
       default: [],
       _id: false,
@@ -78,7 +78,7 @@ const paymentPlanSchema = new mongoose.Schema(
     },
     currency: {
       type:    String,
-      enum:    ['ARS', 'USD'],
+      enum:    ['ARS'],
       default: 'ARS',
     },
 

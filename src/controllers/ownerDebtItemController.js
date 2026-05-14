@@ -10,6 +10,7 @@ exports.createDebtItem = async (req, res, next) => {
     const membership = await OrganizationMember.findOne({
       user: ownerId,
       organization: req.orgId,
+      role: 'owner',
       isActive: { $ne: false },
     });
     if (!membership) {
@@ -27,8 +28,8 @@ exports.createDebtItem = async (req, res, next) => {
     if (!amount || Number(amount) <= 0) {
       return res.status(400).json({ success: false, message: 'El importe debe ser mayor a cero.' });
     }
-    if (!currency || !['ARS', 'USD'].includes(currency)) {
-      return res.status(400).json({ success: false, message: 'La moneda debe ser ARS o USD.' });
+    if (currency && currency !== 'ARS') {
+      return res.status(400).json({ success: false, message: 'GestionAr solo admite importes en pesos argentinos.' });
     }
 
     const debtItem = await OwnerDebtItem.create({
@@ -37,7 +38,7 @@ exports.createDebtItem = async (req, res, next) => {
       type,
       description:  String(description).trim(),
       amount:       Number(amount),
-      currency,
+      currency:     'ARS',
       originDate:   originDate || undefined,
       dueDate:      dueDate    || undefined,
       createdBy:    req.user._id,
@@ -58,6 +59,7 @@ exports.getDebtItemsByOwner = async (req, res, next) => {
     const membership = await OrganizationMember.findOne({
       user: ownerId,
       organization: req.orgId,
+      role: 'owner',
       isActive: { $ne: false },
     });
     if (!membership) {
@@ -113,7 +115,7 @@ exports.getMyDebtItems = async (req, res, next) => {
   try {
     const debtItems = await OwnerDebtItem.find({
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
       isActive:     { $ne: false },
       status:       { $nin: ['cancelled'] },
     }).sort({ createdAt: -1 });

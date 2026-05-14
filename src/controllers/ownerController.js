@@ -36,6 +36,7 @@ function clampLimit(value, fallback, max) {
 
 // Campos del User que son identidad global (no datos financieros por org)
 const USER_FIELDS = new Set(['name', 'email', 'password', 'unit', 'unitId', 'phone', 'phones', 'role', 'organization', 'createdBy', 'isActive']);
+const EXISTING_USER_FIELDS = new Set(['name', 'unit', 'unitId', 'phone', 'phones', 'isActive']);
 
 function normalizeUnitName(raw) {
   return String(raw || '').trim().replace(/\s+/g, ' ');
@@ -326,7 +327,7 @@ exports.getMySummary = async (req, res, next) => {
   try {
     const paymentsLimit = clampLimit(req.query.paymentsLimit, 50, 100);
     const noticesLimit = clampLimit(req.query.noticesLimit, 3, 20);
-    const ownerId = req.user._id;
+    const ownerId = req.ownerId;
     const membership = req.membership || await OrganizationMember.findOne({
       user:         ownerId,
       organization: req.orgId,
@@ -528,6 +529,7 @@ exports.createOwner = async (req, res, next) => {
         const membershipExists = await OrganizationMember.findOne({
           user: existingActive._id,
           organization: req.orgId,
+          role: 'owner',
           isActive: true,
         });
         if (membershipExists) {
@@ -542,7 +544,7 @@ exports.createOwner = async (req, res, next) => {
           ownerData.unit = preservedUnit;
         }
         const { password: _p, ...rawUpdate } = ownerData;
-        const updateFields = Object.fromEntries(Object.entries(rawUpdate).filter(([k]) => USER_FIELDS.has(k)));
+        const updateFields = Object.fromEntries(Object.entries(rawUpdate).filter(([k]) => EXISTING_USER_FIELDS.has(k)));
         owner = await User.findByIdAndUpdate(existingActive._id, updateFields, { new: true, runValidators: false });
         sendWelcomeEmail = false;
         logger.info(`Propietario existente vinculado: ${owner.email} [org: ${req.orgId}]`);
@@ -665,6 +667,7 @@ exports.updateOwner = async (req, res, next) => {
     const membership = await OrganizationMember.findOne({
       user: req.params.id,
       organization: req.orgId,
+      role: 'owner',
       isActive: true,
     });
     if (!membership) return res.status(404).json({ success: false, message: 'Propietario no encontrado.' });
@@ -861,7 +864,7 @@ exports.cancelEmailChange = async (req, res, next) => {
 exports.deleteOwner = async (req, res, next) => {
   try {
     const membership = await OrganizationMember.findOneAndUpdate(
-      { user: req.params.id, organization: req.orgId, isActive: true },
+      { user: req.params.id, organization: req.orgId, role: 'owner', isActive: true },
       { isActive: false },
       { new: true }
     );
@@ -997,6 +1000,7 @@ exports.bulkCreateOwners = async (req, res, next) => {
           const membershipExists = await OrganizationMember.findOne({
             user: existingActive._id,
             organization: req.orgId,
+            role: 'owner',
             isActive: true,
           });
           if (membershipExists) {
@@ -1004,7 +1008,7 @@ exports.bulkCreateOwners = async (req, res, next) => {
             continue;
           }
           const { password: _p, ...rawBulkUpdate } = ownerData;
-          const bulkUpdateFields = Object.fromEntries(Object.entries(rawBulkUpdate).filter(([k]) => USER_FIELDS.has(k)));
+          const bulkUpdateFields = Object.fromEntries(Object.entries(rawBulkUpdate).filter(([k]) => EXISTING_USER_FIELDS.has(k)));
           owner = await User.findByIdAndUpdate(existingActive._id, bulkUpdateFields, { new: true, runValidators: false });
           sendEmail = false;
           logger.info(`Bulk: propietario existente vinculado ${owner.email} [org: ${req.orgId}]`);
@@ -1105,6 +1109,7 @@ exports.checkEmail = async (req, res, next) => {
     const membership = await OrganizationMember.findOne({
       user: user._id,
       organization: req.orgId,
+      role: 'owner',
       isActive: true,
     });
 

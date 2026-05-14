@@ -17,7 +17,7 @@ exports.getReservations = async (req, res, next) => {
     const { page = 1, limit = 50, date, spaceId, status } = req.query;
 
     const filter = { organization: req.orgId };
-    if (req.user.role === 'owner') filter.owner = req.user._id;
+    if (req.accessType === 'owner') filter.owner = req.ownerId;
     if (date)    filter.date  = date;
     if (spaceId) filter.space = spaceId;
     if (status)  filter.status = status;
@@ -98,7 +98,7 @@ exports.createReservation = async (req, res, next) => {
 
     const reservation = await Reservation.create({
       organization: req.orgId,
-      owner:        req.user._id,
+      owner:        req.ownerId,
       space:        spaceId,
       date,
       startTime,
@@ -175,8 +175,8 @@ exports.deleteReservation = async (req, res, next) => {
     const reservation = await Reservation.findOne({ _id: req.params.id, organization: req.orgId });
     if (!reservation) return res.status(404).json({ success: false, message: 'Reserva no encontrada.' });
 
-    if (req.user.role === 'owner') {
-      if (reservation.owner.toString() !== req.user.id) {
+    if (req.accessType === 'owner') {
+      if (reservation.owner.toString() !== req.ownerId?.toString()) {
         return res.status(403).json({ success: false, message: 'Acceso denegado.' });
       }
       if (!['pending', 'approved'].includes(reservation.status)) {

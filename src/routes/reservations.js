@@ -6,7 +6,7 @@ const { requirePermission, requirePermissionForAdmin } = require('../middleware/
 router.use(protect);
 
 router.get('/',    requirePermissionForAdmin('reservations.read'), ctrl.getReservations);
-router.post('/',   ctrl.createReservation);
+router.post('/',   restrictTo('owner'), ctrl.createReservation);
 router.patch('/:id/status', restrictTo('admin'), requirePermission('reservations.update'), ctrl.updateStatus);
 router.delete('/:id', requirePermissionForAdmin('reservations.delete'), ctrl.deleteReservation);
 

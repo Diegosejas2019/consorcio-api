@@ -11,7 +11,7 @@ exports.getClaims = async (req, res, next) => {
     const { page = 1, limit = 20, status } = req.query;
 
     const filter = { organization: req.orgId, isActive: { $ne: false } };
-    if (req.user.role === 'owner') filter.owner = req.user._id;
+    if (req.accessType === 'owner') filter.owner = req.ownerId;
     if (status) filter.status = status;
 
     const [claims, total] = await Promise.all([
@@ -40,7 +40,7 @@ exports.createClaim = async (req, res, next) => {
   try {
     const { category, title, body } = req.body;
 
-    const claimData = { organization: req.orgId, owner: req.user._id, category, title, body };
+    const claimData = { organization: req.orgId, owner: req.ownerId, category, title, body };
 
     if (req.files?.length) {
       claimData.attachments = req.files.map(f => ({
@@ -115,8 +115,8 @@ exports.deleteClaim = async (req, res, next) => {
     const claim = await Claim.findOne({ _id: req.params.id, organization: req.orgId, isActive: { $ne: false } });
     if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });
 
-    if (req.user.role === 'owner') {
-      if (claim.owner.toString() !== req.user.id) {
+    if (req.accessType === 'owner') {
+      if (claim.owner.toString() !== req.ownerId?.toString()) {
         return res.status(403).json({ success: false, message: 'Acceso denegado.' });
       }
       if (claim.status !== 'open') {
@@ -144,7 +144,7 @@ exports.deleteClaim = async (req, res, next) => {
 exports.getAttachment = async (req, res, next) => {
   try {
     const filter = { _id: req.params.id, organization: req.orgId, isActive: { $ne: false } };
-    if (req.user.role === 'owner') filter.owner = req.user._id;
+    if (req.accessType === 'owner') filter.owner = req.ownerId;
 
     const claim = await Claim.findOne(filter);
     if (!claim) return res.status(404).json({ success: false, message: 'Reclamo no encontrado.' });

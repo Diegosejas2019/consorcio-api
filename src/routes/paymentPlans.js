@@ -15,9 +15,9 @@ router.param('id', (req, res, next, id) => {
 });
 
 // ── Owner ──────────────────────────────────────────────────────
-router.post('/request', ctrl.requestPlan);
-router.get('/my',       ctrl.getMyPlans);
-router.post('/installments/:id/pay', upload.single('receipt'), ctrl.submitInstallmentPayment);
+router.post('/request', restrictTo('owner'), ctrl.requestPlan);
+router.get('/my',       restrictTo('owner'), ctrl.getMyPlans);
+router.post('/installments/:id/pay', restrictTo('owner'), upload.single('receipt'), ctrl.submitInstallmentPayment);
 
 // ── Admin ──────────────────────────────────────────────────────
 router.get('/admin',          restrictTo('admin'), requirePermission('paymentPlans.read'), ctrl.listPlans);
