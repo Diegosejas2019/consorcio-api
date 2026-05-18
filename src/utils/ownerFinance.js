@@ -23,7 +23,35 @@ function calculateUnitFee(unit = {}, org = {}) {
 }
 
 function getUnitStartBillingPeriod(unit = {}, membership = {}) {
-  return unit.startBillingPeriod || membership?.startBillingPeriod;
+  return unit.startBillingPeriod || unit.collectionStartPeriod || membership?.startBillingPeriod;
+}
+
+function isUnitChargeableForPeriod(unit = {}, membership = {}, period) {
+  if (!period) return false;
+  const startBilling = getUnitStartBillingPeriod(unit, membership);
+  return !startBilling || period >= startBilling;
+}
+
+function getChargeableUnitsForPeriod(units = [], membership = {}, period) {
+  return (units || []).filter(unit => isUnitChargeableForPeriod(unit, membership, period));
+}
+
+function getUnitPaymentSnapshot(unit = {}, org = {}) {
+  const amount = calculateUnitFee(unit, org);
+  return {
+    unit: unit._id || unit.id,
+    name: unit.name,
+    amount,
+  };
+}
+
+function buildUnitPaymentSnapshot(units = [], org = {}) {
+  const breakdown = (units || []).map(unit => getUnitPaymentSnapshot(unit, org));
+  return {
+    units: (units || []).map(unit => unit._id || unit.id).filter(Boolean),
+    breakdown,
+    amount: breakdown.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+  };
 }
 
 function getChargeablePeriods(membership = {}, org = {}) {
@@ -108,13 +136,20 @@ function summarizeUnitDebts(units = []) {
     id:           (unit._id || unit.id)?.toString(),
     _id:          unit._id || unit.id,
     name:         unit.name,
+    startBillingPeriod: unit.startBillingPeriod,
+    collectionStartPeriod: unit.startBillingPeriod,
     balance:      normalizeDebtBalance(unit.balance),
+    initialDebt:  computeUnitBalanceOwed(unit),
+    previousBalance: computeUnitBalanceOwed(unit),
     balanceOwed:  computeUnitBalanceOwed(unit),
     isDebtor:     computeUnitBalanceOwed(unit) > 0 || unit.isDebtor === true,
+    active:       unit.active,
+    status:       unit.status,
   }));
 }
 
 module.exports = {
+  buildUnitPaymentSnapshot,
   calculateOwnerFee,
   calculateUnitFee,
   computeTotalOwed,
@@ -124,8 +159,11 @@ module.exports = {
   computeUnitsBalanceOwed,
   computeUnitsDebtorFlag,
   getChargeablePeriodsForUnit,
+  getChargeableUnitsForPeriod,
   getChargeablePeriods,
   getPaidMonthsForUnit,
+  getUnitStartBillingPeriod,
+  isUnitChargeableForPeriod,
   getUnpaidPeriodsForUnit,
   getUnpaidPeriods,
   normalizeDebtBalance,

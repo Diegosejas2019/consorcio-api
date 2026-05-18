@@ -259,4 +259,62 @@ describe('GET /api/payments - items disponibles para pagar', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.extraordinary).toHaveLength(0);
   });
+
+  test('calcula periodos disponibles e importes segun inicio de cobro de cada unidad', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-02';
+    const { user, token, orgId } = await createOwnerWithToken();
+    await Organization.findByIdAndUpdate(orgId, {
+      monthlyFee: 1000,
+      paymentPeriods: ['2025-12', '2026-01', '2026-02'],
+    });
+    await Unit.create([
+      { organization: orgId, owner: user._id, name: 'Lote 1', customFee: 1000, startBillingPeriod: '2025-12', active: true },
+      { organization: orgId, owner: user._id, name: 'Lote 2', customFee: 2000, startBillingPeriod: '2026-02', active: true },
+    ]);
+
+    const res = await request(app)
+      .get('/api/payments/available-items')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.periodItems).toEqual([
+      expect.objectContaining({
+        month: '2025-12',
+        amount: 1000,
+        units: [expect.objectContaining({ name: 'Lote 1', amount: 1000 })],
+      }),
+      expect.objectContaining({
+        month: '2026-01',
+        amount: 1000,
+        units: [expect.objectContaining({ name: 'Lote 1', amount: 1000 })],
+      }),
+      expect.objectContaining({
+        month: '2026-02',
+        amount: 3000,
+        units: expect.arrayContaining([
+          expect.objectContaining({ name: 'Lote 1', amount: 1000 }),
+          expect.objectContaining({ name: 'Lote 2', amount: 2000 }),
+        ]),
+      }),
+    ]);
+  });
+
+  test('devuelve deuda inicial separada por unidad sin duplicarla', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    await Unit.create([
+      { organization: orgId, owner: user._id, name: 'Lote deuda 1', balance: -5000, isDebtor: true, active: true },
+      { organization: orgId, owner: user._id, name: 'Lote deuda 2', balance: -7000, isDebtor: true, active: true },
+    ]);
+
+    const res = await request(app)
+      .get('/api/payments/available-items')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.balanceDebt).toBe(12000);
+    expect(res.body.data.balanceUnits.map(u => ({ name: u.name, amount: u.amount }))).toEqual([
+      { name: 'Lote deuda 1', amount: 5000 },
+      { name: 'Lote deuda 2', amount: 7000 },
+    ]);
+  });
 });

@@ -3,6 +3,7 @@ const User         = require('../models/User');
 const Organization = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
 const logger       = require('../config/logger');
+const { computeUnitBalanceOwed, normalizeDebtBalance } = require('../utils/ownerFinance');
 
 // ── Helper: calcular monto final de una unidad ────────────────
 function calcUnitFee(unit, monthlyFee) {
@@ -15,6 +16,18 @@ function getEffectiveUnitStatus(unit) {
   if (unit.owner) return 'occupied';
   if (unit.status === 'inactive') return 'inactive';
   return 'available';
+}
+
+function enrichUnitBilling(unit) {
+  const raw = unit.toJSON ? unit.toJSON() : unit;
+  const initialDebt = computeUnitBalanceOwed(raw);
+  return {
+    ...raw,
+    collectionStartPeriod: raw.startBillingPeriod,
+    initialDebt,
+    previousBalance: initialDebt,
+    balance: normalizeDebtBalance(raw.balance),
+  };
 }
 
 async function findActiveOwnerInOrg(ownerId, orgId) {
@@ -88,7 +101,7 @@ exports.getUnits = async (req, res, next) => {
     const monthlyFee = org?.monthlyFee ?? 0;
 
     const enriched = units.map(u => {
-      const unit = u.toJSON();
+      const unit = enrichUnitBilling(u);
       return {
         ...unit,
         status: getEffectiveUnitStatus(unit),
@@ -139,7 +152,7 @@ exports.createUnit = async (req, res, next) => {
     const finalFee = calcUnitFee(unit, org?.monthlyFee ?? 0);
 
     logger.info(`Unidad creada: ${unit._id} — ${unit.name}${owner ? ` — owner: ${owner.email}` : ' (sin propietario)'}`);
-    res.status(201).json({ success: true, data: { unit: { ...unit.toJSON(), finalFee } } });
+    res.status(201).json({ success: true, data: { unit: { ...enrichUnitBilling(unit), finalFee } } });
   } catch (err) {
     next(err);
   }
@@ -239,7 +252,7 @@ exports.updateUnit = async (req, res, next) => {
     const finalFee = calcUnitFee(unit, org?.monthlyFee ?? 0);
 
     logger.info(`Unidad actualizada: ${unit._id} — ${unit.name}`);
-    res.json({ success: true, data: { unit: { ...unit.toJSON(), finalFee } } });
+    res.json({ success: true, data: { unit: { ...enrichUnitBilling(unit), finalFee } } });
   } catch (err) {
     next(err);
   }

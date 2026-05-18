@@ -12,7 +12,11 @@ const emailService   = require('../services/emailService');
 const firebaseService = require('../services/firebaseService');
 const receiptService = require('../services/receiptService');
 const { currentYYYYMM } = require('../utils/periods');
-const { normalizeDebtBalance } = require('../utils/ownerFinance');
+const {
+  buildUnitPaymentSnapshot,
+  getChargeableUnitsForPeriod,
+  normalizeDebtBalance,
+} = require('../utils/ownerFinance');
 const logger  = require('../config/logger');
 
 async function settleOwnerAccount(payment) {
@@ -111,7 +115,7 @@ function parseExternalReference(reference) {
 async function getOwnerPaymentContext(orgId, ownerId) {
   const [org, membership, ownerUnits, allOrgUnits] = await Promise.all([
     Organization.findById(orgId),
-    OrganizationMember.findOne({ user: ownerId, organization: orgId, role: 'owner' }).select('_id balance isDebtor'),
+    OrganizationMember.findOne({ user: ownerId, organization: orgId, role: 'owner' }).select('_id balance isDebtor startBillingPeriod'),
     Unit.find({ owner: ownerId, active: true, organization: orgId }).sort({ name: 1 }).lean(),
     Unit.find({ organization: orgId, active: true }).lean(),
   ]);
@@ -126,7 +130,13 @@ async function getOwnerPaymentContext(orgId, ownerId) {
     amount: calcUnitFee(u, monthlyFee),
   }));
 
-  return { org, membership, ownerUnits, allOrgUnits, unitAmount, unitsSnapshot, breakdownSnapshot };
+  const getMonthlySnapshot = (period) => {
+    const monthlyUnits = getChargeableUnitsForPeriod(ownerUnits, membership || {}, period);
+    if (monthlyUnits.length) return buildUnitPaymentSnapshot(monthlyUnits, org || {});
+    return { units: [], breakdown: [], amount: ownerUnits.length ? 0 : unitAmount };
+  };
+
+  return { org, membership, ownerUnits, allOrgUnits, unitAmount, unitsSnapshot, breakdownSnapshot, getMonthlySnapshot };
 }
 
 async function buildExtraordinaryItems({ orgId, ownerId, extraordinaryIds, ownerUnits, allOrgUnits }) {
@@ -184,19 +194,23 @@ async function createPaymentsFromMPReference(mpData) {
     const activeSet = new Set(existingActive.map(p => p.month));
     const newMonths = ref.periods.filter(m => !activeSet.has(m));
 
-    docs.push(...newMonths.map(month => ({
-      organization:   ref.orgId,
-      owner:          ref.ownerId,
-      membership:     ctx.membership?._id,
-      month,
-      amount:         ctx.unitAmount,
-      status:         'pending',
-      paymentMethod:  'mercadopago',
-      type:           'monthly',
-      mpPreferenceId: mpData.preference_id,
-      units:          ctx.unitsSnapshot,
-      breakdown:      ctx.breakdownSnapshot,
-    })));
+    docs.push(...newMonths.map(month => {
+      const snapshot = ctx.getMonthlySnapshot(month);
+      if (snapshot.amount <= 0) return null;
+      return {
+        organization:   ref.orgId,
+        owner:          ref.ownerId,
+        membership:     ctx.membership?._id,
+        month,
+        amount:         snapshot.amount,
+        status:         'pending',
+        paymentMethod:  'mercadopago',
+        type:           'monthly',
+        mpPreferenceId: mpData.preference_id,
+        units:          snapshot.units,
+        breakdown:      snapshot.breakdown,
+      };
+    }).filter(Boolean));
   }
 
   if (ref.extraordinaryIds.length) {
@@ -427,8 +441,8 @@ exports.createPreference = async (req, res, next) => {
           status: { $in: ['pending', 'approved'] },
         }).select('month');
         const activeSet = new Set(existingActive.map(p => p.month));
-        payablePeriods = v2Periods.filter(p => !activeSet.has(p));
-        const periodsAmount = ctx.unitAmount * payablePeriods.length;
+        payablePeriods = v2Periods.filter(p => !activeSet.has(p) && ctx.getMonthlySnapshot(p).amount > 0);
+        const periodsAmount = payablePeriods.reduce((sum, period) => sum + ctx.getMonthlySnapshot(period).amount, 0);
         if (periodsAmount > 0) {
           totalAmount += periodsAmount;
           const periodLabel = payablePeriods.length === 1 ? payablePeriods[0] : `${payablePeriods.length} períodos`;
@@ -567,18 +581,19 @@ exports.createPreference = async (req, res, next) => {
       status: { $in: ['pending', 'approved'] },
     }).select('month');
     const activeSet = new Set(existingActive.map(p => p.month));
-    const payablePeriods = periods.filter(p => !activeSet.has(p));
+    let payablePeriods = periods.filter(p => !activeSet.has(p));
 
     if (payablePeriods.length === 0) {
       return res.status(400).json({ success: false, message: 'Todos los períodos seleccionados ya tienen un pago activo.' });
     }
 
-    // Calcular monto desde unidades activas del propietario
-    const activeUnits = await Unit.find({ owner: owner._id, active: true, organization: req.orgId }).sort({ name: 1 });
-    const unitTotal = activeUnits.length > 0
-      ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
-      : monthlyFee;
-    const totalAmount = unitTotal * payablePeriods.length;
+    const ctx = await getOwnerPaymentContext(req.orgId, owner._id);
+    const payableSnapshots = payablePeriods.map(period => ({ period, snapshot: ctx.getMonthlySnapshot(period) }))
+      .filter(item => item.snapshot.amount > 0);
+    const totalAmount = payableSnapshots.reduce((sum, item) => sum + item.snapshot.amount, 0);
+    if (totalAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'No hay unidades habilitadas para los periodos seleccionados.' });
+    }
 
     const client     = await getMPClient(req.orgId);
     const preference = new Preference(client);

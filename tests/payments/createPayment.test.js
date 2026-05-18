@@ -151,6 +151,43 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.body.success).toBe(true);
   });
 
+  test('usa solo las unidades cobrables del periodo en el snapshot del pago mensual', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-02';
+    const { user, token, orgId } = await createOwnerWithToken();
+    const Organization = require('../../src/models/Organization');
+    await Organization.findByIdAndUpdate(orgId, {
+      monthlyFee: 1000,
+      paymentPeriods: ['2026-01', '2026-02'],
+    });
+    const [lote1, lote2] = await Unit.create([
+      { organization: orgId, owner: user._id, name: 'Lote 1', customFee: 1000, startBillingPeriod: '2026-01', active: true },
+      { organization: orgId, owner: user._id, name: 'Lote 2', customFee: 2000, startBillingPeriod: '2026-02', active: true },
+    ]);
+
+    const jan = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('month', '2026-01')
+      .attach('receipt', FAKE_PDF, { filename: 'enero.pdf', contentType: 'application/pdf' });
+
+    expect(jan.status).toBe(201);
+    expect(jan.body.data.payment.amount).toBe(1000);
+    expect(jan.body.data.payment.units.map(String)).toEqual([lote1._id.toString()]);
+    expect(jan.body.data.payment.breakdown).toEqual([
+      expect.objectContaining({ name: 'Lote 1', amount: 1000 }),
+    ]);
+
+    const feb = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('month', '2026-02')
+      .attach('receipt', FAKE_PDF, { filename: 'febrero.pdf', contentType: 'application/pdf' });
+
+    expect(feb.status).toBe(201);
+    expect(feb.body.data.payment.amount).toBe(3000);
+    expect(feb.body.data.payment.units.map(String).sort()).toEqual([lote1._id.toString(), lote2._id.toString()].sort());
+  });
+
   test('5. Sin autenticación → 401', async () => {
     const res = await request(app)
       .post('/api/payments')

@@ -27,6 +27,7 @@ const {
 } = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function clampLimit(value, fallback, max) {
   const parsed = Number(value);
@@ -51,6 +52,62 @@ function getRequestedUnitIds(body) {
     values.push(body.unitId);
   }
   return [...new Set(values.map(id => String(id)).filter(Boolean))];
+}
+
+function normalizeUnitBillingSettings(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+  let values = raw;
+  if (typeof raw === 'string') {
+    try {
+      values = JSON.parse(raw);
+    } catch {
+      values = [];
+    }
+  }
+  if (!Array.isArray(values)) values = [values];
+
+  return values.map(item => ({
+    unitId: String(item.unitId || item.id || item._id || '').trim(),
+    collectionStartPeriod: String(item.collectionStartPeriod || item.startBillingPeriod || '').trim(),
+    initialDebt: item.initialDebt ?? item.previousBalance ?? item.balance ?? 0,
+  })).filter(item => item.unitId);
+}
+
+function validateUnitBillingSettings(settings = []) {
+  for (const setting of settings) {
+    if (setting.collectionStartPeriod && !PERIOD_RE.test(setting.collectionStartPeriod)) {
+      return 'El inicio de cobro debe tener formato YYYY-MM.';
+    }
+    const initialDebt = Number(setting.initialDebt || 0);
+    if (!Number.isFinite(initialDebt) || initialDebt < 0) {
+      return 'La deuda inicial de la unidad no puede ser negativa.';
+    }
+  }
+  return null;
+}
+
+async function applyUnitBillingSettings(units = [], settings = [], fallbackStartBillingPeriod) {
+  if (!units.length) return;
+  const settingsByUnit = new Map(settings.map(setting => [setting.unitId, setting]));
+  const updates = units.map(unit => {
+    const unitId = unit._id.toString();
+    const setting = settingsByUnit.get(unitId);
+    const update = {};
+
+    if (setting) {
+      update.startBillingPeriod = setting.collectionStartPeriod || undefined;
+      const balance = normalizeDebtBalance(Number(setting.initialDebt || 0));
+      update.balance = balance;
+      update.isDebtor = balance < 0;
+    } else if (fallbackStartBillingPeriod && !unit.startBillingPeriod) {
+      update.startBillingPeriod = fallbackStartBillingPeriod;
+    }
+
+    if (!Object.keys(update).length) return null;
+    return Unit.updateOne({ _id: unit._id }, { $set: update });
+  }).filter(Boolean);
+
+  await Promise.all(updates);
 }
 
 function normalizePhonesInput(body) {
@@ -304,6 +361,7 @@ exports.getAllOwners = async (req, res, next) => {
         membershipId:       m._id,
         lastPayment:        lastPaymentByOwner[ownerId] ?? null,
         units:              unitsByOwner[ownerId] ?? [],
+        lots:               summarizeUnitDebts(ownerUnits),
         unitDebts:          summarizeUnitDebts(ownerUnits),
         totalOwed,
         plannedDebtAmount:  Number(planSummary.plannedDebtAmount || 0),
@@ -379,6 +437,9 @@ exports.getMySummary = async (req, res, next) => {
       const unit = unitDoc.toJSON();
       return {
         ...unit,
+        collectionStartPeriod: unit.startBillingPeriod,
+        initialDebt: Math.max(0, -normalizeDebtBalance(unit.balance)),
+        previousBalance: Math.max(0, -normalizeDebtBalance(unit.balance)),
         status: unit.active === false ? 'inactive' : (unit.owner ? 'occupied' : unit.status || 'available'),
         finalFee: calcUnitFee(unitDoc, org.monthlyFee ?? 0),
       };
@@ -447,6 +508,8 @@ exports.getOwner = async (req, res, next) => {
     owner.balanceOwed = Math.max(0, computeUnitsBalanceOwed(ownerUnits) - Number(planSummary.plannedBalanceAmount || 0));
     owner.isDebtor = owner.balanceOwed > 0;
     owner.unitDebts = summarizeUnitDebts(ownerUnits);
+    owner.lots = summarizeUnitDebts(ownerUnits);
+    owner.units = summarizeUnitDebts(ownerUnits);
     owner.totalOwed = Math.max(0, computeTotalOwedByUnits(membership, approvedPayments, ownerUnits, org || {}) - Number(planSummary.excludedDebtAmount || 0));
     owner.plannedDebtAmount = Number(planSummary.plannedDebtAmount || 0);
     owner.hasActivePlan = Boolean(planSummary.activePlanSummary);
@@ -503,6 +566,11 @@ exports.createOwner = async (req, res, next) => {
     if (initialDebtAmount < 0) {
       return res.status(400).json({ success: false, message: 'La deuda inicial no puede ser negativa.' });
     }
+    const unitBillingSettings = normalizeUnitBillingSettings(req.body.unitBillingSettings);
+    const billingSettingsError = validateUnitBillingSettings(unitBillingSettings);
+    if (billingSettingsError) {
+      return res.status(400).json({ success: false, message: billingSettingsError });
+    }
     ownerData.balance  = 0;
     ownerData.isDebtor = false;
 
@@ -512,7 +580,9 @@ exports.createOwner = async (req, res, next) => {
 
     const tempPassword = req.body.password;
     const requestedUnitIds = getRequestedUnitIds(req.body);
-    if (initialDebtAmount > 0 && requestedUnitIds.length === 0) {
+    const unitIdsWithBilling = unitBillingSettings.map(setting => setting.unitId);
+    const effectiveRequestedUnitIds = requestedUnitIds.length ? requestedUnitIds : unitIdsWithBilling;
+    if (initialDebtAmount > 0 && effectiveRequestedUnitIds.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'La deuda inicial debe asignarse al menos a una unidad.',
@@ -575,7 +645,7 @@ exports.createOwner = async (req, res, next) => {
     }
 
     if (!owner) {
-      const { error } = await findAssignableUnits(requestedUnitIds, req.orgId, null);
+      const { error } = await findAssignableUnits(effectiveRequestedUnitIds, req.orgId, null);
       if (error) return res.status(error.status).json({ success: false, message: error.message });
 
       if (!req.body.password) {
@@ -589,7 +659,7 @@ exports.createOwner = async (req, res, next) => {
       owner.password = undefined;
     }
 
-    const { error: unitError } = await findAssignableUnits(requestedUnitIds, req.orgId, owner._id);
+    const { error: unitError } = await findAssignableUnits(effectiveRequestedUnitIds, req.orgId, owner._id);
     if (unitError) return res.status(unitError.status).json({ success: false, message: unitError.message });
 
     await OrganizationMember.findOneAndUpdate(
@@ -609,11 +679,16 @@ exports.createOwner = async (req, res, next) => {
 
     // Asignar unidad si se proveyó unitId
     let assignedUnits = [];
-    if (req.body.unitIds !== undefined || req.body.unitId !== undefined) {
-      const { units, error } = await syncOwnerUnits(owner._id, req.orgId, requestedUnitIds);
+    if (req.body.unitIds !== undefined || req.body.unitId !== undefined || unitBillingSettings.length) {
+      const { units, error } = await syncOwnerUnits(owner._id, req.orgId, effectiveRequestedUnitIds);
       if (error) return res.status(error.status).json({ success: false, message: error.message });
       assignedUnits = units;
-      await distributeInitialDebt(assignedUnits, initialDebtAmount);
+      if (unitBillingSettings.length) {
+        await applyUnitBillingSettings(assignedUnits, unitBillingSettings, ownerData.startBillingPeriod);
+      } else {
+        await applyUnitBillingSettings(assignedUnits, [], ownerData.startBillingPeriod);
+        await distributeInitialDebt(assignedUnits, initialDebtAmount);
+      }
       owner = await User.findById(owner._id).select('-password -fcmToken');
     }
 
@@ -644,6 +719,11 @@ exports.updateOwner = async (req, res, next) => {
       }
     });
     Object.assign(userUpdate, normalizePhonesInput(req.body));
+    const unitBillingSettings = normalizeUnitBillingSettings(req.body.unitBillingSettings);
+    const billingSettingsError = validateUnitBillingSettings(unitBillingSettings);
+    if (billingSettingsError) {
+      return res.status(400).json({ success: false, message: billingSettingsError });
+    }
 
     // Validar cambio de email: no debe estar en uso por otro usuario activo
     if (userUpdate.email) {
@@ -681,6 +761,25 @@ exports.updateOwner = async (req, res, next) => {
       assignedUnits = units;
     }
 
+    if (unitBillingSettings.length) {
+      const settingUnitIds = unitBillingSettings.map(setting => setting.unitId);
+      const units = await Unit.find({
+        _id: { $in: settingUnitIds },
+        owner: req.params.id,
+        organization: req.orgId,
+        active: true,
+      });
+      const found = new Set(units.map(unit => unit._id.toString()));
+      const missing = settingUnitIds.find(id => !found.has(id));
+      if (missing) {
+        return res.status(400).json({
+          success: false,
+          message: 'Una de las unidades no pertenece al propietario o a la organización.',
+        });
+      }
+      await applyUnitBillingSettings(units, unitBillingSettings);
+    }
+
     if (req.body.balance !== undefined) {
       const result = await setOwnerUnitBalance(req.params.id, req.orgId, req.body.balance);
       if (result.error) return res.status(result.error.status).json({ success: false, message: result.error.message });
@@ -716,6 +815,8 @@ exports.updateOwner = async (req, res, next) => {
     owner.balanceOwed = computeUnitsBalanceOwed(ownerUnits);
     owner.isDebtor = owner.balanceOwed > 0;
     owner.unitDebts = summarizeUnitDebts(ownerUnits);
+    owner.lots = summarizeUnitDebts(ownerUnits);
+    owner.units = summarizeUnitDebts(ownerUnits);
 
     res.json({ success: true, data: { owner } });
   } catch (err) {

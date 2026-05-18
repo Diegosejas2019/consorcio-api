@@ -4,6 +4,7 @@ const dbHelper = require('../helpers/dbHelper');
 const { createAdminWithToken } = require('../helpers/factories');
 const User = require('../../src/models/User');
 const Unit = require('../../src/models/Unit');
+const Organization = require('../../src/models/Organization');
 const OrganizationMember = require('../../src/models/OrganizationMember');
 const XLSX = require('xlsx');
 
@@ -277,6 +278,70 @@ describe('POST /api/owners unit validation', () => {
     const updatedUnit = await Unit.findById(unit._id).lean();
     expect(updatedUnit.balance).toBe(-12500);
     expect(updatedUnit.isDebtor).toBe(true);
+  });
+
+  test('actualiza inicio de cobro y deuda por unidad al editar propietario', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const owner = await createActiveOwner(orgId, null);
+    const units = await Unit.create([
+      { organization: orgId, owner: owner._id, name: 'Lote 1', active: true },
+      { organization: orgId, owner: owner._id, name: 'Lote 2', active: true },
+    ]);
+
+    const res = await request(app)
+      .patch(`/api/owners/${owner._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        unitBillingSettings: [
+          { unitId: units[0]._id, collectionStartPeriod: '2025-09', initialDebt: 0 },
+          { unitId: units[1]._id, collectionStartPeriod: '2026-01', initialDebt: 50000 },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const updated = await Unit.find({ organization: orgId, owner: owner._id }).sort({ name: 1 }).lean();
+    expect(updated.map(unit => ({
+      name: unit.name,
+      startBillingPeriod: unit.startBillingPeriod,
+      balance: unit.balance,
+      isDebtor: unit.isDebtor,
+    }))).toEqual([
+      { name: 'Lote 1', startBillingPeriod: '2025-09', balance: 0, isDebtor: false },
+      { name: 'Lote 2', startBillingPeriod: '2026-01', balance: -50000, isDebtor: true },
+    ]);
+  });
+
+  test('rechaza deuda inicial negativa por unidad', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const owner = await createActiveOwner(orgId, null);
+    const unit = await Unit.create({ organization: orgId, owner: owner._id, name: 'Lote negativo', active: true });
+
+    const res = await request(app)
+      .patch(`/api/owners/${owner._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        unitBillingSettings: [{ unitId: unit._id, collectionStartPeriod: '2025-09', initialDebt: -1 }],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('no puede ser negativa');
+  });
+
+  test('rechaza editar configuracion de una unidad de otra organizacion', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const otherOrg = await Organization.create({ name: 'Org ajena', slug: `org-ajena-${Date.now()}`, businessType: 'consorcio' });
+    const owner = await createActiveOwner(orgId, null);
+    const otherUnit = await Unit.create({ organization: otherOrg._id, owner: owner._id, name: 'Lote ajeno', active: true });
+
+    const res = await request(app)
+      .patch(`/api/owners/${owner._id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        unitBillingSettings: [{ unitId: otherUnit._id, collectionStartPeriod: '2025-09', initialDebt: 0 }],
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('no pertenece');
   });
 
   test('normaliza saldos positivos de carga masiva como deudas negativas', async () => {

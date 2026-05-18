@@ -11,9 +11,12 @@ const User = require('../models/User');
 const { calculateExtraordinaryAmountForOwner } = require('./expenseService');
 const { currentYYYYMM } = require('../utils/periods');
 const {
+  buildUnitPaymentSnapshot,
   calculateUnitFee,
   computeUnitBalanceOwed,
+  getChargeableUnitsForPeriod,
   getPaidMonthsForUnit,
+  getUnitStartBillingPeriod,
   normalizeDebtBalance,
 } = require('../utils/ownerFinance');
 
@@ -42,6 +45,7 @@ function buildBillableUnitsContext(memberships = [], units = []) {
       name:        user.unit || 'Unidad',
       owner:       user._id,
       coefficient: membership.percentage > 0 ? membership.percentage : 1,
+      startBillingPeriod: membership.startBillingPeriod,
       active:      true,
       legacy:      true,
     };
@@ -283,15 +287,30 @@ async function getOwnerDebtOptions({ organizationId, ownerId, excludePlanId = nu
   });
 
   const currentPeriod = currentYYYYMM();
-  const periodItems = [...new Set(ownerUnits.flatMap(unit => {
+  const availableMonths = [...new Set(ownerUnits.flatMap(unit => {
     const paidMonths = getPaidMonthsForUnit(unit, activePayments, ['pending', 'approved']);
-    const startBilling = unit.startBillingPeriod || membership?.startBillingPeriod || owner.startBillingPeriod;
+    const startBilling = getUnitStartBillingPeriod(unit, membership) || owner.startBillingPeriod;
     return (org?.paymentPeriods || [])
       .filter(p => !paidMonths.has(p) && !blocking.months.has(p) && (!startBilling || p >= startBilling) && p <= currentPeriod);
-  }))].sort().map(month => ({
-    month,
-    amount: ownerUnits.reduce((sum, unit) => sum + calculateUnitFee(unit, org || {}), 0),
-  }));
+  }))].sort();
+
+  const periodItems = availableMonths.map(month => {
+    const chargeableUnits = getChargeableUnitsForPeriod(ownerUnits, membership, month)
+      .filter(unit => !getPaidMonthsForUnit(unit, activePayments, ['pending', 'approved']).has(month));
+    const snapshot = buildUnitPaymentSnapshot(chargeableUnits, org || {});
+    return {
+      month,
+      amount: snapshot.amount,
+      units: chargeableUnits.map(unit => ({
+        id: oid(unit),
+        _id: unit._id || unit.id,
+        name: unit.name || 'Unidad',
+        amount: calculateUnitFee(unit, org || {}),
+        startBillingPeriod: getUnitStartBillingPeriod(unit, membership) || owner.startBillingPeriod,
+        collectionStartPeriod: getUnitStartBillingPeriod(unit, membership) || owner.startBillingPeriod,
+      })),
+    };
+  });
 
   const extras = await Expense.find({
     organization: organizationId,

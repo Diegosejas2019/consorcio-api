@@ -1,4 +1,4 @@
-const Payment                 = require('../models/Payment');
+﻿const Payment                 = require('../models/Payment');
 const Expense                 = require('../models/Expense');
 const User                    = require('../models/User');
 const OrganizationMember      = require('../models/OrganizationMember');
@@ -21,12 +21,15 @@ const {
 } = require('../services/paymentPlanDebtService');
 const { currentYYYYMM } = require('../utils/periods');
 const {
+  buildUnitPaymentSnapshot,
   calculateUnitFee,
   computeTotalOwedByUnits,
   computeUnitsBalance,
   computeUnitsBalanceOwed,
   getChargeablePeriodsForUnit,
+  getChargeableUnitsForPeriod,
   getPaidMonthsForUnit,
+  getUnitStartBillingPeriod,
   getUnpaidPeriodsForUnit,
   normalizeDebtBalance,
   summarizeUnitDebts,
@@ -706,18 +709,20 @@ exports.createPayment = async (req, res, next) => {
 
     if (paymentMonths.length > 0) {
       const currentPeriod = currentYYYYMM();
-      if (month > currentPeriod) {
+      if (paymentMonths.some(period => period > currentPeriod)) {
         return res.status(400).json({
           success: false,
           message: 'No se pueden registrar pagos de períodos futuros.',
         });
       }
 
-      const startBilling = ownerMembership?.startBillingPeriod;
-      if (startBilling && month < startBilling) {
+      const notChargeableMonth = activeUnits.length
+        ? paymentMonths.find(period => getChargeableUnitsForPeriod(activeUnits, ownerMembership, period).length === 0)
+        : null;
+      if (notChargeableMonth) {
         return res.status(400).json({
           success: false,
-          message: `No se pueden registrar pagos anteriores al período de inicio de cobro del propietario (${startBilling}).`,
+          message: `No hay unidades habilitadas para cobrar el periodo ${notChargeableMonth}.`,
         });
       }
     }
@@ -725,25 +730,19 @@ exports.createPayment = async (req, res, next) => {
     // Si no viene amount, calcularlo desde las unidades (solo si hay período mensual)
     if (requestedPeriods.length > 1) {
       const currentPeriod = currentYYYYMM();
-      const startBilling = ownerMembership?.startBillingPeriod;
       if (requestedPeriods.some(period => period > currentPeriod)) {
         return res.status(400).json({
           success: false,
           message: 'No se pueden registrar pagos de periodos futuros.',
         });
       }
-      if (startBilling && requestedPeriods.some(period => period < startBilling)) {
-        return res.status(400).json({
-          success: false,
-          message: `No se pueden registrar pagos anteriores al periodo de inicio de cobro del propietario (${startBilling}).`,
-        });
-      }
     }
 
     if (amount === undefined || amount === null || amount === '') {
       if (month) {
-        amount = activeUnits.length > 0
-          ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
+        const monthlyUnits = getChargeableUnitsForPeriod(activeUnits, ownerMembership, month);
+        amount = monthlyUnits.length > 0
+          ? monthlyUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
           : monthlyFee;
       } else {
         amount = 0; // solo-extraordinarios: la suma se agrega abajo
@@ -840,9 +839,6 @@ exports.createPayment = async (req, res, next) => {
       };
     }
 
-    const monthlyAmount = activeUnits.length > 0
-      ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
-      : monthlyFee;
     const extraordinaryTotal = extraordinaryItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     const debtItemsTotal = debtItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
@@ -851,12 +847,6 @@ exports.createPayment = async (req, res, next) => {
     }
 
     if (paymentMonths.length > 1) {
-      const unitsSnapshot = activeUnits.map(u => u._id);
-      const breakdownSnapshot = activeUnits.map(u => ({
-        unit:   u._id,
-        name:   u.name,
-        amount: calcUnitFee(u, monthlyFee),
-      }));
       const basePaymentData = {
         organization:  req.orgId,
         owner:         ownerId,
@@ -865,8 +855,6 @@ exports.createPayment = async (req, res, next) => {
         ownerNote,
         paymentMethod: 'manual',
         type:          'monthly',
-        units:         unitsSnapshot,
-        breakdown:     breakdownSnapshot,
         createdBy:     req.user._id,
         ...(createdByAdmin ? {
           status:     'approved',
@@ -875,13 +863,21 @@ exports.createPayment = async (req, res, next) => {
           approvedBy: req.user._id,
         } : {}),
       };
-      const payments = await Payment.create(paymentMonths.map((paymentMonth, index) => ({
-        ...basePaymentData,
-        month:              paymentMonth,
-        amount:             monthlyAmount + (index === 0 ? extraordinaryTotal + debtItemsTotal : 0),
-        extraordinaryItems: index === 0 ? extraordinaryItems : [],
-        debtItems:          index === 0 ? debtItems : [],
-      })));
+      const payments = await Payment.create(paymentMonths.map((paymentMonth, index) => {
+        const monthlyUnits = getChargeableUnitsForPeriod(activeUnits, ownerMembership, paymentMonth);
+        const snapshot = monthlyUnits.length
+          ? buildUnitPaymentSnapshot(monthlyUnits, org || {})
+          : { units: [], breakdown: [], amount: monthlyFee };
+        return {
+          ...basePaymentData,
+          month:              paymentMonth,
+          amount:             snapshot.amount + (index === 0 ? extraordinaryTotal + debtItemsTotal : 0),
+          units:              snapshot.units,
+          breakdown:          snapshot.breakdown,
+          extraordinaryItems: index === 0 ? extraordinaryItems : [],
+          debtItems:          index === 0 ? debtItems : [],
+        };
+      }));
       const payment = payments[0];
 
       await payment.populate('owner', 'name unit email');
@@ -899,7 +895,7 @@ exports.createPayment = async (req, res, next) => {
 
     const snapshotUnits = paymentType === 'balance'
       ? (balanceAmount > 0 ? balanceUnitsForPayment : [])
-      : activeUnits;
+      : (month ? getChargeableUnitsForPeriod(activeUnits, ownerMembership, month) : activeUnits);
     const unitsSnapshot = snapshotUnits.map(u => u._id);
     let remainingBalanceBreakdown = Number(amount || 0);
     const breakdownSnapshot = snapshotUnits.map(u => {
