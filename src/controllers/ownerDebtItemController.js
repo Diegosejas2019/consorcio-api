@@ -1,5 +1,6 @@
 const OwnerDebtItem      = require('../models/OwnerDebtItem');
 const OrganizationMember = require('../models/OrganizationMember');
+const Payment            = require('../models/Payment');
 
 // ── POST /api/owners/:id/debt-items ──────────────────────────
 exports.createDebtItem = async (req, res, next) => {
@@ -108,6 +109,41 @@ exports.cancelDebtItem = async (req, res, next) => {
     debtItem.cancelledBy        = req.user._id;
     debtItem.cancelledAt        = new Date();
     debtItem.cancellationReason = String(cancellationReason).trim();
+    await debtItem.save();
+
+    res.json({ success: true, data: { debtItem } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/debt-items/:id/paid ───────────────────────────
+exports.markDebtItemPaid = async (req, res, next) => {
+  try {
+    const debtItem = await OwnerDebtItem.findOne({
+      _id:          req.params.id,
+      organization: req.orgId,
+      isActive:     { $ne: false },
+    });
+    if (!debtItem) {
+      return res.status(404).json({ success: false, message: 'Deuda no encontrada.' });
+    }
+    if (debtItem.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Solo se pueden aprobar deudas con estado pendiente.' });
+    }
+
+    const activePayment = await Payment.findOne({
+      organization: req.orgId,
+      owner:        debtItem.owner,
+      status:       { $in: ['pending', 'approved'] },
+      'debtItems.debtItem': debtItem._id,
+    }).select('_id status');
+    if (activePayment) {
+      return res.status(400).json({ success: false, message: 'Este ajuste ya esta incluido en un pago activo.' });
+    }
+
+    debtItem.status = 'paid';
+    debtItem.paidAt = new Date();
     await debtItem.save();
 
     res.json({ success: true, data: { debtItem } });

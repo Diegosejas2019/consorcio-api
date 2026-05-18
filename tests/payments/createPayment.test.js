@@ -336,6 +336,62 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.body.data.debtItem.paidAt).toBeFalsy();
   });
 
+  test('permite aprobar manualmente un ajuste pendiente', async () => {
+    const { user, orgId } = await createOwnerWithToken();
+    const { token: adminToken, user: admin } = await createAdminWithToken(orgId);
+    const debtItem = await OwnerDebtItem.create({
+      organization: orgId,
+      owner: user._id,
+      type: 'manual_adjustment',
+      description: 'Ajuste manual',
+      amount: 35000,
+      currency: 'ARS',
+      createdBy: admin._id,
+    });
+
+    const res = await request(app)
+      .patch(`/api/debt-items/${debtItem._id}/paid`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.debtItem.status).toBe('paid');
+    expect(res.body.data.debtItem.paidAt).toBeTruthy();
+
+    const updatedDebtItem = await OwnerDebtItem.findById(debtItem._id);
+    expect(updatedDebtItem.status).toBe('paid');
+    expect(updatedDebtItem.paidAt).toBeTruthy();
+  });
+
+  test('no permite aprobar manualmente un ajuste incluido en un pago activo', async () => {
+    const { user, orgId } = await createOwnerWithToken();
+    const { token: adminToken, user: admin } = await createAdminWithToken(orgId);
+    const debtItem = await OwnerDebtItem.create({
+      organization: orgId,
+      owner: user._id,
+      type: 'manual_adjustment',
+      description: 'Ajuste en pago',
+      amount: 35000,
+      currency: 'ARS',
+      createdBy: admin._id,
+    });
+    await Payment.create({
+      organization: orgId,
+      owner: user._id,
+      amount: 35000,
+      status: 'pending',
+      type: 'balance',
+      debtItems: [{ debtItem: debtItem._id, description: debtItem.description, amount: debtItem.amount }],
+    });
+
+    const res = await request(app)
+      .patch(`/api/debt-items/${debtItem._id}/paid`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(400);
+    const updatedDebtItem = await OwnerDebtItem.findById(debtItem._id);
+    expect(updatedDebtItem.status).toBe('pending');
+  });
+
   test('permite crear pago con ajustes pendientes y los marca pagados al aprobar', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
     const { token: adminToken, user: admin } = await createAdminWithToken(orgId);
