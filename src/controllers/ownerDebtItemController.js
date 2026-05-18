@@ -18,9 +18,13 @@ exports.createDebtItem = async (req, res, next) => {
     }
 
     const { type, description, amount, currency, originDate, dueDate } = req.body;
+    const status = req.body.status || 'pending';
 
     if (!type || !['previous_balance', 'manual_adjustment'].includes(type)) {
       return res.status(400).json({ success: false, message: 'El tipo es obligatorio y debe ser "previous_balance" o "manual_adjustment".' });
+    }
+    if (!['pending', 'paid'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'El estado debe ser pendiente o pagado.' });
     }
     if (!description || !String(description).trim()) {
       return res.status(400).json({ success: false, message: 'La descripción es obligatoria.' });
@@ -41,6 +45,8 @@ exports.createDebtItem = async (req, res, next) => {
       currency:     'ARS',
       originDate:   originDate || undefined,
       dueDate:      dueDate    || undefined,
+      status,
+      paidAt:       status === 'paid' ? new Date() : undefined,
       createdBy:    req.user._id,
     });
 

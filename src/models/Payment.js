@@ -122,6 +122,15 @@ const paymentSchema = new mongoose.Schema(
       amount:  { type: Number },
     }],
 
+    debtItems: [{
+      _id:         false,
+      debtItem:    { type: mongoose.Schema.Types.ObjectId, ref: 'OwnerDebtItem' },
+      type:        { type: String },
+      description: { type: String },
+      amount:      { type: Number },
+      currency:    { type: String, default: 'ARS' },
+    }],
+
     // ── Recibo generado por el sistema ────────────────────────
     systemReceipt: {
       url:      { type: String },

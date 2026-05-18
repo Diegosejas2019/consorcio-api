@@ -207,7 +207,7 @@ async function getOwnerDebtOptions({ organizationId, ownerId, excludePlanId = nu
       organization: organizationId,
       owner: ownerId,
       status: { $in: ['pending', 'approved'] },
-    }).select('month extraordinaryItems units status'),
+    }).select('month extraordinaryItems debtItems units status'),
     Unit.find({ owner: ownerId, organization: organizationId, active: true }).lean(),
     Unit.find({ organization: organizationId, active: true }).lean(),
     OrganizationMember.find({ organization: organizationId, role: 'owner', isActive: true })
@@ -256,6 +256,11 @@ async function getOwnerDebtOptions({ organizationId, ownerId, excludePlanId = nu
   const paidExtraIds = new Set(
     activePayments.flatMap(p => (p.extraordinaryItems || [])
       .map(e => e.expense?.toString())
+      .filter(Boolean))
+  );
+  const activePaymentDebtItemIds = new Set(
+    activePayments.flatMap(p => (p.debtItems || [])
+      .map(item => item.debtItem?.toString())
       .filter(Boolean))
   );
 
@@ -333,7 +338,7 @@ async function getOwnerDebtOptions({ organizationId, ownerId, excludePlanId = nu
   }).filter(item => item.amount > 0);
 
   const availableDebtItems = debtItems
-    .filter(item => !blocking.debtItems.has(item._id.toString()))
+    .filter(item => !blocking.debtItems.has(item._id.toString()) && !activePaymentDebtItemIds.has(item._id.toString()))
     .map(item => ({
       id: item._id,
       _id: item._id,

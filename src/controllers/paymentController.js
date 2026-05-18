@@ -6,6 +6,7 @@ const Unit                    = require('../models/Unit');
 const Organization             = require('../models/Organization');
 const PaymentPlan             = require('../models/PaymentPlan');
 const PaymentPlanInstallment  = require('../models/PaymentPlanInstallment');
+const OwnerDebtItem           = require('../models/OwnerDebtItem');
 const { calcUnitFee } = require('./unitController');
 const { cloudinary }  = require('../config/cloudinary');
 const emailService    = require('../services/emailService');
@@ -157,10 +158,41 @@ async function applyBalancePaymentToUnits(payment) {
   }
 }
 
+async function setDebtItemsReceiptId(payment, receiptNumber) {
+  if (!receiptNumber) return;
+  const debtItemIds = (payment.debtItems || []).map(item => item.debtItem).filter(Boolean);
+  if (!debtItemIds.length) return;
+
+  await OwnerDebtItem.updateMany(
+    {
+      _id: { $in: debtItemIds },
+      organization: payment.organization,
+      paymentId: payment._id,
+    },
+    { $set: { receiptId: receiptNumber } }
+  );
+}
+
 const applyApprovedPaymentEffects = async (payment, reviewerId, options = {}) => {
   const ownerId = payment.owner?._id || payment.owner;
-  if (payment.type === 'balance') {
+  const debtItemIds = (payment.debtItems || []).map(item => item.debtItem).filter(Boolean);
+
+  if (payment.type === 'balance' && payment.units?.length && debtItemIds.length === 0) {
     await applyBalancePaymentToUnits(payment);
+  }
+
+  if (debtItemIds.length) {
+    await OwnerDebtItem.updateMany(
+      { _id: { $in: debtItemIds }, organization: payment.organization, status: 'pending' },
+      {
+        $set: {
+          status: 'paid',
+          paidAt: new Date(),
+          paymentId: payment._id,
+          ...(payment.receiptNumber ? { receiptId: payment.receiptNumber } : {}),
+        },
+      }
+    );
   }
 
   if (options.notify === false) return;
@@ -169,6 +201,7 @@ const applyApprovedPaymentEffects = async (payment, reviewerId, options = {}) =>
     receiptService.generateAndStoreReceipt(payment._id)
       .then(async (updatedPayment) => {
         const receiptUrl = updatedPayment.systemReceipt?.url;
+        await setDebtItemsReceiptId(payment, updatedPayment.receiptNumber);
         await Promise.allSettled([
           emailService.sendReceiptEmail(payment.owner, updatedPayment, receiptUrl),
           emailService.sendPaymentApproved(payment.owner, updatedPayment),
@@ -568,6 +601,11 @@ exports.createPayment = async (req, res, next) => {
     }
     if (!Array.isArray(extraordinaryIds)) extraordinaryIds = extraordinaryIds ? [extraordinaryIds] : [];
     const requestedBalanceUnitIds = uniqueValues(normalizeArray(req.body.balanceUnitIds || req.body.balanceUnitId));
+    const debtItemIds = uniqueValues(normalizeArray(req.body.debtItemIds || req.body.debtItems));
+
+    if (balanceAmount > 0 && debtItemIds.length > 0) {
+      return res.status(400).json({ success: false, message: 'El saldo anterior debe pagarse separado de los ajustes manuales.' });
+    }
 
     if (!ownerId) return res.status(400).json({ success: false, message: 'Propietario requerido.' });
 
@@ -607,14 +645,14 @@ exports.createPayment = async (req, res, next) => {
       };
     }
 
-    if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0) {
+    if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0 && debtItemIds.length === 0) {
       if (!amount || Number(amount) < 1) {
         return res.status(400).json({ success: false, message: 'El período o importe son obligatorios.' });
       }
       // balance payment — continúa
     }
 
-    if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0) {
+    if (!month && extraordinaryIds.length === 0 && balanceAmount <= 0 && debtItemIds.length === 0) {
       balanceAmount = Number(amount);
     }
 
@@ -745,6 +783,37 @@ exports.createPayment = async (req, res, next) => {
       amount = Number(amount) + extraordinaryItems.reduce((s, e) => s + e.amount, 0);
     }
 
+    let debtItems = [];
+    if (debtItemIds.length > 0) {
+      const items = await OwnerDebtItem.find({
+        _id:          { $in: debtItemIds },
+        organization: req.orgId,
+        owner:        ownerId,
+        status:       'pending',
+        isActive:     { $ne: false },
+      }).lean();
+      if (items.length !== debtItemIds.length) {
+        return res.status(400).json({ success: false, message: 'Uno o mas saldos o ajustes no son validos o ya no estan pendientes.' });
+      }
+      const alreadyIncluded = await Payment.findOne({
+        organization: req.orgId,
+        owner:        ownerId,
+        status:       { $in: ['pending', 'approved'] },
+        'debtItems.debtItem': { $in: debtItemIds },
+      });
+      if (alreadyIncluded) {
+        return res.status(400).json({ success: false, message: 'Uno o mas saldos o ajustes ya tienen un pago activo.' });
+      }
+      debtItems = items.map(item => ({
+        debtItem:    item._id,
+        type:        item.type,
+        description: item.description,
+        amount:      Number(item.amount || 0),
+        currency:    item.currency || 'ARS',
+      }));
+      amount = Number(amount) + debtItems.reduce((sum, item) => sum + item.amount, 0);
+    }
+
     if (month) {
       const existing = await Payment.findOne({
         organization: req.orgId,
@@ -775,6 +844,7 @@ exports.createPayment = async (req, res, next) => {
       ? activeUnits.reduce((sum, u) => sum + calcUnitFee(u, monthlyFee), 0)
       : monthlyFee;
     const extraordinaryTotal = extraordinaryItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const debtItemsTotal = debtItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     if (!month && extraordinaryIds.length === 0 && balanceAmount > 0) {
       amount = balanceAmount;
@@ -808,8 +878,9 @@ exports.createPayment = async (req, res, next) => {
       const payments = await Payment.create(paymentMonths.map((paymentMonth, index) => ({
         ...basePaymentData,
         month:              paymentMonth,
-        amount:             monthlyAmount + (index === 0 ? extraordinaryTotal : 0),
+        amount:             monthlyAmount + (index === 0 ? extraordinaryTotal + debtItemsTotal : 0),
         extraordinaryItems: index === 0 ? extraordinaryItems : [],
+        debtItems:          index === 0 ? debtItems : [],
       })));
       const payment = payments[0];
 
@@ -826,7 +897,9 @@ exports.createPayment = async (req, res, next) => {
       ? 'balance'
       : (!month ? 'extraordinary' : 'monthly');
 
-    const snapshotUnits = paymentType === 'balance' ? balanceUnitsForPayment : activeUnits;
+    const snapshotUnits = paymentType === 'balance'
+      ? (balanceAmount > 0 ? balanceUnitsForPayment : [])
+      : activeUnits;
     const unitsSnapshot = snapshotUnits.map(u => u._id);
     let remainingBalanceBreakdown = Number(amount || 0);
     const breakdownSnapshot = snapshotUnits.map(u => {
@@ -855,6 +928,7 @@ exports.createPayment = async (req, res, next) => {
       units:             unitsSnapshot,
       breakdown:         breakdownSnapshot,
       extraordinaryItems,
+      debtItems,
       createdBy:         req.user._id,
       ...(createdByAdmin ? {
         status:     'approved',
@@ -926,6 +1000,7 @@ exports.approvePayment = async (req, res, next) => {
       receiptService.generateAndStoreReceipt(payment._id)
         .then(async (updatedPayment) => {
           const receiptUrl = updatedPayment.systemReceipt?.url;
+          await setDebtItemsReceiptId(payment, updatedPayment.receiptNumber);
           await Promise.allSettled([
             emailService.sendReceiptEmail(payment.owner, updatedPayment, receiptUrl),
             emailService.sendPaymentApproved(payment.owner, updatedPayment),

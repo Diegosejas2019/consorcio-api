@@ -37,6 +37,7 @@ const { createOwnerWithToken, createAdminWithToken } = require('../helpers/facto
 const Payment  = require('../../src/models/Payment');
 const OrganizationMember = require('../../src/models/OrganizationMember');
 const Unit = require('../../src/models/Unit');
+const OwnerDebtItem = require('../../src/models/OwnerDebtItem');
 
 // Buffer mínimo que simula un PDF válido
 const FAKE_PDF = Buffer.from('%PDF-1.4 fake content for testing');
@@ -282,6 +283,182 @@ describe('POST /api/payments — subida de comprobante', () => {
     const updatedUnit = await Unit.findById(unit._id);
     expect(updatedUnit.balance).toBe(0);
     expect(updatedUnit.isDebtor).toBe(false);
+  });
+
+  test('permite crear un ajuste como pagado y guarda paidAt', async () => {
+    const { user, orgId } = await createOwnerWithToken();
+    const { token: adminToken } = await createAdminWithToken(orgId);
+    await OrganizationMember.create({
+      user: user._id,
+      organization: orgId,
+      role: 'owner',
+      isActive: true,
+    });
+
+    const res = await request(app)
+      .post(`/api/owners/${user._id}/debt-items`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        type: 'manual_adjustment',
+        description: 'Ajuste ya pagado',
+        amount: 35000,
+        currency: 'ARS',
+        status: 'paid',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.debtItem.status).toBe('paid');
+    expect(res.body.data.debtItem.paidAt).toBeTruthy();
+  });
+
+  test('crea un ajuste como pendiente por defecto', async () => {
+    const { user, orgId } = await createOwnerWithToken();
+    const { token: adminToken } = await createAdminWithToken(orgId);
+    await OrganizationMember.create({
+      user: user._id,
+      organization: orgId,
+      role: 'owner',
+      isActive: true,
+    });
+
+    const res = await request(app)
+      .post(`/api/owners/${user._id}/debt-items`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        type: 'manual_adjustment',
+        description: 'Ajuste pendiente',
+        amount: 35000,
+        currency: 'ARS',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.debtItem.status).toBe('pending');
+    expect(res.body.data.debtItem.paidAt).toBeFalsy();
+  });
+
+  test('permite crear pago con ajustes pendientes y los marca pagados al aprobar', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    const { token: adminToken, user: admin } = await createAdminWithToken(orgId);
+    const debtItem = await OwnerDebtItem.create({
+      organization: orgId,
+      owner: user._id,
+      type: 'manual_adjustment',
+      description: 'Diciembre 2025',
+      amount: 35000,
+      currency: 'ARS',
+      createdBy: admin._id,
+    });
+
+    const createRes = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('debtItemIds', debtItem._id.toString())
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.data.payment.status).toBe('pending');
+    expect(createRes.body.data.payment.amount).toBe(35000);
+    expect(createRes.body.data.payment.debtItems[0].debtItem.toString()).toBe(debtItem._id.toString());
+
+    let updatedDebtItem = await OwnerDebtItem.findById(debtItem._id);
+    expect(updatedDebtItem.status).toBe('pending');
+
+    const approveRes = await request(app)
+      .patch(`/api/payments/${createRes.body.data.payment._id}/approve`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(approveRes.status).toBe(200);
+    updatedDebtItem = await OwnerDebtItem.findById(debtItem._id);
+    expect(updatedDebtItem.status).toBe('paid');
+    expect(updatedDebtItem.paidAt).toBeTruthy();
+    expect(updatedDebtItem.paymentId.toString()).toBe(createRes.body.data.payment._id);
+  });
+
+  test('al rechazar pago con ajustes los mantiene pendientes', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    const { token: adminToken, user: admin } = await createAdminWithToken(orgId);
+    const debtItem = await OwnerDebtItem.create({
+      organization: orgId,
+      owner: user._id,
+      type: 'manual_adjustment',
+      description: 'Noviembre 2025',
+      amount: 35000,
+      currency: 'ARS',
+      createdBy: admin._id,
+    });
+
+    const createRes = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('debtItemIds', debtItem._id.toString())
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(createRes.status).toBe(201);
+
+    const rejectRes = await request(app)
+      .patch(`/api/payments/${createRes.body.data.payment._id}/reject`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ rejectionNote: 'Comprobante ilegible' });
+
+    expect(rejectRes.status).toBe(200);
+    const updatedDebtItem = await OwnerDebtItem.findById(debtItem._id);
+    expect(updatedDebtItem.status).toBe('pending');
+    expect(updatedDebtItem.paymentId).toBeUndefined();
+  });
+
+  test('impide pagar ajustes ya pagados, anulados o incluidos en otro pago activo', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    const { user: admin } = await createAdminWithToken(orgId);
+    const [paidItem, cancelledItem, pendingItem] = await OwnerDebtItem.create([
+      {
+        organization: orgId,
+        owner: user._id,
+        type: 'manual_adjustment',
+        description: 'Pagado',
+        amount: 1000,
+        currency: 'ARS',
+        status: 'paid',
+        paidAt: new Date(),
+        createdBy: admin._id,
+      },
+      {
+        organization: orgId,
+        owner: user._id,
+        type: 'manual_adjustment',
+        description: 'Anulado',
+        amount: 1000,
+        currency: 'ARS',
+        status: 'cancelled',
+        createdBy: admin._id,
+      },
+      {
+        organization: orgId,
+        owner: user._id,
+        type: 'manual_adjustment',
+        description: 'Pendiente en pago',
+        amount: 1000,
+        currency: 'ARS',
+        createdBy: admin._id,
+      },
+    ]);
+    await Payment.create({
+      organization: orgId,
+      owner: user._id,
+      amount: 1000,
+      status: 'pending',
+      type: 'balance',
+      debtItems: [{ debtItem: pendingItem._id, description: pendingItem.description, amount: pendingItem.amount }],
+    });
+
+    for (const item of [paidItem, cancelledItem, pendingItem]) {
+      const res = await request(app)
+        .post('/api/payments')
+        .set('Authorization', `Bearer ${token}`)
+        .field('debtItemIds', item._id.toString())
+        .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+      expect(res.status).toBe(400);
+    }
   });
 
 });
