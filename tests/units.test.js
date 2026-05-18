@@ -149,6 +149,59 @@ describe('Units admin flows', () => {
     expect(assignRes.body.message).toContain('ocupada');
   });
 
+  test('al quitar una unidad del propietario vuelve a quedar disponible', async () => {
+    const { token, orgId } = await createAdminWithToken();
+    const owner = await User.create({
+      name: 'Owner con unidad',
+      email: 'owner-unidad@test.com',
+      password: 'password123',
+      role: 'owner',
+      organization: orgId,
+      isActive: true,
+    });
+    await OrganizationMember.create({ user: owner._id, organization: orgId, role: 'owner', isActive: true });
+    const unit = await Unit.create({
+      organization: orgId,
+      owner: owner._id,
+      name: 'Lote 45',
+      status: 'occupied',
+      active: true,
+    });
+    await User.findByIdAndUpdate(owner._id, { unitId: unit._id });
+
+    const res = await request(app)
+      .patch(`/api/units/${unit._id}/release-owner`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+
+    const released = await Unit.findById(unit._id).lean();
+    expect(released.active).toBe(true);
+    expect(released.owner).toBeNull();
+    expect(released.status).toBe('available');
+
+    const updatedOwner = await User.findById(owner._id).select('unitId').lean();
+    expect(updatedOwner.unitId).toBeNull();
+
+    const listRes = await request(app)
+      .get('/api/units')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.data.units).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          _id: unit._id.toString(),
+          name: 'Lote 45',
+          status: 'available',
+          active: true,
+          owner: null,
+        }),
+      ])
+    );
+  });
+
   test('al eliminar owner libera todas sus unidades activas', async () => {
     const { token, orgId } = await createAdminWithToken();
     const owner = await User.create({
