@@ -24,8 +24,8 @@ exports.getMonthlySummary = async (req, res, next) => {
 
     const orgId = req.orgId;
     const [year, mon] = month.split('-').map(Number);
-    const monthStart  = new Date(year, mon - 1, 1);
-    const monthEnd    = new Date(year, mon, 0, 23, 59, 59, 999);
+    const monthStart     = new Date(Date.UTC(year, mon - 1, 1));
+    const nextMonthStart = new Date(Date.UTC(year, mon, 1));
 
     logger.debug(`[reportController] monthly-summary org=${orgId} month=${month}`);
 
@@ -35,7 +35,7 @@ exports.getMonthlySummary = async (req, res, next) => {
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       Expense.aggregate([
-        { $match: { organization: orgId, status: 'paid', isActive: { $ne: false }, date: { $gte: monthStart, $lte: monthEnd } } },
+        { $match: { organization: orgId, isActive: { $ne: false }, date: { $gte: monthStart, $lt: nextMonthStart } } },
         { $group: { _id: '$category', total: { $sum: '$amount' } } },
       ]),
       Payment.aggregate([
@@ -43,7 +43,7 @@ exports.getMonthlySummary = async (req, res, next) => {
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       Expense.aggregate([
-        { $match: { organization: orgId, status: 'paid', isActive: { $ne: false }, date: { $lt: monthStart } } },
+        { $match: { organization: orgId, isActive: { $ne: false }, date: { $lt: monthStart } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       listExpenseCategories(orgId, { createdBy: req.user?._id }),
@@ -53,9 +53,15 @@ exports.getMonthlySummary = async (req, res, next) => {
     const saldoAnterior = (prevIncomeAgg[0]?.total   || 0) - (prevExpensesAgg[0]?.total || 0);
 
     const categoryKeys = [...new Set([...categories.map(c => c.key), ...expensesAgg.map(e => e._id)])];
+    const labelMap     = Object.fromEntries(categories.map(c => [c.key, c.label]));
     const expMap       = Object.fromEntries(expensesAgg.map(e => [e._id, e.total]));
     const expenses     = Object.fromEntries(categoryKeys.map(c => [c, expMap[c] || 0]));
     const expTotal     = categoryKeys.reduce((sum, c) => sum + expenses[c], 0);
+    const expenseCategories = categoryKeys.map(key => ({
+      key,
+      label:  labelMap[key] || key,
+      amount: expenses[key],
+    }));
 
     res.json({
       success: true,
@@ -64,6 +70,7 @@ exports.getMonthlySummary = async (req, res, next) => {
         saldoAnterior,
         income:   { expensas: income, total: income },
         expenses: { ...expenses, total: expTotal },
+        expenseCategories,
         balance:  saldoAnterior + income - expTotal,
       },
     });
