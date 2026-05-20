@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "backup:db": "node src/scripts/backup-mongo.js",
+    "backup:db:local": "node src/scripts/backup-mongo.js --local",
     "seed": "node src/config/seed.js",
     "migrate:members": "node src/scripts/migrateOrganizationMembers.js",
     "migrate:payment-membership": "node src/scripts/migratePaymentMembership.js",
