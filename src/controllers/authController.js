@@ -6,6 +6,7 @@ const { signToken, signSelectionToken, sendTokenResponse } = require('../middlew
 const { sendPasswordReset } = require('../services/emailService');
 const { normalizeRole, isSuperAdminRole } = require('../utils/roles');
 const { getEffectivePermissions, normalizeAdminRole } = require('../utils/adminPermissions');
+const { trackUsageEvent } = require('../services/platformUsageService');
 const logger = require('../config/logger');
 
 const markLogin = (userId, extra = {}) =>
@@ -98,6 +99,13 @@ exports.login = async (req, res, next) => {
     // SuperAdmin es global: no selecciona organizacion ni usa memberships.
     if (isSuperAdminRole(user.role)) {
       logger.info(`Login exitoso global: ${user.email} [${user.role}]`);
+      trackUsageEvent({
+        userId: user._id,
+        role: user.role,
+        eventType: 'auth.login',
+        module: 'auth',
+        metadata: { accessType: 'super_admin', requiresOrganizationSelection: false },
+      });
       return sendTokenResponse(user, 200, res);
     }
 
@@ -113,6 +121,14 @@ exports.login = async (req, res, next) => {
         });
       }
       logger.info(`Login exitoso (sin membresía): ${user.email} [${user.role}]`);
+      trackUsageEvent({
+        organizationId: user.organization?._id || user.organization || null,
+        userId: user._id,
+        role: user.role,
+        eventType: 'auth.login',
+        module: 'auth',
+        metadata: { accessType: normalizeRole(user.role), requiresOrganizationSelection: false },
+      });
       return sendTokenResponse(user, 200, res);
     }
 
@@ -123,6 +139,14 @@ exports.login = async (req, res, next) => {
       user.fcmToken = undefined;
       user.role     = normalizeRole(membership.role);
       logger.info(`Login exitoso: ${user.email} [${membership.role}] org=${membership.organization.name}`);
+      trackUsageEvent({
+        organizationId: membership.organization._id,
+        userId: user._id,
+        role: membership.role,
+        eventType: 'auth.login',
+        module: 'auth',
+        metadata: { accessType: accessTypeFor(membership), requiresOrganizationSelection: false },
+      });
       return res.json({
         success: true,
         token: m,
@@ -134,6 +158,13 @@ exports.login = async (req, res, next) => {
     // Múltiples membresías → pedir selección de organización
     const selectionToken = signSelectionToken(user._id);
     logger.info(`Login multi-org: ${user.email} (${memberships.length} organizaciones)`);
+    trackUsageEvent({
+      userId: user._id,
+      role: user.role,
+      eventType: 'auth.login',
+      module: 'auth',
+      metadata: { accessType: normalizeRole(user.role), requiresOrganizationSelection: true },
+    });
     return res.json({
       success:                       true,
       requiresOrganizationSelection: true,
@@ -454,3 +485,4 @@ exports.updateFcmToken = async (req, res, next) => {
     next(err);
   }
 };
+

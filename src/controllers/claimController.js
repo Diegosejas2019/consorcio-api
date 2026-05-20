@@ -4,6 +4,7 @@ const firebaseService = require('../services/firebaseService');
 const User            = require('../models/User');
 const logger          = require('../config/logger');
 const { cloudinary, deleteCloudinaryAttachments } = require('../config/cloudinary');
+const { trackUsageEvent } = require('../services/platformUsageService');
 
 // ── GET /api/claims ───────────────────────────────────────────
 exports.getClaims = async (req, res, next) => {
@@ -69,6 +70,18 @@ exports.createClaim = async (req, res, next) => {
     }
 
     logger.info(`Reclamo creado: "${claim.title}" por ${req.user.name}`);
+    trackUsageEvent({
+      organizationId: req.orgId,
+      userId: req.user._id,
+      role: req.user.role,
+      eventType: 'claims.created',
+      module: 'claims',
+      metadata: {
+        claimId: claim._id.toString(),
+        category: claim.category,
+        status: claim.status,
+      },
+    });
     res.status(201).json({ success: true, data: { claim } });
   } catch (err) {
     next(err);
@@ -103,6 +116,20 @@ exports.updateStatus = async (req, res, next) => {
     }
 
     logger.info(`Reclamo ${claim._id} → ${status} por ${req.user.name}`);
+    if (status === 'resolved' && prev !== 'resolved') {
+      trackUsageEvent({
+        organizationId: req.orgId,
+        userId: req.user._id,
+        role: req.user.role,
+        eventType: 'claims.closed',
+        module: 'claims',
+        metadata: {
+          claimId: claim._id.toString(),
+          category: claim.category,
+          status: claim.status,
+        },
+      });
+    }
     res.json({ success: true, data: { claim } });
   } catch (err) {
     next(err);
@@ -186,3 +213,4 @@ exports.getAttachment = async (req, res, next) => {
     next(err);
   }
 };
+

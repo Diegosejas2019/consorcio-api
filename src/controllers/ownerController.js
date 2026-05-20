@@ -16,6 +16,7 @@ const {
   getOwnerDebtOptions,
   getPlanSummariesByOwner,
 } = require('../services/paymentPlanDebtService');
+const { trackUsageEvent } = require('../services/platformUsageService');
 const { calcUnitFee } = require('./unitController');
 const { withIsRead } = require('./noticeController');
 const {
@@ -698,6 +699,19 @@ exports.createOwner = async (req, res, next) => {
       );
     }
 
+    trackUsageEvent({
+      organizationId: req.orgId,
+      userId: req.user._id,
+      role: req.user.role,
+      eventType: 'owners.created',
+      module: 'owners',
+      metadata: {
+        ownerId: owner._id.toString(),
+        createdNewUser: sendWelcomeEmail,
+        assignedUnitsCount: assignedUnits.length,
+      },
+    });
+
     res.status(201).json({ success: true, data: { owner: { ...owner.toObject(), units: assignedUnits } } });
   } catch (err) {
     next(err);
@@ -1301,3 +1315,4 @@ exports.getStats = async (req, res, next) => {
     next(err);
   }
 };
+

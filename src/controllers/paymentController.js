@@ -14,6 +14,7 @@ const firebaseService = require('../services/firebaseService');
 const receiptService  = require('../services/receiptService');
 const { sendDueDateReminders } = require('../services/schedulerService');
 const { calculateExtraordinaryAmountForOwner } = require('../services/expenseService');
+const { trackUsageEvent } = require('../services/platformUsageService');
 const {
   buildBillableUnitsContext,
   getOwnerDebtOptions,
@@ -56,6 +57,15 @@ const normalizeArray = (value) => {
 };
 
 const uniqueValues = (values) => [...new Set(values.map(v => String(v).trim()).filter(Boolean))];
+
+const paymentUsageMetadata = (payment) => ({
+  paymentId: payment._id?.toString(),
+  paymentType: payment.type,
+  status: payment.status,
+  amount: payment.amount,
+  currency: 'ARS',
+  hasReceipt: Boolean(payment.receipt?.url),
+});
 
 const getCloudinaryRawPublicIdFromUrl = (url) => {
   if (!url) return null;
@@ -885,6 +895,14 @@ exports.createPayment = async (req, res, next) => {
         await Promise.all(payments.map(p => applyApprovedPaymentEffects(p, req.user._id)));
       }
       logger.info(`Comprobante creado: ${payment._id} - ${payment.owner.name} - ${paymentMonths.join(',')}`);
+      payments.forEach((createdPayment) => trackUsageEvent({
+        organizationId: req.orgId,
+        userId: req.user._id,
+        role: req.user.role,
+        eventType: 'payments.created',
+        module: 'payments',
+        metadata: paymentUsageMetadata(createdPayment),
+      }));
 
       return res.status(201).json({ success: true, data: { payment, payments } });
     }
@@ -939,6 +957,14 @@ exports.createPayment = async (req, res, next) => {
       await applyApprovedPaymentEffects(payment, req.user._id);
     }
     logger.info(`Comprobante creado: ${payment._id} — ${payment.owner.name} — ${month}`);
+    trackUsageEvent({
+      organizationId: req.orgId,
+      userId: req.user._id,
+      role: req.user.role,
+      eventType: 'payments.created',
+      module: 'payments',
+      metadata: paymentUsageMetadata(payment),
+    });
 
     res.status(201).json({ success: true, data: { payment } });
   } catch (err) {
@@ -1024,6 +1050,14 @@ exports.approvePayment = async (req, res, next) => {
     }
 
     logger.info('Payment approved', { paymentId: payment._id, approvedBy: req.user._id });
+    trackUsageEvent({
+      organizationId: req.orgId,
+      userId: req.user._id,
+      role: req.user.role,
+      eventType: 'payments.approved',
+      module: 'payments',
+      metadata: paymentUsageMetadata(payment),
+    });
     res.json({ success: true, message: 'Pago aprobado correctamente.', data: { payment } });
   } catch (err) {
     next(err);
@@ -1328,4 +1362,3 @@ exports.sendReminders = async (req, res, next) => {
     next(err);
   }
 };
-

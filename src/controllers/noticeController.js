@@ -5,6 +5,7 @@ const firebaseService = require('../services/firebaseService');
 const emailService    = require('../services/emailService');
 const logger          = require('../config/logger');
 const { cloudinary, deleteCloudinaryAttachments } = require('../config/cloudinary');
+const { trackUsageEvent } = require('../services/platformUsageService');
 
 // Agrega isRead para el usuario actual y elimina readBy del resultado
 function withIsRead(notice, userId) {
@@ -141,6 +142,18 @@ exports.createNotice = async (req, res, next) => {
 
     await notice.populate('author', 'name');
     logger.info(`Aviso creado: "${notice.title}" por ${req.user.name}`);
+    trackUsageEvent({
+      organizationId: req.orgId,
+      userId: req.user._id,
+      role: req.user.role,
+      eventType: 'notices.created',
+      module: 'notices',
+      metadata: {
+        noticeId: notice._id.toString(),
+        tag: notice.tag,
+        attachmentsCount: notice.attachments?.length || 0,
+      },
+    });
     res.status(201).json({ success: true, data: { notice: withIsRead(notice, req.user._id) } });
   } catch (err) {
     next(err);
@@ -263,3 +276,4 @@ exports.markAsUnread = async (req, res, next) => {
     next(err);
   }
 };
+

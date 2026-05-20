@@ -2,6 +2,7 @@ const { Readable } = require('stream');
 const OrganizationDocument = require('../models/OrganizationDocument');
 const logger = require('../config/logger');
 const { cloudinary } = require('../config/cloudinary');
+const { trackUsageEvent } = require('../services/platformUsageService');
 
 const ALLOWED_FIELDS = ['title', 'description', 'category', 'visibility'];
 
@@ -104,6 +105,19 @@ exports.createDocument = async (req, res, next) => {
 
     const document = await OrganizationDocument.create(data);
     logger.info(`Documento de organizacion creado: ${document.title} [org: ${req.orgId}]`);
+    trackUsageEvent({
+      organizationId: req.orgId,
+      userId: req.user._id,
+      role: req.user.role,
+      eventType: 'documents.upload',
+      module: 'documents',
+      metadata: {
+        fileType: document.file?.mimetype,
+        sizeBytes: document.file?.size,
+        category: document.category,
+        visibility: document.visibility,
+      },
+    });
 
     res.status(201).json({ success: true, data: { document } });
   } catch (err) {
@@ -206,3 +220,4 @@ exports.getDocumentUrl = async (req, res, next) => {
     next(err);
   }
 };
+
