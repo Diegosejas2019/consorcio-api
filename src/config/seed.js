@@ -10,9 +10,11 @@ const Notice       = require('../models/Notice');
 const Payment      = require('../models/Payment');
 const Claim        = require('../models/Claim');
 const logger       = require('./logger');
+const { assertMongoEnvironment } = require('./environmentGuard');
 
 const seed = async () => {
   try {
+    assertMongoEnvironment({ operation: 'write-script' });
     await mongoose.connect(process.env.MONGODB_URI);
     logger.info('Conectado a MongoDB para seed.');
 

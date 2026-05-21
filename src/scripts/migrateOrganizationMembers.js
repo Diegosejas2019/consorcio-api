@@ -8,8 +8,10 @@ const mongoose          = require('mongoose');
 const User              = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const logger            = require('../config/logger');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 const migrate = async () => {
+  assertMongoEnvironment({ operation: 'write-script' });
   await mongoose.connect(process.env.MONGODB_URI);
   logger.info('Conectado a MongoDB para migración.');
 

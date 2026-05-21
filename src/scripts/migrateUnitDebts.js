@@ -18,6 +18,7 @@ const mongoose = require('mongoose');
 const Organization = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
 const Unit = require('../models/Unit');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 require('../models/User');
 
 const EDEN_6_ID = '69e6112cbf9c073c237b12a5';
@@ -78,6 +79,7 @@ async function run() {
   const apply = hasArg('--apply');
   const manualRows = parseManualRows(argValue('--manual'));
 
+  assertMongoEnvironment({ operation: apply ? 'write-script' : 'read-script' });
   await mongoose.connect(process.env.MONGODB_URI);
   const org = await findOrganization();
   if (!org) throw new Error('Organización no encontrada.');

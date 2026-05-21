@@ -14,6 +14,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const User     = require('../models/User');
 const Unit     = require('../models/Unit');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 function normalizeLotName(raw) {
   return String(raw)
@@ -24,6 +25,7 @@ function normalizeLotName(raw) {
 }
 
 async function run() {
+  assertMongoEnvironment({ operation: 'write-script' });
   await mongoose.connect(process.env.MONGODB_URI);
   console.log('✔ Conectado a MongoDB\n');
 

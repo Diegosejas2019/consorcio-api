@@ -1,8 +1,11 @@
 const mongoose = require('mongoose');
 const logger   = require('./logger');
+const { assertMongoEnvironment } = require('./environmentGuard');
 
 const connectDB = async () => {
   try {
+    assertMongoEnvironment();
+
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       // Las opciones useNewUrlParser y useUnifiedTopology ya no son necesarias en Mongoose 7+
     });

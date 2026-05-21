@@ -4,6 +4,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const { spawn } = require('child_process');
 const { v2: cloudinary } = require('cloudinary');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 const BACKUPS_TO_KEEP = 8;
 const BACKUP_PREFIX = 'gestionar-backup';
@@ -208,6 +209,7 @@ async function main() {
     throw new Error('Falta la variable de entorno MONGO_URI. No se genero ningun backup.');
   }
 
+  assertMongoEnvironment({ uri: mongoUri, variableName: 'MONGO_URI', operation: 'read-script' });
   validateStorageProvider(provider);
   await ensureMongodumpAvailable();
   await fs.mkdir(backupDir, { recursive: true });

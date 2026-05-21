@@ -19,6 +19,11 @@ app.use(helmet({
 
 // ── CORS ──────────────────────────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+const strictCorsEnv = ['production', 'qa', 'staging'].includes(String(process.env.NODE_ENV || '').toLowerCase());
+
+if (strictCorsEnv && allowedOrigins.length === 0) {
+  throw new Error('ALLOWED_ORIGINS es obligatorio en production/qa/staging.');
+}
 
 app.use(cors({
   origin: (origin, cb) => {
@@ -26,7 +31,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
       return cb(null, true);
     }
-    cb(new Error(`CORS bloqueado: origen no permitido (${origin})`));
+    cb(new Error('CORS bloqueado: origen no permitido.'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],

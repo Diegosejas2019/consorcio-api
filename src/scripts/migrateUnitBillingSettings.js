@@ -15,6 +15,7 @@ const OrganizationMember = require('../models/OrganizationMember');
 const Unit = require('../models/Unit');
 const User = require('../models/User');
 const { normalizeDebtBalance } = require('../utils/ownerFinance');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 function argValue(name) {
   const idx = process.argv.indexOf(name);
@@ -39,6 +40,7 @@ async function findOrganization() {
 
 async function run() {
   const apply = hasArg('--apply');
+  assertMongoEnvironment({ operation: apply ? 'write-script' : 'read-script' });
   await mongoose.connect(process.env.MONGODB_URI);
 
   const org = await findOrganization();

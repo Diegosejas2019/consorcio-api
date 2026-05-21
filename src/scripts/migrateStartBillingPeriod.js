@@ -11,8 +11,10 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const User     = require('../models/User');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 async function migrate() {
+  assertMongoEnvironment({ operation: 'write-script' });
   await mongoose.connect(process.env.MONGODB_URI);
   console.log('Conectado a MongoDB.');
 

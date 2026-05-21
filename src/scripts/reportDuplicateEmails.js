@@ -12,6 +12,7 @@ const Unit = require('../models/Unit');
 const PaymentPlan = require('../models/PaymentPlan');
 const OwnerDebtItem = require('../models/OwnerDebtItem');
 const SupportTicket = require('../models/SupportTicket');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 const referenceModels = [
   ['payments', Payment, 'owner'],
@@ -26,10 +27,7 @@ const referenceModels = [
 ];
 
 async function main() {
-  if (!process.env.MONGODB_URI) {
-    throw new Error('Falta MONGODB_URI.');
-  }
-
+  assertMongoEnvironment({ operation: 'read-script' });
   await mongoose.connect(process.env.MONGODB_URI);
 
   const duplicateGroups = await User.aggregate([

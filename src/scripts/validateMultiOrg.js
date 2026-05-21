@@ -9,8 +9,10 @@ const mongoose           = require('mongoose');
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Payment            = require('../models/Payment');
+const { assertMongoEnvironment } = require('../config/environmentGuard');
 
 async function run() {
+  assertMongoEnvironment({ operation: 'read-script' });
   await mongoose.connect(process.env.MONGODB_URI);
   console.log('Conectado a MongoDB\n');
 
