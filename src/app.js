@@ -101,6 +101,7 @@ app.use('/api/super-admin',   require('./routes/superAdmin'));
 app.use('/api/organizations', require('./routes/organizations'));
 app.use('/api/owners',        require('./routes/owners'));
 app.use('/api/payments',      require('./routes/payments'));
+app.use('/api/delinquency',   require('./routes/delinquency'));
 app.use('/api/notices',       require('./routes/notices'));
 app.use('/api/notice-templates', require('./routes/noticeTemplates'));
 app.use('/api/claims',        require('./routes/claims'));
