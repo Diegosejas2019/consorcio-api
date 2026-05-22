@@ -1,4 +1,4 @@
-const PRODUCTION_DB = 'gestionar_prod';
+const PRODUCTION_DB = 'consorcio';
 const QA_DB = 'gestionar_qa';
 
 function getRuntimeEnvironment() {

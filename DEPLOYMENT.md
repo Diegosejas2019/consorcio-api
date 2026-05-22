@@ -20,9 +20,9 @@ git checkout -b feature/nombre-corto
 Produccion:
 
 - Railway: servicio API de produccion.
-- MongoDB Atlas: base `gestionar_prod`.
+- MongoDB Atlas: base `consorcio`.
 - `NODE_ENV=production`.
-- `MONGODB_URI` debe apuntar a `gestionar_prod`.
+- `MONGODB_URI` debe apuntar a `consorcio`.
 - `ALLOWED_ORIGINS` solo debe incluir dominios productivos.
 
 QA:
@@ -33,7 +33,7 @@ QA:
 - `MONGODB_URI` debe apuntar a `gestionar_qa`.
 - `ALLOWED_ORIGINS` solo debe incluir Preview/QA de Vercel.
 
-El backend bloquea el arranque si `NODE_ENV=production` no usa `gestionar_prod` o si `NODE_ENV=qa/staging` no usa `gestionar_qa`. Seeds y migraciones tambien bloquean escrituras contra `gestionar_prod` salvo confirmacion explicita con `ALLOW_PRODUCTION_DB_WRITE=true`.
+El backend bloquea el arranque si `NODE_ENV=production` no usa `consorcio` o si `NODE_ENV=qa/staging` no usa `gestionar_qa`. Seeds y migraciones tambien bloquean escrituras contra `consorcio` salvo confirmacion explicita con `ALLOW_PRODUCTION_DB_WRITE=true`.
 
 ## Variables Railway
 
@@ -90,4 +90,4 @@ npm test
 npm start
 ```
 
-Nunca correr `npm run seed` o migraciones contra `gestionar_prod` sin confirmacion explicita.
+Nunca correr `npm run seed` o migraciones contra `consorcio` sin confirmacion explicita.
