@@ -354,7 +354,9 @@ async function getOwnerDebtOptions({ organizationId, ownerId, excludePlanId = nu
       amount,
       balance: normalizeDebtBalance(unit.balance),
     };
-  }).filter(item => item.amount > 0);
+  })
+    .filter(item => item.amount > 0)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true, sensitivity: 'base' }));
 
   const availableDebtItems = debtItems
     .filter(item => !blocking.debtItems.has(item._id.toString()) && !activePaymentDebtItemIds.has(item._id.toString()))

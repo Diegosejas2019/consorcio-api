@@ -19,6 +19,7 @@ const {
 const { trackUsageEvent } = require('../services/platformUsageService');
 const { calcUnitFee } = require('./unitController');
 const { withIsRead } = require('./noticeController');
+const { buildVisibleFilterForOwner } = require('../services/communicationService');
 const {
   computeTotalOwedByUnits,
   computeUnitsBalance,
@@ -419,9 +420,9 @@ exports.getMySummary = async (req, res, next) => {
         owner:          req.user,
         membership,
       }),
-      Notice.find({ organization: req.orgId })
+      Notice.find(buildVisibleFilterForOwner(req.orgId, ownerId))
         .populate('author', 'name')
-        .sort({ createdAt: -1 })
+        .sort({ sentAt: -1, createdAt: -1 })
         .limit(noticesLimit)
         .select('-__v'),
     ]);

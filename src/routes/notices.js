@@ -7,9 +7,13 @@ const { uploadNotice } = require('../config/cloudinary');
 router.use(protect);
 
 router.get('/',     requirePermissionForAdmin('notices.read'), ctrl.getNotices);
-router.get('/:id',  requirePermissionForAdmin('notices.read'), ctrl.getNotice);
 router.post('/',    restrictTo('admin'), requirePermission('notices.create'), uploadNotice.array('attachments', 3), ctrl.createNotice);
+router.post('/process-scheduled', restrictTo('admin'), requirePermission('notices.update'), ctrl.processScheduled);
+router.get('/:id/stats', restrictTo('admin'), requirePermission('notices.read'), ctrl.getStats);
 router.get('/:id/attachment/:index', ctrl.getAttachment);
+router.post('/:id/send-now', restrictTo('admin'), requirePermission('notices.update'), ctrl.sendNow);
+router.post('/:id/cancel', restrictTo('admin'), requirePermission('notices.update'), ctrl.cancel);
+router.get('/:id',  requirePermissionForAdmin('notices.read'), ctrl.getNotice);
 router.patch('/:id/read',   ctrl.markAsRead);
 router.patch('/:id/unread', ctrl.markAsUnread);
 router.patch('/:id',  restrictTo('admin'), requirePermission('notices.update'), uploadNotice.array('attachments', 3), ctrl.updateNotice);

@@ -9,6 +9,7 @@ const firebase     = require('./firebaseService');
 const emailService = require('./emailService');
 const logger       = require('../config/logger');
 const { currentYYYYMM } = require('../utils/periods');
+const { processScheduledCommunications } = require('./communicationService');
 
 function resolveReminderPeriod(org) {
   if (org.feePeriodCode) return org.feePeriodCode;
@@ -146,6 +147,17 @@ async function checkPaymentPlanInstallments() {
 
 // ── Cron: diario a las 09:00 UTC ─────────────────────────────
 function initScheduler() {
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const result = await processScheduledCommunications();
+      if (result.processed.length || result.failed.length) {
+        logger.info(`[Scheduler] Comunicados programados: ${result.processed.length} enviados, ${result.failed.length} fallidos`);
+      }
+    } catch (err) {
+      logger.error(`[Scheduler] Error procesando comunicados programados: ${err.message}`, { stack: err.stack });
+    }
+  });
+
   cron.schedule('0 9 * * *', async () => {
     logger.info('[Scheduler] Ejecutando verificación de vencimientos...');
     try {
@@ -164,4 +176,4 @@ function initScheduler() {
   logger.info('[Scheduler] Cron inicializado — se ejecuta diariamente a las 09:00 UTC');
 }
 
-module.exports = { initScheduler, sendDueDateReminders, resolveReminderPeriod, checkPaymentPlanInstallments };
+module.exports = { initScheduler, sendDueDateReminders, resolveReminderPeriod, checkPaymentPlanInstallments, processScheduledCommunications };
