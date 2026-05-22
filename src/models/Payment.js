@@ -138,6 +138,12 @@ const paymentSchema = new mongoose.Schema(
     },
     receiptNumber:   { type: String },
     receiptIssuedAt: { type: Date },
+
+    unidentifiedPaymentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'UnidentifiedPayment',
+      index: true,
+    },
   },
   {
     timestamps: true,
@@ -150,6 +156,7 @@ const paymentSchema = new mongoose.Schema(
 paymentSchema.index({ organization: 1, owner: 1, month: 1 });
 paymentSchema.index({ organization: 1, status: 1, createdAt: -1 });
 paymentSchema.index({ organization: 1, month: 1, status: 1 });
+paymentSchema.index({ unidentifiedPaymentId: 1 });
 
 // ── Virtual: mes formateado ──────────────────────────────────
 paymentSchema.virtual('monthFormatted').get(function () {

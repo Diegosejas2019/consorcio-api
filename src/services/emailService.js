@@ -1090,4 +1090,60 @@ exports.sendNoticeEmail = async (owner, notice) => {
   });
 };
 
+// ── Etapa 5: Registro autónomo ────────────────────────────────
+
+exports.sendAccessRequestNotification = async (adminEmail, orgName, requesterName, requestedUnit) => {
+  const unitText = requestedUnit ? `<p style="margin:0 0 8px"><b>Unidad/lote solicitado:</b> ${requestedUnit}</p>` : '';
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;background:#f4f4f4;padding:40px 20px">
+      <div style="max-width:540px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+        <div style="background:#0e1512;padding:28px 32px;text-align:center">
+          <h1 style="color:#9cf27b;margin:0;font-size:1.4rem;font-weight:700">GestionAr</h1>
+        </div>
+        <div style="padding:32px">
+          <h2 style="color:#1a1a1a;margin:0 0 16px;font-size:1.1rem">Nueva solicitud de acceso</h2>
+          <p style="color:#444;margin:0 0 20px">Hay una nueva solicitud pendiente para <b>${orgName}</b>.</p>
+          <div style="background:#f8f8f8;border-radius:8px;padding:16px;margin-bottom:20px">
+            <p style="margin:0 0 8px"><b>Solicitante:</b> ${requesterName}</p>
+            ${unitText}
+          </div>
+          <p style="color:#666;font-size:0.9rem;margin:0">Ingresá al panel de administración para revisar y aprobar o rechazar la solicitud.</p>
+        </div>
+        <div style="padding:16px 32px;background:#f8f8f8;text-align:center">
+          <p style="color:#999;font-size:0.78rem;margin:0">GestionAr — Sistema de gestión de organizaciones</p>
+        </div>
+      </div>
+    </div>
+  `;
+  await sendEmail({ to: adminEmail, subject: `Nueva solicitud de acceso — ${orgName}`, html });
+};
+
+exports.sendAccessRequestRejected = async (email, requesterName, orgName, rejectionReason) => {
+  const reasonHtml = rejectionReason
+    ? `<div style="background:#fef2f2;border-left:3px solid #f87171;padding:12px 16px;border-radius:4px;margin:16px 0">
+         <p style="color:#991b1b;margin:0;font-size:0.9rem"><b>Motivo:</b> ${rejectionReason}</p>
+       </div>`
+    : '';
+  const html = `
+    <div style="font-family:Inter,Arial,sans-serif;background:#f4f4f4;padding:40px 20px">
+      <div style="max-width:540px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+        <div style="background:#0e1512;padding:28px 32px;text-align:center">
+          <h1 style="color:#9cf27b;margin:0;font-size:1.4rem;font-weight:700">GestionAr</h1>
+        </div>
+        <div style="padding:32px">
+          <h2 style="color:#1a1a1a;margin:0 0 16px;font-size:1.1rem">Solicitud de acceso</h2>
+          <p style="color:#444;margin:0 0 16px">Hola <b>${requesterName}</b>,</p>
+          <p style="color:#444;margin:0 0 16px">Tu solicitud para unirte a <b>${orgName}</b> no pudo ser aprobada en este momento.</p>
+          ${reasonHtml}
+          <p style="color:#666;font-size:0.9rem;margin:0">Si tenés preguntas, contactate directamente con el administrador de la organización.</p>
+        </div>
+        <div style="padding:16px 32px;background:#f8f8f8;text-align:center">
+          <p style="color:#999;font-size:0.78rem;margin:0">GestionAr — Sistema de gestión de organizaciones</p>
+        </div>
+      </div>
+    </div>
+  `;
+  await sendEmail({ to: email, subject: `Tu solicitud de acceso — ${orgName}`, html });
+};
+
 module.exports = { ...exports, sendEmail };

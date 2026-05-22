@@ -231,6 +231,16 @@ const organizationSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // ── Registro autónomo de propietarios ────────────────────────
+    publicJoinCode: {
+      type: String,
+      trim: true,
+    },
+    publicJoinEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
     // ── MercadoPago (nunca se exponen en respuestas generales) ────
     mpPublicKey: {
       type: String,
@@ -258,6 +268,7 @@ const organizationSchema = new mongoose.Schema(
 // ── Índices ──────────────────────────────────────────────────────
 // slug ya tiene unique:true en el campo, no se necesita schema.index adicional
 organizationSchema.index({ businessType: 1, isActive: 1 });
+organizationSchema.index({ publicJoinCode: 1 }, { sparse: true });
 
 // ── Static: labels por defecto para un tipo de negocio ──────────
 organizationSchema.statics.defaultLabels = function (businessType) {

@@ -78,6 +78,14 @@ const contactLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const joinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { success: false, message: 'Demasiadas solicitudes. Intentá de nuevo en 15 minutos.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 app.use('/api/internal', require('./routes/internal'));
 app.use('/api', globalLimiter);
 app.use('/api/auth/login', authLimiter);
@@ -101,6 +109,7 @@ app.use('/api/super-admin',   require('./routes/superAdmin'));
 app.use('/api/organizations', require('./routes/organizations'));
 app.use('/api/owners',        require('./routes/owners'));
 app.use('/api/payments',      require('./routes/payments'));
+app.use('/api/unidentified-payments', require('./routes/unidentifiedPayments'));
 app.use('/api/delinquency',   require('./routes/delinquency'));
 app.use('/api/notices',       require('./routes/notices'));
 app.use('/api/notice-templates', require('./routes/noticeTemplates'));
@@ -123,6 +132,8 @@ app.use('/api/salary-payments', require('./routes/salaryPaymentRoutes'));
 app.use('/api/payment-plans',  require('./routes/paymentPlans'));
 app.use('/api/debt-items',     require('./routes/ownerDebtItems'));
 app.use('/api/contact',        require('./routes/contact'));
+app.use('/api/join',           joinLimiter, require('./routes/join'));
+app.use('/api/access-requests', require('./routes/accessRequests'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {
