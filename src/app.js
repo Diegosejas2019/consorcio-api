@@ -70,10 +70,19 @@ const forgotPasswordLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 5,
+  message: { success: false, message: 'Demasiadas solicitudes. Intentá de nuevo en 1 hora.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 app.use('/api/internal', require('./routes/internal'));
 app.use('/api', globalLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/forgot-password', forgotPasswordLimiter);
+app.use('/api/contact', contactLimiter);
 
 // ── Health check ──────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -111,6 +120,7 @@ app.use('/api/salaries',        require('./routes/salaries'));
 app.use('/api/salary-payments', require('./routes/salaryPaymentRoutes'));
 app.use('/api/payment-plans',  require('./routes/paymentPlans'));
 app.use('/api/debt-items',     require('./routes/ownerDebtItems'));
+app.use('/api/contact',        require('./routes/contact'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {

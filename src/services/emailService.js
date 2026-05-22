@@ -2,19 +2,25 @@ const logger = require('../config/logger');
 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
-const sendEmail = async ({ to, subject, html }) => {
+const sendEmail = async ({ to, subject, html, replyTo }) => {
+  const payload = {
+    sender: { name: 'GestionAr', email: process.env.EMAIL_FROM || 'gestionar.app.info@gmail.com' },
+    to: [{ email: to }],
+    subject,
+    htmlContent: html,
+  };
+
+  if (replyTo) {
+    payload.replyTo = typeof replyTo === 'string' ? { email: replyTo } : replyTo;
+  }
+
   const res = await fetch(BREVO_API_URL, {
     method: 'POST',
     headers: {
       'api-key': process.env.BREVO_API_KEY,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      sender: { name: 'GestionAr', email: process.env.EMAIL_FROM || 'gestionar.app.info@gmail.com' },
-      to: [{ email: to }],
-      subject,
-      htmlContent: html,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
