@@ -120,6 +120,7 @@ app.use('/api/providers',     require('./routes/providers'));
 app.use('/api/expenses',      require('./routes/expenses'));
 app.use('/api/organization-documents', require('./routes/organizationDocumentRoutes'));
 app.use('/api/reports',       require('./routes/reports'));
+app.use('/api/renditions',    require('./routes/renditionRoutes'));
 app.use('/api/votes',         require('./routes/votes'));
 app.use('/api/units',         require('./routes/units'));
 app.use('/api/visits',        require('./routes/visits'));
