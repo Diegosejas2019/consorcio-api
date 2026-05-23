@@ -9,6 +9,7 @@ const {
   getExpenseCategoryLabelMap,
   listExpenseCategories,
 } = require('../services/expenseCategoryService');
+const reportService      = require('../services/reportService');
 
 // ── GET /api/reports/monthly-summary?month=YYYY-MM ──────────────
 exports.getMonthlySummary = async (req, res, next) => {
@@ -477,6 +478,164 @@ exports.getExpensasPdf = async (req, res, next) => {
     res.end(buffer);
 
     logger.info(`[reportController] PDF expensas generado org=${orgId} month=${month}`);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── Helpers compartidos ───────────────────────────────────────────────────────
+
+const MAX_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
+
+function validateDateRange(from, to) {
+  if (from && to) {
+    const diff = new Date(to) - new Date(from);
+    if (diff > MAX_RANGE_MS) {
+      const err = new Error('El rango máximo permitido es de 12 meses.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (diff < 0) {
+      const err = new Error('La fecha de inicio debe ser anterior a la fecha de fin.');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+}
+
+// ── POST /api/reports/owner-statement — JSON ──────────────────────────────────
+exports.ownerStatementHandler = async (req, res, next) => {
+  try {
+    const { ownerId, from, to, includePending = true } = req.body;
+    if (!ownerId) {
+      return res.status(400).json({ success: false, message: 'ownerId es obligatorio.' });
+    }
+    validateDateRange(from, to);
+
+    const data = await reportService.getOwnerStatementData({
+      orgId: req.orgId,
+      ownerId,
+      from,
+      to,
+      includePending,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/reports/owner-statement/pdf — PDF Puppeteer ────────────────────
+exports.ownerStatementPdfHandler = async (req, res, next) => {
+  try {
+    const { ownerId, from, to, includePending = true } = req.body;
+    if (!ownerId) {
+      return res.status(400).json({ success: false, message: 'ownerId es obligatorio.' });
+    }
+    validateDateRange(from, to);
+
+    const data = await reportService.getOwnerStatementData({
+      orgId: req.orgId,
+      ownerId,
+      from,
+      to,
+      includePending,
+    });
+    const html = reportService.generateOwnerStatementHtml(data);
+
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
+    let buffer;
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      buffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '24px', right: '0', bottom: '24px', left: '0' },
+      });
+    } finally {
+      await browser.close();
+    }
+
+    const safeName = (data.owner.name || 'propietario').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    const filename = `estado_cuenta_${safeName}_${Date.now()}.pdf`;
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length':      buffer.length,
+    });
+    res.end(buffer);
+
+    logger.info(`[reportController] PDF estado de cuenta generado org=${req.orgId} owner=${ownerId}`);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/reports/delinquency — JSON ─────────────────────────────────────
+exports.delinquencyReportHandler = async (req, res, next) => {
+  try {
+    const { minDebt = 0 } = req.body;
+    const data = await reportService.getDelinquencyData({
+      orgId: req.orgId,
+      minDebt: Number(minDebt) || 0,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/reports/payments — JSON ────────────────────────────────────────
+exports.paymentsReportHandler = async (req, res, next) => {
+  try {
+    const { from, to, status, ownerId } = req.body;
+    validateDateRange(from, to);
+
+    const data = await reportService.getPaymentsData({
+      orgId: req.orgId,
+      from,
+      to,
+      status,
+      ownerId,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/reports/expenses — JSON ────────────────────────────────────────
+exports.expensesReportHandler = async (req, res, next) => {
+  try {
+    const { from, to, category, expenseType } = req.body;
+    validateDateRange(from, to);
+
+    const data = await reportService.getExpensesData({
+      orgId: req.orgId,
+      from,
+      to,
+      category,
+      expenseType,
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/reports/owners — JSON ──────────────────────────────────────────
+exports.ownersReportHandler = async (req, res, next) => {
+  try {
+    const { includeInactive = false } = req.body;
+    const data = await reportService.getOwnersData({
+      orgId: req.orgId,
+      includeInactive: !!includeInactive,
+    });
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }
