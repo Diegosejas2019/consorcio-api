@@ -335,3 +335,102 @@ exports.deleteExpense = async (req, res, next) => {
     next(err);
   }
 };
+
+// ── GET /api/expenses/check-duplicate ────────────────────────
+exports.checkDuplicate = async (req, res, next) => {
+  try {
+    const { invoiceNumber, invoiceCuit } = req.query;
+
+    if (!invoiceNumber && !invoiceCuit) {
+      return res.json({ success: true, data: { isDuplicate: false, possibleDuplicates: [] } });
+    }
+
+    const filter = { organization: req.orgId, isActive: { $ne: false } };
+    if (invoiceNumber) filter.invoiceNumber = invoiceNumber.trim();
+    if (invoiceCuit)   filter.invoiceCuit   = invoiceCuit.trim();
+
+    const possibleDuplicates = await Expense.find(filter)
+      .populate('provider', 'name')
+      .select('description amount date invoiceNumber invoiceCuit provider')
+      .limit(5)
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        isDuplicate: possibleDuplicates.length > 0,
+        possibleDuplicates: possibleDuplicates.map(e => ({
+          _id:          e._id,
+          description:  e.description,
+          amount:       e.amount,
+          date:         e.date,
+          invoiceNumber: e.invoiceNumber,
+          invoiceCuit:  e.invoiceCuit,
+          providerName: e.provider?.name,
+        })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/expenses/preview-invoice ───────────────────────
+// Phase 1: extrae datos del nombre del archivo sin OCR externo.
+// Phase 2 (pendiente): integrar OCR (Google Vision / Tesseract) para leer contenido del PDF.
+exports.previewInvoice = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Debe adjuntar un archivo para analizar.' });
+    }
+
+    const filename = req.file.originalname || '';
+
+    // Número de factura AR: letra + 4-5 dígitos + guión opcional + 7-8 dígitos (ej: A0001-00001234)
+    const invoiceMatch = filename.match(/([A-Z]\d{4,5}-?\d{7,8})/i);
+    let invoiceNumber = null;
+    if (invoiceMatch) {
+      const raw = invoiceMatch[1].toUpperCase().replace(/-/g, '');
+      const splitAt = raw.length - 8;
+      invoiceNumber = `${raw.slice(0, splitAt)}-${raw.slice(splitAt)}`;
+    }
+
+    // CUIT: XX-XXXXXXXX-X o 11 dígitos seguidos
+    const cuitDashed = filename.match(/\b(\d{2}-\d{8}-\d)\b/);
+    const cuitPlain  = filename.match(/\b(\d{11})\b/);
+    let invoiceCuit = null;
+    if (cuitDashed) {
+      invoiceCuit = cuitDashed[1];
+    } else if (cuitPlain) {
+      const raw = cuitPlain[1];
+      invoiceCuit = `${raw.slice(0, 2)}-${raw.slice(2, 10)}-${raw.slice(10)}`;
+    }
+
+    // Si se detectó CUIT, buscar proveedor activo de la misma organización
+    let providerSuggestion = null;
+    if (invoiceCuit) {
+      const rawCuit = invoiceCuit.replace(/-/g, '');
+      const provider = await Provider.findOne({
+        organization: req.orgId,
+        active: true,
+        $or: [{ cuit: invoiceCuit }, { cuit: rawCuit }],
+      }).select('name serviceType cuit').lean();
+
+      if (provider) {
+        providerSuggestion = {
+          _id:         provider._id,
+          name:        provider.name,
+          serviceType: provider.serviceType,
+          cuit:        provider.cuit,
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { invoiceNumber, invoiceCuit, providerSuggestion, parseSource: 'filename' },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
