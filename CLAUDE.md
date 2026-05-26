@@ -172,6 +172,50 @@ Campos: `organization`, `featureKey` (string), `enabled` (bool, default true).
 ### Config
 Legado — singleton global. Usar `Organization` para configuración por organización.
 
+### NoticeTemplate
+Plantillas reutilizables de avisos, creadas por el admin.
+Categorías: `general` | `mantenimiento` | `corte_servicio` | `expensas` | `asamblea` | `mora` | `seguridad` | `emergencia` | `otro`.
+Campos: `organization`, `title`, `subject` (asunto de email; auto-poblado desde `title` si se omite), `body` (máx 5000 chars), `category`, `isActive`, `createdBy`, `updatedBy`, `deletedAt`.
+
+### NoticeReadReceipt
+Registro de qué usuarios leyeron qué avisos. Reemplaza el campo booleano en el aviso.
+Campos: `organization`, `notice`, `user`, `unit` (opcional), `readAt`.
+Índice único `{ organization, notice, user }`.
+
+### DelinquencyReminder
+Historial de recordatorios enviados a propietarios morosos.
+Canales: `app` | `email` | `whatsapp` | `manual`.
+Estados: `sent` | `logged` | `failed`.
+Campos: `organization`, `owner`, `unit`, `debtAmount`, `periods` (array YYYY-MM), `channel`, `message`, `sentBy`, `sentAt`, `status`, `notice` (ref Notice generado, opcional).
+
+### UnidentifiedPayment
+Pagos recibidos que no pueden asociarse a un propietario conocido.
+Estados: `pending` | `partially_matched` | `associated` | `rejected` | `archived`.
+Métodos: `transferencia` | `deposito` | `efectivo` | `mercadopago` | `otro`.
+Campos: `organization`, `amount`, `paymentDate`, `receivedAt`, `paymentMethod`, `reference`, `senderName`, `senderAccount`, `description`, `status`, `attachments[]` (Cloudinary), `matchedOwnerId`, `matchedUnitId`, `matchedPeriods[]`, `associatedPaymentId`, `associatedBy`, `associatedAt`, `rejectedBy`, `rejectedAt`, `rejectionReason`, `archivedBy`, `archivedAt`, `archiveReason`, `createdBy`, `updatedBy`, `isDeleted`.
+Virtuales: `paymentMethodLabel`, `statusLabel`.
+
+### UnidentifiedPaymentEvent
+Log de auditoría de acciones sobre `UnidentifiedPayment`.
+Tipos: `created` | `updated` | `attachment_added` | `attachment_removed` | `suggestion_viewed` | `associated` | `rejected` | `archived` | `restored` | `note_added`.
+Campos: `organization`, `unidentifiedPayment`, `eventType`, `userId`, `metadata`, `createdAt`.
+Virtual: `eventTypeLabel`.
+
+### OrganizationAccessRequest
+Solicitudes de propietarios para unirse a una organización via enlace/código de registro.
+Estados: `pending` | `approved` | `rejected`.
+Campos: `organization`, `joinCode` (snapshot del código al momento de la solicitud), `name`, `email`, `phone`, `requestedUnitLabel` (texto libre: "Lote 15", "Depto 3A"), `message`, `userId` (si el solicitante ya tenía cuenta), `isExistingUser`, `status`, `reviewedBy`, `reviewedAt`, `rejectionReason`, `createdUserId` (usuario creado/vinculado al aprobar), `requestIp` (select: false).
+
+### MonthlyRendition
+Rendición mensual de cuentas de la organización. Historial persistido en DB.
+Estados: `draft` | `generated` | `archived`.
+Campos: `organization`, `period` (YYYY-MM), `generatedAt`, `generatedBy`, `observations` (máx 4000 chars), `warnings[]` (`{ code, message, severity }`), `pdfUrl`, `pdfPublicId`, `status`, `version`.
+Índice único `{ organization, period, version }`.
+
+### PlatformUsageEvent
+Telemetría de uso de la plataforma (scope: superadmin). Solo escritura desde el backend.
+Campos: `organizationId`, `userId`, `role` (`owner`|`admin`|`super_admin`|`superadmin`), `eventType`, `module`, `metadata`, `createdAt`.
+
 ### Vote
 Votaciones creadas por el admin para los propietarios.
 Campos: `title`, `description`, `options[]` (label + votes), `status` (`open` | `closed`), `endsAt` (fecha límite opcional), `createdBy`, `closedBy`, `closedAt`, `pushSent`, `pushSentAt`.
@@ -379,6 +423,44 @@ Campos: `organization`, `visit`, `action`, `performedBy`, `performedByName`, `pe
 | PATCH | `/api/super-admin/organizations/:id/status` | superadmin |
 | GET | `/health` | público |
 | POST | `/api/internal/create-organization` | interno (`x-internal-key` header) |
+| POST | `/api/contact/demo-request` | público (honeypot anti-spam) |
+| GET | `/api/notice-templates` | admin |
+| POST | `/api/notice-templates` | admin |
+| PATCH/PUT | `/api/notice-templates/:id` | admin |
+| DELETE | `/api/notice-templates/:id` | admin |
+| GET | `/api/delinquency/summary` | admin |
+| GET | `/api/delinquency/owners` | admin |
+| GET | `/api/delinquency/aging` | admin |
+| GET | `/api/delinquency/export` | admin (CSV) |
+| GET | `/api/delinquency/owners/:ownerId` | admin |
+| GET | `/api/delinquency/owners/:ownerId/export` | admin (CSV) |
+| POST | `/api/delinquency/owners/:ownerId/reminders` | admin |
+| GET | `/api/unidentified-payments/summary` | admin |
+| GET | `/api/unidentified-payments` | admin |
+| GET | `/api/unidentified-payments/:id` | admin |
+| POST | `/api/unidentified-payments` | admin (con upload hasta 5 archivos) |
+| PUT | `/api/unidentified-payments/:id` | admin |
+| DELETE | `/api/unidentified-payments/:id` | admin |
+| GET | `/api/unidentified-payments/:id/suggestions` | admin |
+| POST | `/api/unidentified-payments/:id/associate` | admin |
+| POST | `/api/unidentified-payments/:id/reject` | admin |
+| POST | `/api/unidentified-payments/:id/archive` | admin |
+| GET | `/api/join/:code` | público — info de la org por código |
+| POST | `/api/join/:code` | público — enviar solicitud de acceso |
+| POST | `/api/join/:code/auth` | autenticado — solicitud de usuario existente |
+| GET | `/api/access-requests/settings` | admin |
+| PATCH | `/api/access-requests/settings` | admin |
+| POST | `/api/access-requests/regenerate-code` | admin |
+| GET | `/api/access-requests` | admin |
+| GET | `/api/access-requests/:id` | admin |
+| POST | `/api/access-requests/:id/approve` | admin |
+| POST | `/api/access-requests/:id/reject` | admin |
+| GET | `/api/renditions/preview` | admin |
+| GET | `/api/renditions/history` | admin |
+| GET | `/api/renditions/annual` | admin |
+| POST | `/api/renditions/:period/generate-pdf` | admin |
+| GET | `/api/renditions/:period/export-csv` | admin |
+| PATCH | `/api/renditions/:period/observations` | admin |
 
 ## Autenticación y roles
 
@@ -472,7 +554,17 @@ no en variables de entorno.
 
 ## Flujo de trabajo
 
-- Después de cada cambio terminado, hacer commit y push.
+```bash
+npm run dev     # verificar que la API levanta sin errores
+git status --short
+git add <archivos>
+git commit -m "<mensaje>"
+git push
+```
+
+- Después de cada cambio terminado: compilar (verificar que Node no lanza errores al iniciar), hacer commit y push.
+- No modificar `.env` ni credenciales en el código — las variables van en Railway o en `.env.example`.
+- Antes de tocar payloads o modelos, revisar el esquema Mongoose correspondiente.
 
 ## Convenciones
 
