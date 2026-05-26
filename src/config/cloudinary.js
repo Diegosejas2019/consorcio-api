@@ -160,6 +160,7 @@ function paymentUploadParams(req, file) {
   const ext = getExtension(file);
 
   return {
+    // Carpeta fija por compatibilidad con URLs existentes. No cambiar sin estrategia de migración.
     folder:          'consorcio/comprobantes',
     resource_type:   image ? 'image' : 'raw',
     allowed_formats: image ? IMAGE_FORMATS : ['pdf'],

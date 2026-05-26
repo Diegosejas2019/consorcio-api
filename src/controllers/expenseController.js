@@ -345,9 +345,20 @@ exports.checkDuplicate = async (req, res, next) => {
       return res.json({ success: true, data: { isDuplicate: false, possibleDuplicates: [] } });
     }
 
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
     const filter = { organization: req.orgId, isActive: { $ne: false } };
-    if (invoiceNumber) filter.invoiceNumber = invoiceNumber.trim();
-    if (invoiceCuit)   filter.invoiceCuit   = invoiceCuit.trim();
+    if (invoiceNumber) {
+      filter.invoiceNumber = { $regex: new RegExp(`^${escapeRegex(invoiceNumber.trim())}$`, 'i') };
+    }
+    if (invoiceCuit) {
+      const cuit  = invoiceCuit.trim();
+      const plain = cuit.replace(/-/g, '');
+      const dashed = plain.length === 11
+        ? `${plain.slice(0, 2)}-${plain.slice(2, 10)}-${plain.slice(10)}`
+        : cuit;
+      filter.invoiceCuit = { $in: [...new Set([cuit, plain, dashed])] };
+    }
 
     const possibleDuplicates = await Expense.find(filter)
       .populate('provider', 'name')
@@ -426,9 +437,18 @@ exports.previewInvoice = async (req, res, next) => {
       }
     }
 
+    const hasData = !!(invoiceNumber || invoiceCuit);
     res.json({
       success: true,
-      data: { invoiceNumber, invoiceCuit, providerSuggestion, parseSource: 'filename' },
+      data: {
+        invoiceNumber,
+        invoiceCuit,
+        providerSuggestion,
+        parseSource: 'filename',
+        // Preparado para Phase 2 OCR: confidence (0-1), warnings[], suggestedFields[]
+        confidence: hasData ? 0.4 : 0,
+        warnings: hasData ? [] : ['No se detectaron patrones de factura en el nombre del archivo.'],
+      },
     });
   } catch (err) {
     next(err);
