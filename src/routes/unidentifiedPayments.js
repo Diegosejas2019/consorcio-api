@@ -1,9 +1,24 @@
 const router = require('express').Router();
 const mongoose = require('mongoose');
+const multer = require('multer');
 const ctrl = require('../controllers/unidentifiedPaymentController');
 const { protect, restrictTo } = require('../middleware/auth');
 const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
 const { upload } = require('../config/cloudinary');
+
+const statementUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const name = file.originalname.toLowerCase();
+    const ok =
+      file.mimetype === 'text/csv' ||
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      name.endsWith('.csv') || name.endsWith('.xlsx');
+    if (ok) cb(null, true);
+    else cb(new Error('Solo se permiten archivos .csv o .xlsx.'), false);
+  },
+});
 
 router.use(protect);
 
@@ -14,6 +29,7 @@ router.param('id', (req, res, next, id) => {
   next();
 });
 
+router.post('/import', restrictTo('admin'), requirePermission('payments.register'), statementUpload.single('file'), ctrl.importBankStatement);
 router.get('/summary', restrictTo('admin'), requirePermission('payments.read'), ctrl.getSummary);
 router.get('/', restrictTo('admin'), requirePermission('payments.read'), ctrl.getUnidentifiedPayments);
 router.get('/:id', restrictTo('admin'), requirePermission('payments.read'), ctrl.getUnidentifiedPayment);

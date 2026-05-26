@@ -1,3 +1,4 @@
+const XLSX = require('xlsx');
 const UnidentifiedPayment = require('../models/UnidentifiedPayment');
 const UnidentifiedPaymentEvent = require('../models/UnidentifiedPaymentEvent');
 const Payment = require('../models/Payment');
@@ -5,6 +6,179 @@ const User = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Unit = require('../models/Unit');
 const Organization = require('../models/Organization');
+
+const COLUMN_MAP = {
+  fecha: 'paymentDate', 'fecha operacion': 'paymentDate', 'fecha de operacion': 'paymentDate',
+  'fecha valor': 'paymentDate', 'fecha de acreditacion': 'paymentDate', date: 'paymentDate',
+  importe: 'amount', monto: 'amount', amount: 'amount', 'importe acreditado': 'amount',
+  credito: 'amount', crédito: 'amount', haber: 'amount', 'credito ars': 'amount',
+  referencia: 'reference', concepto: 'reference', comprobante: 'reference', reference: 'reference',
+  'numero comprobante': 'reference', 'nro comprobante': 'reference', 'id transaccion': 'reference',
+  titular: 'senderName', ordenante: 'senderName', remitente: 'senderName',
+  'nombre ordenante': 'senderName', 'nombre remitente': 'senderName', 'nombre del remitente': 'senderName',
+  cbu: 'senderAccount', 'cuenta origen': 'senderAccount', 'cbu origen': 'senderAccount',
+  alias: 'senderAccount', 'alias origen': 'senderAccount',
+  descripcion: 'description', descripción: 'description', observaciones: 'description',
+  detalle: 'description', notas: 'description',
+};
+
+const VALID_PAYMENT_METHODS = ['transferencia', 'deposito', 'efectivo', 'mercadopago', 'otro'];
+
+function parseStatementFile(buffer, filename) {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { raw: false, defval: '' });
+
+  if (!rawRows.length) return { rows: [] };
+
+  const rows = rawRows.map(rawRow => {
+    const normalized = {};
+    for (const [key, val] of Object.entries(rawRow)) {
+      const mappedField = COLUMN_MAP[key.toLowerCase().trim()];
+      if (mappedField && val !== '' && val !== null && val !== undefined) {
+        if (!normalized[mappedField]) normalized[mappedField] = String(val).trim();
+      }
+    }
+    return normalized;
+  }).filter(r => Object.keys(r).length > 0);
+
+  return { rows };
+}
+
+function parseFlexibleDate(val) {
+  if (!val) return null;
+  const str = String(val).trim();
+
+  // XLSX devuelve fechas en formato 'D/M/YYYY' o 'YYYY-MM-DD' con raw:false
+  // Probar DD/MM/YYYY
+  const dmY = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (dmY) {
+    const d = new Date(`${dmY[3]}-${dmY[2].padStart(2, '0')}-${dmY[1].padStart(2, '0')}T12:00:00Z`);
+    if (!isNaN(d)) return d;
+  }
+  // YYYY-MM-DD
+  const ymd = str.match(/^(\d{4})[\/\-](\d{2})[\/\-](\d{2})$/);
+  if (ymd) {
+    const d = new Date(`${ymd[1]}-${ymd[2]}-${ymd[3]}T12:00:00Z`);
+    if (!isNaN(d)) return d;
+  }
+  // Fallback genérico
+  const d = new Date(str);
+  if (!isNaN(d)) return d;
+  return null;
+}
+
+function validateRow(row, rowNumber) {
+  const amountRaw = String(row.amount || '').replace(/\./g, '').replace(',', '.');
+  const amount = parseFloat(amountRaw);
+  if (!row.amount || isNaN(amount) || amount <= 0) {
+    return { data: null, error: `Fila ${rowNumber}: importe inválido o ausente ('${row.amount || ''}')` };
+  }
+
+  if (!row.paymentDate) {
+    return { data: null, error: `Fila ${rowNumber}: fecha de pago ausente` };
+  }
+  const paymentDate = parseFlexibleDate(row.paymentDate);
+  if (!paymentDate) {
+    return { data: null, error: `Fila ${rowNumber}: fecha inválida ('${row.paymentDate}')` };
+  }
+  const now = new Date();
+  now.setHours(23, 59, 59, 999);
+  if (paymentDate > now) {
+    return { data: null, error: `Fila ${rowNumber}: la fecha no puede ser futura (${row.paymentDate})` };
+  }
+
+  let paymentMethod = (row.paymentMethod || '').toLowerCase().trim();
+  if (!paymentMethod || !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+    paymentMethod = 'transferencia';
+  }
+
+  return {
+    data: {
+      amount,
+      paymentDate,
+      paymentMethod,
+      reference: row.reference || undefined,
+      senderName: row.senderName || undefined,
+      senderAccount: row.senderAccount || undefined,
+      description: row.description || undefined,
+    },
+    error: null,
+  };
+}
+
+async function checkBulkDuplicates(validRows, orgId) {
+  if (!validRows.length) return new Set();
+
+  const dates = validRows.map(r => r.paymentDate);
+  const minDate = new Date(Math.min(...dates.map(d => d.getTime())));
+  const maxDate = new Date(Math.max(...dates.map(d => d.getTime())));
+  minDate.setDate(minDate.getDate() - 7);
+
+  const existing = await UnidentifiedPayment.find({
+    organization: orgId,
+    isDeleted: false,
+    paymentDate: { $gte: minDate, $lte: maxDate },
+  }).select('amount paymentDate reference').lean();
+
+  const duplicateRowNumbers = new Set();
+
+  validRows.forEach((row, idx) => {
+    const rowNum = idx + 2;
+    for (const ex of existing) {
+      const sameAmount = Math.abs(ex.amount - row.amount) < 0.01;
+      const sameDay =
+        ex.paymentDate.getFullYear() === row.paymentDate.getFullYear() &&
+        ex.paymentDate.getMonth() === row.paymentDate.getMonth() &&
+        ex.paymentDate.getDate() === row.paymentDate.getDate();
+      const sameRef = row.reference && ex.reference &&
+        row.reference.toLowerCase().trim() === ex.reference.toLowerCase().trim();
+
+      if (sameAmount && sameDay && (sameRef || (!row.reference && !ex.reference))) {
+        duplicateRowNumbers.add(rowNum);
+        break;
+      }
+    }
+  });
+
+  return duplicateRowNumbers;
+}
+
+async function bulkCreateStatements(orgId, userId, rows, filename) {
+  if (!rows.length) return { created: 0, ids: [] };
+
+  const docs = rows.map(row => ({
+    organization: orgId,
+    amount: row.amount,
+    paymentDate: row.paymentDate,
+    paymentMethod: row.paymentMethod,
+    reference: row.reference,
+    senderName: row.senderName,
+    senderAccount: row.senderAccount,
+    description: row.description,
+    status: 'pending',
+    createdBy: userId,
+  }));
+
+  const inserted = await UnidentifiedPayment.insertMany(docs, { ordered: false });
+
+  const events = inserted.map(p => ({
+    organization: orgId,
+    unidentifiedPayment: p._id,
+    eventType: 'created',
+    userId,
+    metadata: {
+      source: 'bank_import',
+      filename,
+      batchSize: inserted.length,
+      amount: p.amount,
+      paymentMethod: p.paymentMethod,
+    },
+  }));
+  await UnidentifiedPaymentEvent.insertMany(events, { ordered: false });
+
+  return { created: inserted.length, ids: inserted.map(p => p._id) };
+}
 
 const logger = {
   error: (...args) => console.error('[UnidentifiedPaymentService]', ...args),
@@ -658,4 +832,8 @@ module.exports = {
   archiveUnidentifiedPayment,
   softDeleteUnidentifiedPayment,
   detectPossibleDuplicate,
+  parseStatementFile,
+  validateRow,
+  checkBulkDuplicates,
+  bulkCreateStatements,
 };

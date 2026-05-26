@@ -211,3 +211,101 @@ exports.archivePayment = async (req, res, next) => {
     next(err);
   }
 };
+
+exports.importBankStatement = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Se requiere un archivo .csv o .xlsx.' });
+    }
+
+    const preview = req.query.preview === 'true';
+
+    let parsed;
+    try {
+      parsed = unidentifiedPaymentService.parseStatementFile(req.file.buffer, req.file.originalname);
+    } catch {
+      return res.status(400).json({ success: false, message: 'El archivo no pudo leerse. Verificá que sea un CSV o Excel válido.' });
+    }
+
+    const { rows } = parsed;
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: 'El archivo está vacío o no contiene filas de datos.' });
+    }
+    if (rows.length > 500) {
+      return res.status(400).json({ success: false, message: `El archivo supera el límite de 500 filas (tiene ${rows.length}).` });
+    }
+
+    const results = rows.map((row, i) => {
+      const { data, error } = unidentifiedPaymentService.validateRow(row, i + 2);
+      return error
+        ? { rowNumber: i + 2, status: 'invalid', error }
+        : { rowNumber: i + 2, status: 'valid', data };
+    });
+
+    const validResults = results.filter(r => r.status === 'valid');
+    const duplicateNums = await unidentifiedPaymentService.checkBulkDuplicates(
+      validResults.map(r => r.data),
+      req.orgId
+    );
+
+    for (const r of validResults) {
+      if (duplicateNums.has(r.rowNumber)) {
+        r.status = 'duplicate';
+        r.warning = 'Posible duplicado detectado (mismo importe, fecha y referencia en los últimos 7 días)';
+      }
+    }
+
+    const valid = results.filter(r => r.status === 'valid');
+    const invalid = results.filter(r => r.status === 'invalid');
+    const duplicates = results.filter(r => r.status === 'duplicate');
+    const totalAmount = valid.reduce((s, r) => s + r.data.amount, 0);
+
+    if (preview) {
+      return res.json({
+        success: true,
+        data: {
+          preview: true,
+          total: rows.length,
+          validCount: valid.length,
+          invalidCount: invalid.length,
+          duplicatesCount: duplicates.length,
+          totalAmount,
+          rows: results.slice(0, 100),
+        },
+      });
+    }
+
+    if (!valid.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'No hay filas válidas para importar.',
+        data: {
+          total: rows.length,
+          validCount: 0,
+          invalidCount: invalid.length,
+          duplicatesCount: duplicates.length,
+        },
+      });
+    }
+
+    const { created, ids } = await unidentifiedPaymentService.bulkCreateStatements(
+      req.orgId,
+      req.user.id,
+      valid.map(r => r.data),
+      req.file.originalname
+    );
+
+    res.status(201).json({
+      success: true,
+      data: {
+        imported: created,
+        skipped: invalid.length + duplicates.length,
+        invalidCount: invalid.length,
+        duplicatesCount: duplicates.length,
+        ids,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
