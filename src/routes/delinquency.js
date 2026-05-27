@@ -1,10 +1,10 @@
 const router = require('express').Router();
 const mongoose = require('mongoose');
 const ctrl = require('../controllers/delinquencyController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 
-router.use(protect, restrictTo('admin'));
+router.use(protect, requireOrg, restrictTo('admin'));
 
 router.param('ownerId', (req, res, next, id) => {
   if (!mongoose.isValidObjectId(id)) {

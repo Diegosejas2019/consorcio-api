@@ -2,7 +2,7 @@ const router = require('express').Router();
 const mongoose = require('mongoose');
 const multer = require('multer');
 const ctrl = require('../controllers/unidentifiedPaymentController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
 const { upload } = require('../config/cloudinary');
 
@@ -20,7 +20,7 @@ const statementUpload = multer({
   },
 });
 
-router.use(protect);
+router.use(protect, requireOrg);
 
 router.param('id', (req, res, next, id) => {
   if (!mongoose.isValidObjectId(id)) {

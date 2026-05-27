@@ -2,6 +2,7 @@ const router    = require('express').Router();
 const multer    = require('multer');
 const ctrl      = require('../controllers/expenseController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/features');
 const { requirePermission } = require('../middleware/permissions');
 const { upload } = require('../config/cloudinary');
 
@@ -9,10 +10,10 @@ const { upload } = require('../config/cloudinary');
 const memUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Accesible a todos los usuarios autenticados con organización
-router.get('/summary', protect, requireOrg, ctrl.getExpensesSummary);
+router.get('/summary', protect, requireOrg, requireFeature('expenses'), ctrl.getExpensesSummary);
 
 // El resto solo para admin
-router.use(protect, restrictTo('admin'));
+router.use(protect, requireOrg, requireFeature('expenses'), restrictTo('admin'));
 
 router.get('/categories',                requirePermission('expenses.read'), ctrl.getExpenseCategories);
 router.post('/categories',               requirePermission('expenses.create'), ctrl.createExpenseCategory);

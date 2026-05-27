@@ -72,8 +72,13 @@ exports.protect = async (req, res, next) => {
       }
     }
 
-    // 7. Actualizar lastLogin
-    await User.findByIdAndUpdate(user._id, { lastLogin: new Date(), lastLoginAt: new Date() });
+    // 7. Actualizar lastLogin con throttling para evitar una escritura por request autenticado.
+    const now = new Date();
+    const lastLoginAt = user.lastLoginAt || user.lastLogin;
+    const shouldRefreshLastLogin = !lastLoginAt || (now.getTime() - new Date(lastLoginAt).getTime()) > 60 * 60 * 1000;
+    if (shouldRefreshLastLogin) {
+      await User.findByIdAndUpdate(user._id, { lastLogin: now, lastLoginAt: now });
+    }
 
     req.user = user;
     req.user.role = normalizeRole(req.user.role);

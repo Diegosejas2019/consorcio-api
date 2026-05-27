@@ -153,10 +153,8 @@ const paymentSchema = new mongoose.Schema(
 );
 
 // ── Índices compuestos ───────────────────────────────────────
-paymentSchema.index({ organization: 1, owner: 1, month: 1 });
 paymentSchema.index({ organization: 1, status: 1, createdAt: -1 });
 paymentSchema.index({ organization: 1, month: 1, status: 1 });
-paymentSchema.index({ unidentifiedPaymentId: 1 });
 
 // ── Virtual: mes formateado ──────────────────────────────────
 paymentSchema.virtual('monthFormatted').get(function () {
@@ -176,7 +174,7 @@ paymentSchema.virtual('monthFormatted').get(function () {
 // ── Evitar duplicados: un solo pago activo por propietario/mes ─
 // sparse: true excluye documentos sin month (pagos de solo-extraordinarios)
 paymentSchema.index(
-  { owner: 1, month: 1 },
+  { organization: 1, owner: 1, month: 1 },
   {
     unique: true,
     sparse: true,

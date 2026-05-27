@@ -1,11 +1,11 @@
 const router   = require('express').Router();
 const mongoose = require('mongoose');
 const ctrl     = require('../controllers/paymentPlanController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 const { upload } = require('../config/cloudinary');
 
-router.use(protect);
+router.use(protect, requireOrg);
 
 router.param('id', (req, res, next, id) => {
   if (!mongoose.isValidObjectId(id)) {

@@ -19,7 +19,7 @@ const excelUpload = multer({
 router.post('/confirm-email-change', ctrl.confirmEmailChange);
 
 // Todas las rutas requieren auth
-router.use(protect);
+router.use(protect, requireOrg);
 
 router.get('/stats',       restrictTo('admin'), requirePermission('dashboard.read'), ctrl.getStats);
 router.get('/check-email', restrictTo('admin'), requirePermission('owners.read'), ctrl.checkEmail);
@@ -28,10 +28,10 @@ router.post('/',     restrictTo('admin'), requirePermission('owners.create'), ct
 router.get('/bulk/template', restrictTo('admin'), requirePermission('owners.create'), ctrl.downloadBulkTemplate);
 router.post('/bulk',          restrictTo('admin'), requirePermission('owners.create'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
-router.post('/me/request-email-change', restrictTo('owner'), requireOrg, ctrl.requestEmailChange);
-router.post('/me/confirm-email-change', restrictTo('owner'), requireOrg, ctrl.confirmEmailChange);
-router.post('/me/cancel-email-change', restrictTo('owner'), requireOrg, ctrl.cancelEmailChange);
-router.get('/me/summary', restrictTo('owner'), requireOrg, ctrl.getMySummary);
+router.post('/me/request-email-change', restrictTo('owner'), ctrl.requestEmailChange);
+router.post('/me/confirm-email-change', restrictTo('owner'), ctrl.confirmEmailChange);
+router.post('/me/cancel-email-change', restrictTo('owner'), ctrl.cancelEmailChange);
+router.get('/me/summary', restrictTo('owner'), ctrl.getMySummary);
 router.get('/:id/available-items', restrictTo('admin'), requirePermission('owners.read'), ctrl.getOwnerAvailableItems);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), requirePermission('owners.update'), ctrl.updateOwner);

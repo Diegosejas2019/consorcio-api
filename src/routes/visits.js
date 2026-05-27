@@ -1,10 +1,10 @@
 const router = require('express').Router();
 const ctrl   = require('../controllers/visitController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
 const { requireFeature } = require('../middleware/features');
 
-router.use(protect);
+router.use(protect, requireOrg);
 router.use(requireFeature('visits'));
 
 // Rutas sin :id primero (evitan conflictos de matching)

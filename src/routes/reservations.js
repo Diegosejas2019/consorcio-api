@@ -1,9 +1,10 @@
 const router = require('express').Router();
 const ctrl   = require('../controllers/reservationController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/features');
 const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
 
-router.use(protect);
+router.use(protect, requireOrg, requireFeature('reservations'));
 
 router.get('/',    requirePermissionForAdmin('reservations.read'), ctrl.getReservations);
 router.post('/',   restrictTo('owner'), ctrl.createReservation);

@@ -1,10 +1,11 @@
 const router = require('express').Router();
 const ctrl   = require('../controllers/providerController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/features');
 const { requirePermission } = require('../middleware/permissions');
 const { uploadProvider } = require('../config/cloudinary');
 
-router.use(protect, restrictTo('admin'));
+router.use(protect, requireOrg, requireFeature('providers'), restrictTo('admin'));
 
 router.get('/',       requirePermission('providers.read'), ctrl.getProviders);
 router.post('/',      requirePermission('providers.create'), uploadProvider.array('documents', 5), ctrl.createProvider);

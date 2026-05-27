@@ -2,10 +2,11 @@ const router   = require('express').Router();
 const { body } = require('express-validator');
 const ctrl     = require('../controllers/voteController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/features');
 const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
 const validate = require('../middleware/validate');
 
-router.use(protect, requireOrg);
+router.use(protect, requireOrg, requireFeature('votes'));
 
 // ── Listar y obtener ──────────────────────────────────────────
 router.get('/',    requirePermissionForAdmin('votes.read'), ctrl.getVotes);

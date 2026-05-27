@@ -1,10 +1,11 @@
 const router          = require('express').Router();
 const ctrl            = require('../controllers/noticeController');
-const { protect, restrictTo } = require('../middleware/auth');
+const { protect, restrictTo, requireOrg } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/features');
 const { requirePermissionForAdmin, requirePermission } = require('../middleware/permissions');
 const { uploadNotice } = require('../config/cloudinary');
 
-router.use(protect);
+router.use(protect, requireOrg, requireFeature('notices'));
 
 router.get('/',     requirePermissionForAdmin('notices.read'), ctrl.getNotices);
 router.post('/',    restrictTo('admin'), requirePermission('notices.create'), uploadNotice.array('attachments', 3), ctrl.createNotice);

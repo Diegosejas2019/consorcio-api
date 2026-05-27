@@ -11,6 +11,7 @@
     "seed": "node src/config/seed.js",
     "migrate:members": "node src/scripts/migrateOrganizationMembers.js",
     "migrate:payment-membership": "node src/scripts/migratePaymentMembership.js",
+    "migrate:payment-index": "node src/scripts/migratePaymentUniqueIndex.js",
     "migrate:unit-debts": "node src/scripts/migrateUnitDebts.js",
     "migrate:unit-billing": "node src/scripts/migrateUnitBillingSettings.js",
     "report:duplicate-emails": "node src/scripts/reportDuplicateEmails.js",

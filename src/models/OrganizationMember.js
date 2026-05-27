@@ -22,7 +22,7 @@ const organizationMemberSchema = new Schema(
     },
     adminRole: {
       type: String,
-      enum: ['owner_admin', 'read_only', 'billing_manager', 'communications_manager'],
+      enum: ['owner_admin', 'read_only', 'billing_manager', 'communications_manager', 'security_guard'],
       default: undefined,
     },
     permissions: [{
