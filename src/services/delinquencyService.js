@@ -5,6 +5,7 @@ const Organization = require('../models/Organization');
 const OrganizationMember = require('../models/OrganizationMember');
 const OwnerDebtItem = require('../models/OwnerDebtItem');
 const Payment = require('../models/Payment');
+const PaymentPlanInstallment = require('../models/PaymentPlanInstallment');
 const Unit = require('../models/Unit');
 const User = require('../models/User');
 const { calculateExtraordinaryAmountForOwner } = require('./expenseService');
@@ -127,7 +128,7 @@ async function buildDelinquencyRows(organizationId) {
   memberships = memberships.filter(m => m.user);
 
   const ownerIds = memberships.map(m => m.user._id);
-  const [org, units, payments, expenses, debtItems, planSummariesByOwner] = await Promise.all([
+  const [org, units, payments, expenses, debtItems, planSummariesByOwner, reminderStats, overdueInstallments] = await Promise.all([
     Organization.findById(organizationId).select('name paymentPeriods monthlyFee feePeriodCode dueDayOfMonth feeLabel unitLabel memberLabel').lean(),
     Unit.find({ organization: organizationId, active: true })
       .select('owner name customFee coefficient balance isDebtor startBillingPeriod active status')
@@ -151,7 +152,19 @@ async function buildDelinquencyRows(organizationId) {
       status: 'pending',
     }).lean(),
     getPlanSummariesByOwner({ organizationId, ownerIds }),
+    DelinquencyReminder.aggregate([
+      { $match: { organization: organizationId } },
+      { $group: { _id: '$owner', lastReminderAt: { $max: '$sentAt' }, remindersCount: { $sum: 1 } } },
+    ]),
+    PaymentPlanInstallment.find({ organization: organizationId, status: 'overdue' }).select('owner').lean(),
   ]);
+
+  const reminderByOwner = Object.fromEntries(reminderStats.map(r => [String(r._id), r]));
+  const overdueByOwner = {};
+  for (const inst of overdueInstallments) {
+    const k = String(inst.owner);
+    overdueByOwner[k] = (overdueByOwner[k] || 0) + 1;
+  }
 
   const { allUnits: billableUnits, unitsByOwner } = buildBillableUnitsContext(memberships, units);
   const paymentsByOwner = {};
@@ -296,6 +309,21 @@ async function buildDelinquencyRows(organizationId) {
       ownerBaseFee,
     });
 
+    const remInfo = reminderByOwner[ownerId] || {};
+    const lastReminderAt = remInfo.lastReminderAt || null;
+    const remindersCount = remInfo.remindersCount || 0;
+    const overdueInstallmentsCount = overdueByOwner[ownerId] || 0;
+    const riskIntelligence = computeRiskIntelligence({
+      periodsCount: monthlyPeriodsCount,
+      daysOverdue,
+      totalOwed,
+      hasActivePlan: Boolean(planSummary.activePlanSummary),
+      overdueInstallmentsCount,
+      pendingPaymentsCount: pendingPayments.length,
+      lastReminderAt,
+      remindersCount,
+    });
+
     return {
       id: owner._id,
       _id: owner._id,
@@ -344,6 +372,10 @@ async function buildDelinquencyRows(organizationId) {
       },
       rawBalance: computeUnitsBalance(ownerUnits),
       rawBalanceOwed: computeUnitsBalanceOwed(ownerUnits),
+      lastReminderAt,
+      remindersCount,
+      overdueInstallmentsCount,
+      ...riskIntelligence,
     };
   });
 }
@@ -354,6 +386,61 @@ function getDelinquencyStatus({ totalOwed, periodsCount, daysOverdue, ownerBaseF
   if (periodsCount >= 3) return 'deuda_alta';
   if (periodsCount === 2) return 'deuda_media';
   return 'deuda_leve';
+}
+
+const REMINDER_COOLDOWN_DAYS = 14;
+
+function computeRiskIntelligence({ periodsCount, daysOverdue, totalOwed, hasActivePlan, overdueInstallmentsCount, pendingPaymentsCount, lastReminderAt, remindersCount }) {
+  if (totalOwed <= 0) return { riskLevel: 'sin_deuda', riskScore: 0, riskReasons: [], suggestedActions: [] };
+
+  const reasons = [];
+  const now = nowForCalculations();
+  const daysSinceReminder = lastReminderAt ? Math.floor((now - new Date(lastReminderAt)) / 86400000) : null;
+
+  let level = periodsCount <= 1 ? 'bajo' : periodsCount <= 3 ? 'medio' : 'alto';
+
+  if (periodsCount > 0) reasons.push(`Debe ${periodsCount} período${periodsCount > 1 ? 's' : ''}`);
+
+  if (daysOverdue >= 90) reasons.push('Deuda con más de 90 días de atraso');
+  else if (daysOverdue >= 60) reasons.push('Deuda con más de 60 días de atraso');
+
+  if (hasActivePlan && overdueInstallmentsCount === 0) {
+    if (level === 'alto') level = 'medio';
+    else if (level === 'medio') level = 'bajo';
+    reasons.push('Tiene plan de pago activo al día');
+  }
+
+  if (overdueInstallmentsCount > 0) {
+    reasons.push(`Tiene ${overdueInstallmentsCount} cuota${overdueInstallmentsCount > 1 ? 's' : ''} de plan vencida${overdueInstallmentsCount > 1 ? 's' : ''}`);
+    if (level === 'alto') level = 'critico';
+    else if (level === 'medio') level = 'alto';
+  }
+
+  if (daysOverdue >= 90 && !hasActivePlan) level = 'critico';
+  if (level === 'alto' && (daysSinceReminder === null || daysSinceReminder > 30)) level = 'critico';
+
+  if (pendingPaymentsCount > 0) {
+    reasons.push(`Tiene ${pendingPaymentsCount} pago${pendingPaymentsCount > 1 ? 's' : ''} pendiente${pendingPaymentsCount > 1 ? 's' : ''} de aprobación`);
+  }
+
+  if (!lastReminderAt) reasons.push('Sin recordatorios registrados');
+  else if (daysSinceReminder > 30) reasons.push(`Sin recordatorio reciente (último hace ${daysSinceReminder} días)`);
+
+  const LEVEL_SCORES = { bajo: 15, medio: 35, alto: 60, critico: 85 };
+  const riskScore = LEVEL_SCORES[level] || 15;
+
+  const actions = [];
+  if (pendingPaymentsCount > 0) actions.push('review_pending_payment');
+  if (overdueInstallmentsCount > 0) actions.push('review_payment_plan');
+  if (pendingPaymentsCount === 0) {
+    if (daysSinceReminder === null || daysSinceReminder > REMINDER_COOLDOWN_DAYS) actions.push('send_reminder');
+    else actions.push('wait_for_response');
+  }
+  if (!hasActivePlan && periodsCount >= 2) actions.push('create_payment_plan');
+  actions.push('view_detail');
+  if (!hasActivePlan) actions.push('register_adjustment');
+
+  return { riskLevel: level, riskScore, riskReasons: reasons, suggestedActions: actions };
 }
 
 function applyFilters(rows, filters = {}) {
@@ -394,6 +481,16 @@ function applyFilters(rows, filters = {}) {
   }
   if (String(filters.pendingReview || '') === 'true') result = result.filter(row => row.pendingPaymentsCount > 0);
   if (String(filters.criticalOnly || '') === 'true') result = result.filter(row => row.status === 'mora_critica');
+  if (filters.hasActivePlan === 'yes') result = result.filter(row => row.hasActivePlan === true);
+  if (filters.hasActivePlan === 'no') result = result.filter(row => !row.hasActivePlan);
+  const reminderDays = filters.reminderDays !== undefined ? toNumber(filters.reminderDays, null) : null;
+  if (reminderDays !== null) {
+    const now = nowForCalculations();
+    result = result.filter(row => {
+      if (!row.lastReminderAt) return true;
+      return Math.floor((now - new Date(row.lastReminderAt)) / 86400000) >= reminderDays;
+    });
+  }
   if (filters.lastPaymentFrom) {
     const from = new Date(filters.lastPaymentFrom);
     if (!Number.isNaN(from.getTime())) result = result.filter(row => row.lastPayment?.createdAt && new Date(row.lastPayment.createdAt) >= from);
@@ -447,6 +544,13 @@ function publicOwnerRow(row) {
     hasActivePlan: row.hasActivePlan,
     activePlanSummary: row.activePlanSummary,
     interest: row.interest,
+    riskLevel: row.riskLevel,
+    riskScore: row.riskScore,
+    riskReasons: row.riskReasons,
+    suggestedActions: row.suggestedActions,
+    lastReminderAt: row.lastReminderAt,
+    remindersCount: row.remindersCount,
+    overdueInstallmentsCount: row.overdueInstallmentsCount,
   };
 }
 

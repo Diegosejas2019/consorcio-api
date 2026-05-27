@@ -1,3 +1,5 @@
+const crypto   = require('crypto');
+const QRCode   = require('qrcode');
 const Visit    = require('../models/Visit');
 const VisitLog = require('../models/VisitLog');
 const logger   = require('../config/logger');
@@ -267,6 +269,112 @@ exports.getVisitLogs = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+};
+
+// ── POST /api/visits/:id/generate-qr (owner) ─────────────────
+exports.generateQr = async (req, res, next) => {
+  try {
+    const visit = await Visit.findOne({ _id: req.params.id, organization: req.orgId, owner: req.ownerId });
+    if (!visit) return res.status(404).json({ success: false, message: 'Visita no encontrada.' });
+    if (['rejected', 'exited'].includes(visit.status)) {
+      return res.status(400).json({ success: false, message: 'No se puede generar QR para una visita rechazada o finalizada.' });
+    }
+
+    const token = crypto.randomBytes(8).toString('hex');
+    const expiry = new Date(visit.expectedDate);
+    expiry.setHours(23, 59, 59, 999);
+    if (expiry < new Date()) expiry.setTime(Date.now() + 3600000);
+
+    visit.qrToken = token;
+    visit.qrExpiresAt = expiry;
+    await visit.save();
+
+    const qrSvg = await QRCode.toString(token, { type: 'svg', margin: 1, width: 200 });
+
+    res.json({ success: true, data: { token, qrSvg, expiresAt: expiry } });
+  } catch (err) { next(err); }
+};
+
+// ── GET /api/visits/qr/:token (admin) ─────────────────────────
+exports.validateQrToken = async (req, res, next) => {
+  try {
+    const visit = await Visit.findOne({ qrToken: req.params.token, organization: req.orgId })
+      .populate('owner', 'name unit email').lean();
+
+    if (!visit) return res.status(404).json({ success: false, message: 'La invitación no existe o expiró.' });
+    if (visit.qrExpiresAt && visit.qrExpiresAt < new Date()) {
+      return res.status(400).json({ success: false, message: 'La invitación ya no está vigente.' });
+    }
+
+    let canCheckIn = false, canCheckOut = false, reason = null;
+    if (visit.status === 'approved')  canCheckIn = true;
+    else if (visit.status === 'inside')   canCheckOut = true;
+    else if (visit.status === 'pending')  reason = 'La visita todavía no fue aprobada.';
+    else if (visit.status === 'rejected') reason = 'La visita fue rechazada.';
+    else if (visit.status === 'exited')   reason = 'La visita ya finalizó.';
+
+    res.json({
+      success: true,
+      data: {
+        visitId:      visit._id,
+        visitorName:  visit.name,
+        type:         visit.type,
+        expectedDate: visit.expectedDate,
+        status:       visit.status,
+        ownerName:    visit.owner?.name || '-',
+        ownerUnit:    visit.owner?.unit || '-',
+        guardNote:    visit.guardNote || null,
+        canCheckIn,
+        canCheckOut,
+        reason,
+      },
+    });
+  } catch (err) { next(err); }
+};
+
+// ── POST /api/visits/qr/:token/check-in (admin) ──────────────
+exports.checkInByQr = async (req, res, next) => {
+  try {
+    const visit = await Visit.findOne({ qrToken: req.params.token, organization: req.orgId })
+      .populate('owner', 'name unit email');
+
+    if (!visit) return res.status(404).json({ success: false, message: 'La invitación no existe o expiró.' });
+    if (visit.qrExpiresAt && visit.qrExpiresAt < new Date()) {
+      return res.status(400).json({ success: false, message: 'La invitación ya no está vigente.' });
+    }
+    if (visit.status !== 'approved') {
+      const msgs = {
+        pending:  'La visita todavía no fue aprobada.',
+        rejected: 'La visita fue rechazada.',
+        inside:   'La visita ya registró ingreso.',
+        exited:   'La visita ya finalizó.',
+      };
+      return res.status(400).json({ success: false, message: msgs[visit.status] || 'Estado inválido.' });
+    }
+
+    const existing = await VisitLog.findOne({ visit: visit._id, action: 'check_in' });
+    if (existing) return res.status(400).json({ success: false, message: 'La visita ya registró ingreso.' });
+
+    visit.status = 'inside';
+    await visit.save();
+
+    const log = await VisitLog.create({
+      organization:    req.orgId,
+      visit:           visit._id,
+      action:          'check_in',
+      performedBy:     req.user._id,
+      performedByName: req.user.name,
+      performedByRole: req.adminRole || req.accessType,
+      comment:         req.body.comment || undefined,
+      visitorName:     visit.name,
+      ownerId:         visit.owner?._id,
+      ownerName:       visit.owner?.name,
+      unitLabel:       visit.owner?.unit || '',
+    });
+
+    logger.info(`Check-in QR visita ${visit._id} ("${visit.name}") por ${req.user.name}`);
+    res.json({ success: true, message: 'Ingreso registrado correctamente.', data: { visit, log } });
+  } catch (err) { next(err); }
 };
 
 // ── DELETE /api/visits/:id ────────────────────────────────────

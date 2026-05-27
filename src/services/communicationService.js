@@ -241,6 +241,16 @@ async function resolveCommunicationRecipients({ organizationId, targetType = 'al
       isDebtor: true,
     }).distinct('user');
     ownerIds = [...debtorUnitOwners, ...debtorMembers];
+  } else if (targetType === 'non_debtors') {
+    const allOwnerIds = await getOwnerIdsForOrg(organizationId, false);
+    const nonDebtorUnitOwners = await Unit.find({
+      organization: organizationId, active: true, isDebtor: true, owner: { $ne: null },
+    }).distinct('owner');
+    const nonDebtorMembers = await OrganizationMember.find({
+      organization: organizationId, role: 'owner', isActive: true, isDebtor: true,
+    }).distinct('user');
+    const debtorSet = new Set([...nonDebtorUnitOwners, ...nonDebtorMembers].map(id => id.toString()));
+    ownerIds = allOwnerIds.filter(id => !debtorSet.has(id.toString()));
   } else if (targetType === 'tenants') {
     ownerIds = [];
   } else {
@@ -517,11 +527,23 @@ async function getCommunicationStats({ id, organizationId }) {
   };
 }
 
+async function previewCommunicationRecipients({ organizationId, targetType = 'all', targetFilters = {} }) {
+  const recipients = await resolveCommunicationRecipients({ organizationId, targetType, targetFilters });
+  const warnings = [];
+  if (!recipients.length) warnings.push('No hay destinatarios para este segmento.');
+  return {
+    count: recipients.length,
+    sample: recipients.slice(0, 10).map(r => ({ name: r.name, unitName: r.unitName })),
+    warnings,
+  };
+}
+
 module.exports = {
   normalizePayload,
   serializeNotice,
   buildVisibleFilterForOwner,
   resolveCommunicationRecipients,
+  previewCommunicationRecipients,
   createCommunication,
   updateCommunication,
   sendCommunicationNow,

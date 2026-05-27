@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/adminUserController');
+const multiOrgCtrl = require('../controllers/adminMultiOrgController');
 const { protect, requireOrg, restrictTo } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
 
@@ -11,5 +12,7 @@ router.get('/users', requirePermission('admins.read'), ctrl.listAdmins);
 router.post('/users/invite', requirePermission('admins.create'), ctrl.inviteAdmin);
 router.patch('/users/:userId/role', requirePermission('admins.update'), ctrl.updateAdminRole);
 router.patch('/users/:userId/disable', requirePermission('admins.disable'), ctrl.disableAdmin);
+
+router.get('/multi-organization-summary', multiOrgCtrl.getMultiOrgSummary);
 
 module.exports = router;

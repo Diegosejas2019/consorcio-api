@@ -271,3 +271,17 @@ exports.getStats = async (req, res, next) => {
     next(err);
   }
 };
+
+exports.previewRecipients = async (req, res, next) => {
+  try {
+    const { targetType = 'all', targetFilters = {} } = req.body;
+    const result = await communicationService.previewCommunicationRecipients({
+      organizationId: req.orgId,
+      targetType,
+      targetFilters,
+    });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+};

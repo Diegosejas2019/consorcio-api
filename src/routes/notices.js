@@ -9,6 +9,7 @@ router.use(protect);
 router.get('/',     requirePermissionForAdmin('notices.read'), ctrl.getNotices);
 router.post('/',    restrictTo('admin'), requirePermission('notices.create'), uploadNotice.array('attachments', 3), ctrl.createNotice);
 router.post('/process-scheduled', restrictTo('admin'), requirePermission('notices.update'), ctrl.processScheduled);
+router.post('/preview-recipients', restrictTo('admin'), requirePermission('notices.read'), ctrl.previewRecipients);
 router.get('/:id/stats', restrictTo('admin'), requirePermission('notices.read'), ctrl.getStats);
 router.get('/:id/attachment/:index', ctrl.getAttachment);
 router.post('/:id/send-now', restrictTo('admin'), requirePermission('notices.update'), ctrl.sendNow);

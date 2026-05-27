@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const CATEGORIES = ['general', 'mantenimiento', 'corte_servicio', 'expensas', 'asamblea', 'mora', 'seguridad', 'emergencia', 'otro'];
 const PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const STATUSES = ['draft', 'scheduled', 'sent', 'cancelled'];
-const TARGET_TYPES = ['all', 'owners', 'tenants', 'specific_units', 'specific_users', 'debtors'];
+const TARGET_TYPES = ['all', 'owners', 'tenants', 'specific_units', 'specific_users', 'debtors', 'non_debtors'];
 
 const noticeSchema = new mongoose.Schema(
   {

@@ -635,6 +635,36 @@ async function buildAnnualRendition(orgId, year) {
     return `${year}-${m}`;
   });
 
+  const yearStart = new Date(Date.UTC(Number(year), 0, 1));
+  const yearEnd   = new Date(Date.UTC(Number(year) + 1, 0, 1));
+
+  // Datos compartidos para todo el año — 3 queries en lugar de N por mes
+  const [categoryList, expByCatAgg, payCountsAgg] = await Promise.all([
+    listExpenseCategories(orgId),
+    Expense.aggregate([
+      { $match: { organization: orgId, isActive: { $ne: false }, date: { $gte: yearStart, $lt: yearEnd } } },
+      { $group: { _id: { month: { $dateToString: { format: '%Y-%m', date: '$date' } }, category: '$category' }, total: { $sum: '$amount' } } },
+    ]),
+    Payment.aggregate([
+      { $match: { organization: orgId, month: { $gte: `${year}-01`, $lte: `${year}-12` } } },
+      { $group: { _id: { month: '$month', status: '$status' }, count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const labelMap = Object.fromEntries(categoryList.map(c => [c.key, c.label]));
+
+  const expByCatByMonth = {};
+  expByCatAgg.forEach(({ _id, total }) => {
+    if (!expByCatByMonth[_id.month]) expByCatByMonth[_id.month] = {};
+    expByCatByMonth[_id.month][_id.category] = (expByCatByMonth[_id.month][_id.category] || 0) + total;
+  });
+
+  const payCountsByMonth = {};
+  payCountsAgg.forEach(({ _id, count }) => {
+    if (!payCountsByMonth[_id.month]) payCountsByMonth[_id.month] = {};
+    payCountsByMonth[_id.month][_id.status] = count;
+  });
+
   const rows = await Promise.all(months.map(async (period) => {
     try {
       const { start, end } = periodDateRange(period);
@@ -667,18 +697,31 @@ async function buildAnnualRendition(orgId, year) {
         .select('generatedAt status pdfUrl')
         .lean();
 
+      // Categorías de gasto del mes (datos precargados en bulk)
+      const monthCats = expByCatByMonth[period] || {};
+      const expenseByCategory = Object.entries(monthCats)
+        .map(([key, amount]) => ({ key, label: labelMap[key] || key, amount }))
+        .filter(c => c.amount > 0)
+        .sort((a, b) => b.amount - a.amount);
+
+      // Conteos de pagos del mes (datos precargados en bulk)
+      const monthPays = payCountsByMonth[period] || {};
+
       return {
         period,
-        periodLabel:         fmtPeriod(period),
+        periodLabel:           fmtPeriod(period),
         income,
         pendingTotal,
         ordinaryTotal,
         extraordinaryTotal,
         expTotal,
-        resultado:           income - expTotal,
-        hasSavedRendition:   !!savedRendition,
-        savedPdfUrl:         savedRendition?.pdfUrl || null,
-        status:              savedRendition?.status || 'sin-rendición',
+        resultado:             income - expTotal,
+        hasSavedRendition:     !!savedRendition,
+        savedPdfUrl:           savedRendition?.pdfUrl || null,
+        status:                savedRendition?.status || 'sin-rendición',
+        approvedPaymentsCount: monthPays.approved || 0,
+        pendingPaymentsCount:  monthPays.pending  || 0,
+        expenseByCategory,
       };
     } catch (err) {
       logger.warn(`[renditionService] Error en período ${period} del año ${year}: ${err.message}`);
@@ -690,8 +733,11 @@ async function buildAnnualRendition(orgId, year) {
     }
   }));
 
+  const validRows = rows.filter(r => !r.error);
+  const activeMonths = Math.max(validRows.filter(r => r.income > 0 || r.expTotal > 0).length, 1);
+
   const warnings = [];
-  const missingRenditions = rows.filter(r => !r.hasSavedRendition && !r.error).length;
+  const missingRenditions = validRows.filter(r => !r.hasSavedRendition).length;
   if (missingRenditions > 0) {
     warnings.push({
       code: 'MISSING_MONTHLY_RENDITIONS',
@@ -700,14 +746,42 @@ async function buildAnnualRendition(orgId, year) {
     });
   }
 
-  const totals = rows.filter(r => !r.error).reduce((acc, r) => {
-    acc.income              += r.income || 0;
-    acc.expTotal            += r.expTotal || 0;
-    acc.ordinaryTotal       += r.ordinaryTotal || 0;
-    acc.extraordinaryTotal  += r.extraordinaryTotal || 0;
-    acc.resultado           += r.resultado || 0;
+  const negativeMonths = validRows.filter(r => r.resultado < 0);
+  if (negativeMonths.length > 0) {
+    warnings.push({
+      code: 'NEGATIVE_BALANCE_MONTHS',
+      message: `${negativeMonths.length} mes(es) tuvieron saldo negativo: ${negativeMonths.map(r => r.periodLabel).join(', ')}.`,
+      severity: 'warning',
+    });
+  }
+
+  const pendingMonths = validRows.filter(r => r.pendingPaymentsCount > 0);
+  if (pendingMonths.length > 0) {
+    warnings.push({
+      code: 'PENDING_PAYMENTS_MONTHS',
+      message: `Pagos pendientes en ${pendingMonths.length} mes(es): ${pendingMonths.map(r => r.periodLabel).join(', ')}.`,
+      severity: 'warning',
+    });
+  }
+
+  const totals = validRows.reduce((acc, r) => {
+    acc.income             += r.income || 0;
+    acc.expTotal           += r.expTotal || 0;
+    acc.ordinaryTotal      += r.ordinaryTotal || 0;
+    acc.extraordinaryTotal += r.extraordinaryTotal || 0;
+    acc.resultado          += r.resultado || 0;
     return acc;
   }, { income: 0, expTotal: 0, ordinaryTotal: 0, extraordinaryTotal: 0, resultado: 0 });
+
+  const highestExpenseRow = validRows.reduce((best, r) => (!best || r.expTotal > best.expTotal) ? r : best, null);
+  const highestIncomeRow  = validRows.reduce((best, r) => (!best || r.income  > best.income)   ? r : best, null);
+
+  totals.averageMonthlyIncome   = Math.round(totals.income   / activeMonths);
+  totals.averageMonthlyExpenses = Math.round(totals.expTotal / activeMonths);
+  totals.highestExpenseMonth    = highestExpenseRow?.periodLabel || null;
+  totals.highestIncomeMonth     = highestIncomeRow?.periodLabel  || null;
+  totals.negativeBalanceMonths  = negativeMonths.length;
+  totals.monthsWithRendition    = validRows.filter(r => r.hasSavedRendition).length;
 
   return { year, rows, totals, warnings };
 }

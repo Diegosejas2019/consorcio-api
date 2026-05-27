@@ -135,6 +135,7 @@ app.use('/api/debt-items',     require('./routes/ownerDebtItems'));
 app.use('/api/contact',        require('./routes/contact'));
 app.use('/api/join',           joinLimiter, require('./routes/join'));
 app.use('/api/access-requests', require('./routes/accessRequests'));
+app.use('/api/agenda',          require('./routes/adminAgenda'));
 
 // ── Raíz API ──────────────────────────────────────────────────
 app.get('/api', (req, res) => {

@@ -47,7 +47,9 @@ const visitSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
-    approvedAt: Date,
+    approvedAt:   Date,
+    qrToken:      { type: String, index: true, sparse: true },
+    qrExpiresAt:  { type: Date },
   },
   {
     timestamps: true,
