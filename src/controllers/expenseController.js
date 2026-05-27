@@ -83,12 +83,13 @@ exports.getExpensesSummary = async (req, res, next) => {
 // ── GET /api/expenses ─────────────────────────────────────────
 exports.getExpenses = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, month, category, status } = req.query;
+    const { page = 1, limit = 20, month, category, status, provider } = req.query;
 
     const filter = { organization: req.orgId, isActive: { $ne: false } };
     if (month)    filter.date = { $gte: new Date(`${month}-01`), $lte: new Date(`${month}-31`) };
     if (category) filter.category = category;
     if (status)   filter.status   = status;
+    if (provider) filter.provider = provider;
 
     const [expenses, total] = await Promise.all([
       Expense.find(filter)

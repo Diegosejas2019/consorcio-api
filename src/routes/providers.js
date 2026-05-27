@@ -8,7 +8,9 @@ router.use(protect, restrictTo('admin'));
 
 router.get('/',       requirePermission('providers.read'), ctrl.getProviders);
 router.post('/',      requirePermission('providers.create'), uploadProvider.array('documents', 5), ctrl.createProvider);
+router.get('/:id/details', requirePermission('providers.read'), ctrl.getProviderDetails);
 router.patch('/:id',  requirePermission('providers.update'), uploadProvider.array('documents', 5), ctrl.updateProvider);
+router.patch('/:id/document/:index/meta', requirePermission('providers.update'), ctrl.updateDocumentMeta);
 router.get('/:id/document/:index',    requirePermission('providers.read'), ctrl.getDocument);
 router.delete('/:id/document/:index', requirePermission('providers.update'), ctrl.deleteDocument);
 router.delete('/:id', requirePermission('providers.delete'), ctrl.deleteProvider);
