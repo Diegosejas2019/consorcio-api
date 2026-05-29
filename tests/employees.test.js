@@ -217,6 +217,113 @@ describe('empleados — multi-tenant y permisos', () => {
   });
 });
 
+describe('createAccess — vinculacion Employee → User', () => {
+  test('crea User, OrgMember security_guard y vincula employee.userId', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const employee = await createEmployee(orgId, user._id, { role: 'security', email: 'guard@test.com', name: 'Test Guard' });
+
+    const res = await request(app)
+      .post(`/api/employees/${employee._id}/create-access`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(res.body.data.isNewUser).toBe(true);
+    expect(res.body.data.email).toBe('guard@test.com');
+
+    const updatedEmp = await Employee.findById(employee._id);
+    expect(updatedEmp.userId).toBeTruthy();
+
+    const membership = await OrganizationMember.findOne({ user: updatedEmp.userId, organization: orgId, role: 'admin' });
+    expect(membership).toBeTruthy();
+    expect(membership.adminRole).toBe('security_guard');
+  });
+
+  test('si el empleado no tiene email retorna 400', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const employee = await createEmployee(orgId, user._id, { role: 'security' });
+
+    const res = await request(app)
+      .post(`/api/employees/${employee._id}/create-access`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/email/);
+  });
+
+  test('si el empleado ya tiene userId retorna 409', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const employee = await createEmployee(orgId, user._id, { role: 'security', email: 'g2@test.com', userId: user._id });
+
+    const res = await request(app)
+      .post(`/api/employees/${employee._id}/create-access`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(409);
+  });
+
+  test('si el empleado no es security retorna 400', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const employee = await createEmployee(orgId, user._id, { role: 'cleaning', email: 'cleaner@test.com' });
+
+    const res = await request(app)
+      .post(`/api/employees/${employee._id}/create-access`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  test('dar de baja con revokeAccess desactiva OrgMember vinculado', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const portalUser = await User.create({ name: 'Guard', email: `g-${Date.now()}@test.com`, password: 'password123', role: 'admin', organization: orgId, isActive: true });
+    const membership = await OrganizationMember.create({ user: portalUser._id, organization: orgId, role: 'admin', adminRole: 'security_guard', isActive: true });
+    const employee = await createEmployee(orgId, user._id, { role: 'security', userId: portalUser._id });
+
+    const res = await request(app)
+      .delete(`/api/employees/${employee._id}?revokeAccess=true`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const updatedMembership = await OrganizationMember.findById(membership._id);
+    expect(updatedMembership.isActive).toBe(false);
+  });
+
+  test('dar de baja sin revokeAccess no toca OrgMember', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const portalUser = await User.create({ name: 'Guard', email: `g2-${Date.now()}@test.com`, password: 'password123', role: 'admin', organization: orgId, isActive: true });
+    const membership = await OrganizationMember.create({ user: portalUser._id, organization: orgId, role: 'admin', adminRole: 'security_guard', isActive: true });
+    const employee = await createEmployee(orgId, user._id, { role: 'security', userId: portalUser._id });
+
+    const res = await request(app)
+      .delete(`/api/employees/${employee._id}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const updatedMembership = await OrganizationMember.findById(membership._id);
+    expect(updatedMembership.isActive).toBe(true);
+  });
+
+  test('unlinkUser remueve userId sin tocar User ni OrgMember', async () => {
+    const { token, orgId, user } = await createAdminWithToken();
+    const portalUser = await User.create({ name: 'Guard', email: `g3-${Date.now()}@test.com`, password: 'password123', role: 'admin', organization: orgId, isActive: true });
+    await OrganizationMember.create({ user: portalUser._id, organization: orgId, role: 'admin', adminRole: 'security_guard', isActive: true });
+    const employee = await createEmployee(orgId, user._id, { role: 'security', userId: portalUser._id });
+
+    const res = await request(app)
+      .delete(`/api/employees/${employee._id}/unlink-user`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const updatedEmp = await Employee.findById(employee._id);
+    expect(updatedEmp.userId).toBeNull();
+    const updatedUser = await User.findById(portalUser._id);
+    expect(updatedUser.isActive).toBe(true);
+  });
+});
+
 describe('salarios — sueldo duplicado no deja Expense huerfano', () => {
   test('crear sueldo duplicado retorna 409 y no crea Expense extra', async () => {
     const { token, orgId, user } = await createAdminWithToken();
