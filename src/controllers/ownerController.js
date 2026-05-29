@@ -2,11 +2,13 @@ const crypto             = require('crypto');
 const User               = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const Organization = require('../models/Organization');
-const Payment     = require('../models/Payment');
-const PaymentPlan = require('../models/PaymentPlan');
+const Payment       = require('../models/Payment');
+const PaymentPlan   = require('../models/PaymentPlan');
+const OwnerDebtItem = require('../models/OwnerDebtItem');
 const Unit    = require('../models/Unit');
 const Notice  = require('../models/Notice');
-const logger  = require('../config/logger');
+const logger    = require('../config/logger');
+const puppeteer = require('puppeteer');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome, sendEmailChangeConfirmation } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
@@ -26,6 +28,8 @@ const {
   computeUnitsBalanceOwed,
   normalizeDebtBalance,
   summarizeUnitDebts,
+  calculateUnitFee,
+  isUnitChargeableForPeriod,
 } = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -463,6 +467,281 @@ exports.getMySummary = async (req, res, next) => {
       },
     });
   } catch (err) {
+    next(err);
+  }
+};
+
+const INVOICE_MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+function formatPeriodLabel(ym) {
+  if (!ym) return ym;
+  const [year, m] = ym.split('-');
+  return `${INVOICE_MONTHS[parseInt(m, 10) - 1] || m} ${year}`;
+}
+
+async function buildOwnerInvoiceData(ownerId, orgId, period, membership) {
+  const [org, units, periodPayments, debtItems, activePlan] = await Promise.all([
+    Organization.findById(orgId).select('monthlyFee paymentPeriods dueDayOfMonth name feeLabel address memberLabel'),
+    Unit.find({ owner: ownerId, organization: orgId, active: true })
+      .select('name customFee coefficient startBillingPeriod').lean(),
+    Payment.find({ organization: orgId, owner: ownerId, month: period })
+      .populate('extraordinaryItems.expense', 'description amount date category')
+      .populate('reviewedBy', 'name')
+      .select('-__v').lean(),
+    OwnerDebtItem.find({ organization: orgId, owner: ownerId, status: 'pending' })
+      .select('type description amount originDate dueDate').lean(),
+    PaymentPlan.findOne({
+      organization: orgId, owner: ownerId,
+      status: { $in: ['requested', 'approved', 'active'] },
+    }).select('status includedPeriods').lean(),
+  ]);
+
+  if (!org) {
+    const e = new Error('Organización no configurada.');
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const chargeableUnits = units.filter(u => isUnitChargeableForPeriod(u, membership, period));
+
+  const approvedPayment  = periodPayments.find(p => p.status === 'approved');
+  const pendingPayment   = periodPayments.find(p => p.status === 'pending');
+  const rejectedPayments = periodPayments.filter(p => p.status === 'rejected');
+
+  let paymentStatus;
+  let monthlyItems;
+  let periodAmountExpected = 0;
+
+  if (approvedPayment) {
+    paymentStatus = 'approved';
+    monthlyItems  = (approvedPayment.breakdown || []).map(b => ({ unitId: b.unit, unitName: b.name, amount: b.amount }));
+    periodAmountExpected = monthlyItems.reduce((s, b) => s + (b.amount || 0), 0) || approvedPayment.amount || 0;
+  } else if (pendingPayment) {
+    paymentStatus = 'pending';
+    monthlyItems  = (pendingPayment.breakdown || []).map(b => ({ unitId: b.unit, unitName: b.name, amount: b.amount }));
+    periodAmountExpected = monthlyItems.reduce((s, b) => s + (b.amount || 0), 0) || pendingPayment.amount || 0;
+  } else {
+    paymentStatus = rejectedPayments.length > 0 ? 'rejected' : 'unpaid';
+    monthlyItems  = chargeableUnits.map(u => ({ unitId: u._id, unitName: u.name, amount: calculateUnitFee(u, org) }));
+    periodAmountExpected = monthlyItems.reduce((s, i) => s + i.amount, 0);
+  }
+
+  const periodEnabled = (org.paymentPeriods || []).includes(period);
+  const periodInPlan  = activePlan
+    ? (activePlan.includedPeriods || []).some(p => (typeof p === 'string' ? p : p.month) === period)
+    : false;
+
+  const activePayment      = approvedPayment || pendingPayment;
+  const extraordinaryItems = activePayment ? (activePayment.extraordinaryItems || []) : [];
+  const totalExtraordinary = extraordinaryItems.reduce((s, e) => s + (e.amount || 0), 0);
+  const totalDebt          = debtItems.reduce((s, d) => s + (d.amount || 0), 0);
+  const totalCollected     = periodPayments.filter(p => p.status === 'approved').reduce((s, p) => s + (p.amount || 0), 0);
+  const totalPending       = periodPayments.filter(p => p.status === 'pending').reduce((s, p) => s + (p.amount || 0), 0);
+
+  const warnings = [];
+  if (!periodEnabled) warnings.push({ code: 'period_not_enabled', message: 'Este período no está habilitado para pago.', severity: 'info' });
+  if (periodInPlan)   warnings.push({ code: 'period_in_plan', message: 'Este período está incluido en un plan de pago activo.', severity: 'info' });
+  if (rejectedPayments.length > 0 && paymentStatus !== 'approved') {
+    warnings.push({ code: 'has_rejected', message: `Tiene ${rejectedPayments.length} pago(s) rechazado(s) para este período.`, severity: 'warning' });
+  }
+
+  return {
+    period,
+    periodLabel: formatPeriodLabel(period),
+    paymentStatus,
+    periodInPlan,
+    periodEnabled,
+    chargeableUnits: chargeableUnits.map(u => ({
+      id: u._id, name: u.name,
+      amount: calculateUnitFee(u, org),
+      startBillingPeriod: u.startBillingPeriod,
+    })),
+    monthlyItems,
+    payments: {
+      approved: periodPayments.filter(p => p.status === 'approved'),
+      pending:  periodPayments.filter(p => p.status === 'pending'),
+      rejected: rejectedPayments,
+    },
+    extraordinaryItems,
+    debtItems,
+    dueDayOfMonth: org.dueDayOfMonth,
+    totals: {
+      expected:      periodAmountExpected,
+      collected:     totalCollected,
+      pending:       totalPending,
+      extraordinary: totalExtraordinary,
+      debt:          totalDebt,
+    },
+    warnings,
+    _org: org,
+  };
+}
+
+function buildInvoiceHTML(data, ownerName) {
+  const fmtARS  = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n ?? 0);
+  const fmtDate = (d) => new Date(d).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const today   = new Date().toLocaleDateString('es-AR', { day: '2-digit', month: 'long', year: 'numeric' });
+  const org     = data._org;
+
+  const statusConfig = {
+    approved: { label: 'PAGO ACREDITADO',         bg: '#d1fae5', border: '#6ee7b7', dot: '#10b981', text: '#065f46' },
+    pending:  { label: 'PENDIENTE DE APROBACIÓN', bg: '#fef3c7', border: '#fcd34d', dot: '#f59e0b', text: '#92400e' },
+    rejected: { label: 'PAGO RECHAZADO',          bg: '#fee2e2', border: '#fca5a5', dot: '#ef4444', text: '#991b1b' },
+    unpaid:   { label: 'PENDIENTE DE PAGO',       bg: '#f3f4f6', border: '#d1d5db', dot: '#6b7280', text: '#374151' },
+  };
+  const st = statusConfig[data.paymentStatus] || statusConfig.unpaid;
+
+  const monthlyRows = data.monthlyItems.map(u =>
+    `<tr><td>${org.feeLabel || 'Cuota'} — ${u.unitName}</td><td style="text-align:right">${fmtARS(u.amount)}</td></tr>`
+  ).join('');
+
+  const extraRows = data.extraordinaryItems.map(e =>
+    `<tr><td>${e.expense?.description || 'Gasto extraordinario'} <span style="font-size:11px;color:#6b7280">(Extraordinario)</span></td><td style="text-align:right">${fmtARS(e.amount)}</td></tr>`
+  ).join('');
+
+  const debtRows = data.debtItems.map(d =>
+    `<tr><td>${d.description || 'Ajuste'} <span style="font-size:11px;color:#ef4444">(Deuda pendiente)</span></td><td style="text-align:right;color:#ef4444">+${fmtARS(d.amount)}</td></tr>`
+  ).join('');
+
+  const allPayments = [...(data.payments.approved || []), ...(data.payments.pending || []), ...(data.payments.rejected || [])];
+  const stLabel = { approved: 'Aprobado', pending: 'Pendiente', rejected: 'Rechazado' };
+  const stColor = { approved: '#10b981', pending: '#f59e0b', rejected: '#ef4444' };
+  const paymentsSection = allPayments.length === 0 ? '' : `
+<div style="margin-top:28px">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#9ca3af;font-weight:600;margin-bottom:8px">Pagos del período</div>
+  <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f9fafb;border-bottom:1px solid #e5e7eb">
+      <th style="text-align:left;padding:8px 10px;color:#6b7280;font-weight:600;font-size:11px">FECHA</th>
+      <th style="text-align:left;padding:8px 10px;color:#6b7280;font-weight:600;font-size:11px">ESTADO</th>
+      <th style="text-align:right;padding:8px 10px;color:#6b7280;font-weight:600;font-size:11px">IMPORTE</th>
+    </tr></thead>
+    <tbody>${allPayments.map(p => `<tr><td style="padding:8px 10px">${fmtDate(p.createdAt || new Date())}</td><td style="padding:8px 10px;color:${stColor[p.status] || '#6b7280'};font-weight:600">${stLabel[p.status] || p.status}</td><td style="padding:8px 10px;text-align:right">${fmtARS(p.amount)}</td></tr>`).join('')}</tbody>
+  </table>
+</div>`;
+
+  const warningsSection = data.warnings.filter(w => w.severity !== 'info').map(w =>
+    `<div style="display:flex;gap:8px;align-items:flex-start;background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:10px 14px;margin-top:10px;font-size:12px;color:#854d0e"><span>⚠</span><span>${w.message}</span></div>`
+  ).join('');
+
+  const totalConceptos = data.totals.expected + data.totals.extraordinary + data.totals.debt;
+
+  return `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><title>Liquidación ${data.periodLabel}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Helvetica Neue',Arial,sans-serif;background:#fff;color:#111827;padding:48px;font-size:14px;line-height:1.6}
+.hdr{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:28px;border-bottom:2px solid #1a1a2e;margin-bottom:32px}
+.org-name{font-size:22px;font-weight:700;color:#1a1a2e;letter-spacing:-.5px}
+.org-sub{font-size:12px;color:#6b7280;margin-top:4px}
+.doc-badge{text-align:right}
+.doc-label{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#6b7280;font-weight:600}
+.doc-title{font-size:18px;font-weight:700;color:#1a1a2e;margin-top:2px}
+.doc-date{font-size:12px;color:#6b7280;margin-top:4px}
+.st-banner{border-radius:10px;padding:14px 20px;margin-bottom:28px;display:flex;align-items:center;gap:12px;background:${st.bg};border:1.5px solid ${st.border}}
+.st-dot{width:10px;height:10px;background:${st.dot};border-radius:50%;flex-shrink:0}
+.st-text{font-weight:700;font-size:14px;color:${st.text};letter-spacing:.5px}
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px}
+.info-box{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px}
+.box-lbl{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#9ca3af;font-weight:600;margin-bottom:6px}
+.box-val{font-size:15px;font-weight:600;color:#111827}
+.box-sub{font-size:12px;color:#6b7280;margin-top:2px}
+table.dt{width:100%;border-collapse:collapse;margin-bottom:20px}
+table.dt thead tr{background:#1a1a2e;color:#fff}
+table.dt thead th{padding:12px 16px;text-align:left;font-size:12px;letter-spacing:.5px;font-weight:600}
+table.dt thead th:last-child{text-align:right}
+table.dt tbody tr{border-bottom:1px solid #f3f4f6}
+table.dt tbody td{padding:12px 16px;font-size:14px;color:#374151}
+table.dt tbody td:last-child{text-align:right;font-weight:500}
+table.dt tfoot tr{border-top:2px solid #1a1a2e}
+table.dt tfoot td{padding:14px 16px;font-size:16px;font-weight:700;color:#1a1a2e}
+table.dt tfoot td:last-child{text-align:right}
+.footer{margin-top:40px;padding-top:20px;border-top:1px solid #e5e7eb}
+.disclaimer{font-size:12px;color:#6b7280;font-style:italic;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px}
+.org-ftr{font-size:11px;color:#9ca3af;margin-top:8px;text-align:center;text-transform:uppercase;letter-spacing:.5px}
+</style></head>
+<body>
+<div class="hdr">
+  <div><div class="org-name">${org.name}</div><div class="org-sub">${org.address || 'Administración de propiedades'}</div></div>
+  <div class="doc-badge"><div class="doc-label">Liquidación de Expensas</div><div class="doc-title">${data.periodLabel}</div><div class="doc-date">Emitida: ${today}</div></div>
+</div>
+<div class="st-banner"><div class="st-dot"></div><div class="st-text">${st.label}</div></div>
+<div class="info-grid">
+  <div class="info-box"><div class="box-lbl">${org.memberLabel || 'Propietario'}</div><div class="box-val">${ownerName}</div><div class="box-sub">${data.chargeableUnits.map(u => u.name).join(', ') || '—'}</div></div>
+  <div class="info-box"><div class="box-lbl">Período</div><div class="box-val">${data.periodLabel}</div><div class="box-sub">${org.dueDayOfMonth ? `Vence el día ${org.dueDayOfMonth} de cada mes` : ''}</div></div>
+</div>
+<table class="dt">
+  <thead><tr><th>Concepto</th><th style="text-align:right">Importe</th></tr></thead>
+  <tbody>${monthlyRows}${extraRows}${debtRows}</tbody>
+  <tfoot><tr><td>Total del período</td><td>${fmtARS(totalConceptos)}</td></tr></tfoot>
+</table>
+${paymentsSection}
+${warningsSection}
+<div class="footer">
+  <div class="disclaimer">Esta liquidación detalla los conceptos del período <strong>${data.periodLabel}</strong>. No reemplaza el recibo de pago emitido al aprobarse el pago.</div>
+  <div class="org-ftr">${org.name} — Generado automáticamente por GestionAr</div>
+</div>
+</body></html>`;
+}
+
+// GET /api/owners/me/invoice?period=YYYY-MM — liquidación individual del propietario autenticado
+exports.getMyInvoice = async (req, res, next) => {
+  try {
+    const { period } = req.query;
+    if (!period || !PERIOD_RE.test(period)) {
+      return res.status(400).json({ success: false, message: 'El parámetro period es obligatorio (formato YYYY-MM).' });
+    }
+    const membership = req.membership || await OrganizationMember.findOne({
+      user: req.ownerId, organization: req.orgId, role: 'owner', isActive: true,
+    });
+    if (!membership) {
+      return res.status(404).json({ success: false, message: 'Propietario no encontrado en esta organización.' });
+    }
+    const data = await buildOwnerInvoiceData(req.ownerId, req.orgId, period, membership);
+    const { _org, ...publicData } = data;
+    res.json({ success: true, data: publicData });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+    next(err);
+  }
+};
+
+// GET /api/owners/me/invoice-pdf?period=YYYY-MM — PDF de liquidación individual
+exports.getMyInvoicePdf = async (req, res, next) => {
+  try {
+    const { period } = req.query;
+    if (!period || !PERIOD_RE.test(period)) {
+      return res.status(400).json({ success: false, message: 'El parámetro period es obligatorio (formato YYYY-MM).' });
+    }
+    const [membership, owner] = await Promise.all([
+      OrganizationMember.findOne({ user: req.ownerId, organization: req.orgId, role: 'owner', isActive: true }),
+      User.findById(req.ownerId).select('name').lean(),
+    ]);
+    if (!membership) {
+      return res.status(404).json({ success: false, message: 'Propietario no encontrado en esta organización.' });
+    }
+    const data    = await buildOwnerInvoiceData(req.ownerId, req.orgId, period, membership);
+    const html    = buildInvoiceHTML(data, owner?.name || 'Propietario');
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
+    let buffer;
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      buffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '0', right: '0', bottom: '0', left: '0' } });
+    } finally {
+      await browser.close();
+    }
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `attachment; filename="liquidacion_${period}.pdf"`,
+      'Content-Length':      buffer.length,
+    });
+    res.end(buffer);
+    logger.info(`[ownerController] PDF liquidación generado owner=${req.ownerId} period=${period}`);
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+    logger.error(`[ownerController] Error generando PDF liquidación: ${err.message}`);
     next(err);
   }
 };

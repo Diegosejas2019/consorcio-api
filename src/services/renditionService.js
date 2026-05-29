@@ -786,7 +786,96 @@ async function buildAnnualRendition(orgId, year) {
   return { year, rows, totals, warnings };
 }
 
+// ── COMPOSICIÓN DEL PERÍODO ───────────────────────────────────────────────────
+
+async function buildPeriodComposition(orgId, period) {
+  const [allRows, preview] = await Promise.all([
+    delinquencyService.buildDelinquencyRows(orgId),
+    buildRenditionPreview(orgId, period),
+  ]);
+
+  const owners = allRows.map(row => {
+    const approvedForPeriod = (row.approvedPayments || []).filter(p => p.month === period);
+    const pendingForPeriod  = (row.pendingPayments  || []).filter(p => p.month === period);
+    const rejectedForPeriod = (row.rejectedPayments || []).filter(p => p.month === period);
+    const periodDetail = (row.unpaidPeriodDetails || []).find(p => p.period === period);
+
+    let paymentStatus;
+    let periodAmount = null;
+    let periodUnits  = [];
+
+    if (approvedForPeriod.length > 0) {
+      paymentStatus = 'approved';
+      periodAmount  = approvedForPeriod.reduce((s, p) => s + p.amount, 0);
+    } else if (pendingForPeriod.length > 0) {
+      paymentStatus = 'pending';
+      periodAmount  = pendingForPeriod.reduce((s, p) => s + p.amount, 0);
+      if (periodDetail) periodUnits = periodDetail.units || [];
+    } else if (periodDetail) {
+      paymentStatus = rejectedForPeriod.length > 0 ? 'rejected' : 'unpaid';
+      periodAmount  = periodDetail.amount;
+      periodUnits   = periodDetail.units || [];
+    } else if (rejectedForPeriod.length > 0) {
+      paymentStatus = 'rejected';
+      periodAmount  = rejectedForPeriod.reduce((s, p) => s + p.amount, 0);
+    } else {
+      paymentStatus = 'not_applicable';
+    }
+
+    const extraordinaryForPeriod = (row.extraordinaryOwed || []).filter(e => !e.period || e.period === period);
+
+    return {
+      id:            row.id,
+      _id:           row._id,
+      name:          row.name,
+      email:         row.email,
+      units:         row.units,
+      paymentStatus,
+      periodAmount,
+      periodUnits,
+      payments: {
+        approved: approvedForPeriod,
+        pending:  pendingForPeriod,
+        rejected: rejectedForPeriod,
+      },
+      extraordinaryOwed: extraordinaryForPeriod,
+      debtItems:    row.debtItems    || [],
+      balanceUnits: row.balanceUnits || [],
+      totalOwed:    row.totalOwed,
+      status:       row.status,
+      hasActivePlan: row.hasActivePlan,
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+
+  const approved = owners.filter(o => o.paymentStatus === 'approved');
+  const pending  = owners.filter(o => o.paymentStatus === 'pending');
+  const rejected = owners.filter(o => o.paymentStatus === 'rejected');
+  const unpaid   = owners.filter(o => o.paymentStatus === 'unpaid');
+
+  return {
+    period,
+    periodLabel: fmtPeriod(period),
+    owners,
+    stats: {
+      total:          owners.length,
+      approved:       approved.length,
+      pending:        pending.length,
+      rejected:       rejected.length,
+      unpaid:         unpaid.length,
+      notApplicable:  owners.filter(o => o.paymentStatus === 'not_applicable').length,
+      totalExpected:  owners.reduce((s, o) => s + (o.periodAmount || 0), 0),
+      totalCollected: approved.reduce((s, o) => s + (o.periodAmount || 0), 0),
+      totalPending:   pending.reduce((s, o) => s + (o.periodAmount || 0), 0),
+    },
+    summary:           preview.summary,
+    warnings:          preview.warnings,
+    org:               preview.org,
+    existingRendition: preview.existingRendition,
+  };
+}
+
 module.exports = {
+  buildPeriodComposition,
   buildRenditionPreview,
   buildRenditionWarnings,
   saveObservations,

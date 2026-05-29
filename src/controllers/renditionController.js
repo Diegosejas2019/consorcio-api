@@ -82,6 +82,20 @@ exports.saveObservations = async (req, res, next) => {
   }
 };
 
+// GET /api/renditions/:period/composition
+exports.getComposition = async (req, res, next) => {
+  try {
+    const { period } = req.params;
+    if (!PERIOD_RE.test(period)) {
+      return res.status(400).json({ success: false, message: 'Período inválido. Formato: YYYY-MM' });
+    }
+    const data = await renditionService.buildPeriodComposition(req.orgId, period);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /api/renditions/annual?year=YYYY
 exports.getAnnual = async (req, res, next) => {
   try {

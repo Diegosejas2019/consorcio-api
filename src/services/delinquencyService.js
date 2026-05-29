@@ -781,6 +781,7 @@ async function exportDelinquencyCsv(organizationId, filters = {}, ownerId = null
 
 module.exports = {
   applyFilters,
+  buildDelinquencyRows,
   calculateDebtForOwner,
   dueInfoForPeriod,
   exportDelinquencyCsv,

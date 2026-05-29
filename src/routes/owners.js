@@ -31,7 +31,9 @@ router.post('/bulk',          restrictTo('admin'), requirePermission('owners.cre
 router.post('/me/request-email-change', restrictTo('owner'), ctrl.requestEmailChange);
 router.post('/me/confirm-email-change', restrictTo('owner'), ctrl.confirmEmailChange);
 router.post('/me/cancel-email-change', restrictTo('owner'), ctrl.cancelEmailChange);
-router.get('/me/summary', restrictTo('owner'), ctrl.getMySummary);
+router.get('/me/summary',      restrictTo('owner'), ctrl.getMySummary);
+router.get('/me/invoice',      restrictTo('owner'), ctrl.getMyInvoice);
+router.get('/me/invoice-pdf',  restrictTo('owner'), ctrl.getMyInvoicePdf);
 router.get('/:id/available-items', restrictTo('admin'), requirePermission('owners.read'), ctrl.getOwnerAvailableItems);
 router.get('/:id',       ctrl.getOwner);       // admin: cualquiera | owner: solo el suyo (verificado en ctrl)
 router.patch('/:id',     restrictTo('admin'), requirePermission('owners.update'), ctrl.updateOwner);

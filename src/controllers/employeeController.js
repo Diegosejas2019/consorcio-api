@@ -102,9 +102,9 @@ exports.deleteEmployee = async (req, res, next) => {
     if (!employee) return res.status(404).json({ success: false, message: 'Empleado no encontrado.' });
     if (!employee.isActive) return res.status(400).json({ success: false, message: 'El empleado ya está dado de baja.' });
 
-    const pendingSalary = await Salary.findOne({ employee: employee._id, organization: req.orgId, status: 'pending' });
+    const pendingSalary = await Salary.findOne({ employee: employee._id, organization: req.orgId, status: { $in: ['pending', 'partially_paid'] } });
     if (pendingSalary) {
-      return res.status(400).json({ success: false, message: 'No se puede dar de baja un empleado con sueldos pendientes de pago.' });
+      return res.status(400).json({ success: false, message: 'No se puede dar de baja un empleado con sueldos pendientes de pago o parcialmente pagados.' });
     }
 
     employee.isActive  = false;

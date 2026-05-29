@@ -10,6 +10,7 @@ router.use(restrictTo('admin'), requirePermission('reports.read'));
 router.get('/preview',                     ctrl.getPreview);
 router.get('/history',                     ctrl.getHistory);
 router.get('/annual',                      ctrl.getAnnual);
+router.get('/:period/composition',         ctrl.getComposition);
 router.post('/:period/generate-pdf',       ctrl.generatePdf);
 router.get('/:period/export-csv',          ctrl.exportCsv);
 router.patch('/:period/observations',      ctrl.saveObservations);

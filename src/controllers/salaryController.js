@@ -156,7 +156,13 @@ exports.createSalary = async (req, res, next) => {
     const totalAmount = round2(Number(baseAmount) + Number(extraAmount) - Number(deductions));
     if (totalAmount < 0) return res.status(400).json({ success: false, message: 'El total no puede ser negativo.' });
 
-    const expense = await Expense.create({
+    const duplicate = await Salary.findOne({ organization: req.orgId, employee: employeeId, period });
+    if (duplicate) {
+      return res.status(409).json({ success: false, message: 'Ya existe un sueldo para este empleado en ese periodo.' });
+    }
+
+    let expense;
+    expense = await Expense.create({
       organization: req.orgId,
       description:  buildExpenseDescription(employee, period),
       category:     'salaries',
@@ -194,7 +200,8 @@ exports.createSalary = async (req, res, next) => {
     res.status(201).json({ success: true, data: { salary: salaryToResponse(salary), expense } });
   } catch (err) {
     if (err.code === 11000) {
-      return res.status(400).json({ success: false, message: 'Ya existe un sueldo para este empleado en ese periodo.' });
+      if (expense) { Expense.findByIdAndDelete(expense._id).catch(() => {}); }
+      return res.status(409).json({ success: false, message: 'Ya existe un sueldo para este empleado en ese periodo.' });
     }
     next(err);
   }
