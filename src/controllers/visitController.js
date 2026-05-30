@@ -418,11 +418,19 @@ exports.getUnitMap = async (req, res, next) => {
   try {
     const { date } = req.query;
 
-    const targetDate = date ? new Date(date) : new Date();
-    const start = new Date(targetDate);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(targetDate);
-    end.setHours(23, 59, 59, 999);
+    // Construir rango en hora local del servidor, igual que getTodayVisits.
+    // new Date('YYYY-MM-DD') parsea como UTC midnight; agregar T00:00:00 lo parsea
+    // como hora local, evitando el desfasaje de zona horaria en setHours().
+    let start, end;
+    if (date) {
+      start = new Date(`${date}T00:00:00`);
+      end   = new Date(`${date}T23:59:59.999`);
+    } else {
+      start = new Date();
+      start.setHours(0, 0, 0, 0);
+      end = new Date();
+      end.setHours(23, 59, 59, 999);
+    }
 
     const [units, visits] = await Promise.all([
       Unit.find({ organization: req.orgId, active: true })
