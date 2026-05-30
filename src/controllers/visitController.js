@@ -2,7 +2,18 @@ const crypto   = require('crypto');
 const QRCode   = require('qrcode');
 const Visit    = require('../models/Visit');
 const VisitLog = require('../models/VisitLog');
+const Unit     = require('../models/Unit');
 const logger   = require('../config/logger');
+
+// Prioridad de estado visual: inside > approved > pending > rejected > exited > none
+const STATUS_PRIORITY = ['inside', 'approved', 'pending', 'rejected', 'exited'];
+
+function topPriority(statuses) {
+  for (const s of STATUS_PRIORITY) {
+    if (statuses.includes(s)) return s;
+  }
+  return 'none';
+}
 
 // ── GET /api/visits ───────────────────────────────────────────
 exports.getVisits = async (req, res, next) => {
@@ -394,6 +405,95 @@ exports.deleteVisit = async (req, res, next) => {
 
     await visit.deleteOne();
     res.json({ success: true, message: 'Visita eliminada.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── GET /api/visits/unit-map ──────────────────────────────────
+// Devuelve todas las unidades activas de la org con visitas del día agregadas.
+// Uso: portal /guard — tab "Mapa de unidades".
+// NO expone datos financieros ni personales del propietario.
+exports.getUnitMap = async (req, res, next) => {
+  try {
+    const { date } = req.query;
+
+    const targetDate = date ? new Date(date) : new Date();
+    const start = new Date(targetDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(targetDate);
+    end.setHours(23, 59, 59, 999);
+
+    const [units, visits] = await Promise.all([
+      Unit.find({ organization: req.orgId, active: true })
+        .select('_id name owner')
+        .sort({ name: 1 })
+        .lean(),
+      Visit.find({
+        organization: req.orgId,
+        expectedDate: { $gte: start, $lte: end },
+      })
+        .select('_id name type status expectedDate owner')
+        .lean(),
+    ]);
+
+    // Agrupar visitas por ownerId
+    const visitsByOwner = new Map();
+    for (const v of visits) {
+      const ownerId = v.owner?.toString();
+      if (!ownerId) continue;
+      if (!visitsByOwner.has(ownerId)) visitsByOwner.set(ownerId, []);
+      visitsByOwner.get(ownerId).push(v);
+    }
+
+    const unitItems = units.map(unit => {
+      const ownerId = unit.owner?.toString();
+      const unitVisits = ownerId ? (visitsByOwner.get(ownerId) || []) : [];
+
+      const statuses = unitVisits.map(v => v.status);
+      const status = topPriority(statuses);
+
+      const visitCounts = {
+        expected: unitVisits.filter(v => v.status === 'approved').length,
+        inside:   unitVisits.filter(v => v.status === 'inside').length,
+        pending:  unitVisits.filter(v => v.status === 'pending').length,
+        rejected: unitVisits.filter(v => v.status === 'rejected').length,
+        exited:   unitVisits.filter(v => v.status === 'exited').length,
+      };
+
+      const visitList = unitVisits.map(v => ({
+        id:           v._id,
+        visitorName:  v.name,
+        type:         v.type,
+        status:       v.status,
+        expectedDate: v.expectedDate,
+      }));
+
+      return {
+        unitId:      unit._id,
+        unitLabel:   unit.name,
+        hasOwner:    !!ownerId,
+        status,
+        visitCounts,
+        visits:      visitList,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        date:   start,
+        units:  unitItems,
+        totals: {
+          units:    unitItems.length,
+          inside:   unitItems.filter(u => u.status === 'inside').length,
+          expected: unitItems.filter(u => u.status === 'approved').length,
+          pending:  unitItems.filter(u => u.status === 'pending').length,
+          rejected: unitItems.filter(u => u.status === 'rejected').length,
+          none:     unitItems.filter(u => u.status === 'none').length,
+        },
+      },
+    });
   } catch (err) {
     next(err);
   }

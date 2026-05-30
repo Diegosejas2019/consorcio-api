@@ -61,6 +61,7 @@ const visitSchema = new mongoose.Schema(
 visitSchema.index({ owner: 1, createdAt: -1 });
 visitSchema.index({ status: 1 });
 visitSchema.index({ expectedDate: 1 });
+visitSchema.index({ organization: 1, expectedDate: 1, status: 1 });
 
 visitSchema.virtual('typeLabel').get(function () {
   const labels = { visit: 'Visita', provider: 'Proveedor', delivery: 'Delivery' };

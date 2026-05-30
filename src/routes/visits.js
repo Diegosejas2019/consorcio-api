@@ -13,6 +13,11 @@ router.get('/today',
   requirePermission('visits.read'),
   ctrl.getTodayVisits);
 
+router.get('/unit-map',
+  restrictTo('admin'),
+  requirePermission('visits.read'),
+  ctrl.getUnitMap);
+
 router.get('/history',
   restrictTo('admin'),
   requirePermission('visits.history.read'),
