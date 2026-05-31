@@ -60,6 +60,9 @@ function orgToConfigView(org, includePublicKey = false) {
     businessType: org.businessType,
     slug:         org.slug,
     orgId:        org._id,
+    // ── Planes de pago ──
+    paymentPlansEnabled:             org.paymentPlansEnabled !== false,
+    paymentPlansAllowOwnerRequests:  org.paymentPlansAllowOwnerRequests !== false,
   };
   if (includePublicKey) data.mpPublicKey = org.mpPublicKey;
   return data;
@@ -94,6 +97,9 @@ const FIELD_MAP = {
   bankAccount:  'bankAccount',
   bankCbu:      'bankCbu',
   bankHolder:   'bankHolder',
+  // Planes de pago
+  paymentPlansEnabled:            'paymentPlansEnabled',
+  paymentPlansAllowOwnerRequests: 'paymentPlansAllowOwnerRequests',
 };
 
 // ── GET /api/config ───────────────────────────────────────────

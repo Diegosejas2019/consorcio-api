@@ -82,6 +82,15 @@ const formatPlan = (plan, installments = []) => {
 // ── POST /api/payment-plans/request (owner) ────────────────────
 exports.requestPlan = async (req, res, next) => {
   try {
+    const org = await Organization.findById(req.orgId).select('paymentPlansAllowOwnerRequests').lean();
+    if (org && org.paymentPlansAllowOwnerRequests === false) {
+      return res.status(403).json({
+        success: false,
+        code:    'OWNER_REQUESTS_DISABLED',
+        message: 'La administración no permite solicitar planes de pago desde la app.',
+      });
+    }
+
     const { includedPeriods = [], extraordinaryItems = [], balanceDebt, balanceUnitIds, debtItemIds, currency, requestComment } = req.body;
     if (currency && currency !== 'ARS') {
       return res.status(400).json({ success: false, message: 'GestionAr solo admite importes en pesos argentinos.' });

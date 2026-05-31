@@ -231,6 +231,16 @@ const organizationSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // ── Configuración de planes de pago ─────────────────────────
+    paymentPlansEnabled: {
+      type: Boolean,
+      default: true,
+    },
+    paymentPlansAllowOwnerRequests: {
+      type: Boolean,
+      default: true,
+    },
+
     // ── Registro autónomo de propietarios ────────────────────────
     publicJoinCode: {
       type: String,

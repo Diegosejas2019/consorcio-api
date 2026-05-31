@@ -1,4 +1,5 @@
 const OrganizationFeature = require('../models/OrganizationFeature');
+const Organization        = require('../models/Organization');
 const logger              = require('../config/logger');
 const { isSuperAdminRole } = require('../utils/roles');
 const { KNOWN_FEATURES, buildDefaultFeatureMap } = require('../utils/features');
@@ -13,9 +14,17 @@ exports.getFeatures = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'No tenés permisos para ver estas configuraciones.' });
     }
 
-    const records = await OrganizationFeature.find({ organization: orgId });
+    const [records, org] = await Promise.all([
+      OrganizationFeature.find({ organization: orgId }),
+      Organization.findById(orgId).select('paymentPlansEnabled paymentPlansAllowOwnerRequests').lean(),
+    ]);
 
     const features = buildDefaultFeatureMap(records);
+
+    // Synthetic keys from Organization settings (admin-configurable)
+    const plansEnabled = org ? org.paymentPlansEnabled !== false : true;
+    features['paymentPlans'] = plansEnabled;
+    features['paymentPlans.allowOwnerRequests'] = plansEnabled && (org ? org.paymentPlansAllowOwnerRequests !== false : true);
 
     res.json({ success: true, data: { features } });
   } catch (err) {
