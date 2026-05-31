@@ -223,7 +223,49 @@ exports.checkOut = async (req, res, next) => {
 // ── GET /api/visits/history ───────────────────────────────────
 exports.getVisitHistory = async (req, res, next) => {
   try {
-    const { page = 1, limit = 50, dateFrom, dateTo, action, visitorName } = req.query;
+    const { page = 1, limit = 50, preset, action, visitorName } = req.query;
+    let { dateFrom, dateTo } = req.query;
+
+    const isGuard = req.adminRole === 'security_guard';
+
+    // Resolve preset → dateFrom/dateTo (overrides explicit dates)
+    if (preset) {
+      const VALID_PRESETS = ['today', 'yesterday', 'last7days'];
+      if (!VALID_PRESETS.includes(preset)) {
+        return res.status(400).json({ success: false, message: 'Preset no válido. Usar: today, yesterday, last7days.' });
+      }
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      if (preset === 'today') {
+        dateFrom = todayStr;
+        dateTo   = todayStr;
+      } else if (preset === 'yesterday') {
+        const y = new Date(now);
+        y.setDate(y.getDate() - 1);
+        dateFrom = y.toISOString().slice(0, 10);
+        dateTo   = dateFrom;
+      } else {
+        // last7days: today-6 days through today
+        const start = new Date(now);
+        start.setDate(start.getDate() - 6);
+        dateFrom = start.toISOString().slice(0, 10);
+        dateTo   = todayStr;
+      }
+    }
+
+    // security_guard: enforce 7-day maximum and default to today
+    if (isGuard) {
+      if (!dateFrom && !dateTo) {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        dateFrom = todayStr;
+        dateTo   = todayStr;
+      } else if (dateFrom && dateTo) {
+        const diffDays = (new Date(dateTo) - new Date(dateFrom)) / 86400000;
+        if (diffDays > 7) {
+          return res.status(400).json({ success: false, message: 'El historial de portería está limitado a los últimos 7 días.' });
+        }
+      }
+    }
 
     const filter = { organization: req.orgId };
 
