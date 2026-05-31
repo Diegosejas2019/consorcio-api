@@ -14,6 +14,7 @@ RUN apt-get update \
 
 COPY package*.json ./
 RUN npm ci --omit=dev
+RUN rm -rf /root/.cache/puppeteer && npx puppeteer browsers install chrome
 
 COPY . .
 
