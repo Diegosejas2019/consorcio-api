@@ -334,9 +334,11 @@ exports.generateQr = async (req, res, next) => {
     }
 
     const token = crypto.randomBytes(8).toString('hex');
-    const expiry = new Date(visit.expectedDate);
-    expiry.setHours(23, 59, 59, 999);
-    if (expiry < new Date()) expiry.setTime(Date.now() + 3600000);
+    // Calcular expiración al 23:59:59 Argentina (UTC-3, sin DST).
+    // expectedDate está en UTC; restar 3h para obtener la fecha local ART.
+    const argLocal = new Date(new Date(visit.expectedDate).getTime() - 3 * 60 * 60 * 1000);
+    const dateStr  = argLocal.toISOString().slice(0, 10); // YYYY-MM-DD en ART
+    const expiry   = new Date(`${dateStr}T23:59:59-03:00`);
 
     visit.qrToken = token;
     visit.qrExpiresAt = expiry;
