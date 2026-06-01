@@ -4,6 +4,7 @@ const ctrl      = require('../controllers/ownerController');
 const debtCtrl  = require('../controllers/ownerDebtItemController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requirePermission } = require('../middleware/permissions');
+const { blockOnImpersonation } = require('../middleware/impersonation');
 
 const excelUpload = multer({
   storage: multer.memoryStorage(),
@@ -24,9 +25,9 @@ router.use(protect, requireOrg);
 router.get('/stats',       restrictTo('admin'), requirePermission('dashboard.read'), ctrl.getStats);
 router.get('/check-email', restrictTo('admin'), requirePermission('owners.read'), ctrl.checkEmail);
 router.get('/',      restrictTo('admin'), requirePermission('owners.read'), ctrl.getAllOwners);
-router.post('/',     restrictTo('admin'), requirePermission('owners.create'), ctrl.createOwner);
+router.post('/',     blockOnImpersonation, restrictTo('admin'), requirePermission('owners.create'), ctrl.createOwner);
 router.get('/bulk/template', restrictTo('admin'), requirePermission('owners.create'), ctrl.downloadBulkTemplate);
-router.post('/bulk',          restrictTo('admin'), requirePermission('owners.create'), excelUpload.single('file'), ctrl.bulkCreateOwners);
+router.post('/bulk',          blockOnImpersonation, restrictTo('admin'), requirePermission('owners.create'), excelUpload.single('file'), ctrl.bulkCreateOwners);
 
 router.post('/me/request-email-change', restrictTo('owner'), ctrl.requestEmailChange);
 router.post('/me/confirm-email-change', restrictTo('owner'), ctrl.confirmEmailChange);

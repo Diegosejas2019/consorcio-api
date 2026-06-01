@@ -32,7 +32,10 @@ exports.protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message });
     }
 
-    // 3. Rechazar selectionTokens — son solo para /select-organization
+    // 3. Propagar contexto de impersonación si existe en el token
+    req.impersonation = decoded.impersonation || null;
+
+    // 3b. Rechazar selectionTokens — son solo para /select-organization
     if (decoded.pendingOrgSelection) {
       return res.status(401).json({
         success: false,
@@ -193,6 +196,30 @@ exports.signToken = (userId, orgContext = null) => {
   return jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
+};
+
+// ── Token de impersonación (30 min, no renovable) ────────────
+exports.signImpersonationToken = (actorUser, impersonatedUser, membership, sessionId, reason) => {
+  const accessType = membership.role === 'admin' ? 'admin' : 'owner';
+  const { normalizeAdminRole } = require('../utils/adminPermissions');
+  const payload = {
+    id:             impersonatedUser._id,
+    organizationId: membership.organization._id || membership.organization,
+    role:           membership.role,
+    membershipId:   membership._id,
+    accessType,
+    impersonation: {
+      active:      true,
+      actorId:     actorUser._id,
+      actorEmail:  actorUser.email,
+      reason,
+      startedAt:   new Date().toISOString(),
+      sessionId,
+    },
+  };
+  if (accessType === 'owner') payload.ownerId = impersonatedUser._id;
+  if (accessType === 'admin') payload.adminRole = normalizeAdminRole(membership);
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30m' });
 };
 
 // ── Token temporal para selección de organización (10 min) ───

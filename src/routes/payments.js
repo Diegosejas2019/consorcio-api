@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const ctrl   = require('../controllers/paymentController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requirePermission, requirePermissionForAdmin } = require('../middleware/permissions');
+const { blockOnImpersonation } = require('../middleware/impersonation');
 const { upload } = require('../config/cloudinary');
 
 router.use(protect, requireOrg);
@@ -25,11 +26,11 @@ router.post('/',         requirePermissionForAdmin('payments.register'), upload.
 router.get('/:id/receipt',        ctrl.getReceipt);
 router.get('/:id/system-receipt', ctrl.getSystemReceipt);
 router.get('/:id',                requirePermissionForAdmin('payments.read'), ctrl.getPayment);
-router.delete('/:id',      requirePermissionForAdmin('payments.cancel'), ctrl.deletePayment);
+router.delete('/:id',      blockOnImpersonation, requirePermissionForAdmin('payments.cancel'), ctrl.deletePayment);
 
 // Solo admin puede aprobar/rechazar/reenviar recibo
-router.patch('/:id/approve',       restrictTo('admin'), requirePermission('payments.approve'), ctrl.approvePayment);
-router.patch('/:id/reject',        restrictTo('admin'), requirePermission('payments.cancel'), ctrl.rejectPayment);
+router.patch('/:id/approve',       blockOnImpersonation, restrictTo('admin'), requirePermission('payments.approve'), ctrl.approvePayment);
+router.patch('/:id/reject',        blockOnImpersonation, restrictTo('admin'), requirePermission('payments.cancel'), ctrl.rejectPayment);
 router.post('/:id/resend-receipt', restrictTo('admin'), requirePermission('receipts.download'), ctrl.resendReceipt);
 
 // Trigger manual de recordatorios (admin)

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { body } = require('express-validator');
 const ctrl   = require('../controllers/authController');
 const { protect, restrictTo, protectSelection } = require('../middleware/auth');
+const { blockOnImpersonation, blockOrgChangeOnImpersonation } = require('../middleware/impersonation');
 const { requireAnyPermission } = require('../middleware/permissions');
 const validate = require('../middleware/validate');
 
@@ -27,15 +28,15 @@ router.post('/register',
 );
 
 router.post('/select-organization',
-  protectSelection,
+  protectSelection, blockOrgChangeOnImpersonation,
   [body('membershipId').notEmpty().withMessage('membershipId requerido')],
   validate,
   ctrl.selectOrganization
 );
 
 router.get('/me',            protect, ctrl.getMe);
-router.patch('/update-password', protect, ctrl.updatePassword);
-router.post('/change-temporary-password', protect, ctrl.changeTempPassword);
+router.patch('/update-password', protect, blockOnImpersonation, ctrl.updatePassword);
+router.post('/change-temporary-password', protect, blockOnImpersonation, ctrl.changeTempPassword);
 router.patch('/fcm-token',   protect, ctrl.updateFcmToken);
 
 router.post('/forgot-password',

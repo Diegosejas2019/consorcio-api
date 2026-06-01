@@ -4,6 +4,7 @@ const ctrl      = require('../controllers/expenseController');
 const { protect, restrictTo, requireOrg } = require('../middleware/auth');
 const { requireFeature } = require('../middleware/features');
 const { requirePermission } = require('../middleware/permissions');
+const { blockOnImpersonation } = require('../middleware/impersonation');
 const { upload } = require('../config/cloudinary');
 
 // Multer en memoria solo para preview (no sube a Cloudinary)
@@ -20,11 +21,11 @@ router.post('/categories',               requirePermission('expenses.create'), c
 router.get('/check-duplicate',           requirePermission('expenses.read'), ctrl.checkDuplicate);
 router.post('/preview-invoice',          requirePermission('expenses.read'), memUpload.single('file'), ctrl.previewInvoice);
 router.get('/',                          requirePermission('expenses.read'), ctrl.getExpenses);
-router.post('/',                         requirePermission('expenses.create'), upload.array('attachments', 5), ctrl.createExpense);
-router.patch('/:id',                     requirePermission('expenses.update'), upload.array('attachments', 5), ctrl.updateExpense);
+router.post('/',                         blockOnImpersonation, requirePermission('expenses.create'), upload.array('attachments', 5), ctrl.createExpense);
+router.patch('/:id',                     blockOnImpersonation, requirePermission('expenses.update'), upload.array('attachments', 5), ctrl.updateExpense);
 router.get('/:id/attachment/:index',     requirePermission('expenses.read'), ctrl.getAttachment);
-router.delete('/:id/attachment/:index',  requirePermission('expenses.update'), ctrl.deleteAttachment);
-router.patch('/:id/paid',                requirePermission('expenses.update'), ctrl.markAsPaid);
-router.delete('/:id',                    requirePermission('expenses.delete'), ctrl.deleteExpense);
+router.delete('/:id/attachment/:index',  blockOnImpersonation, requirePermission('expenses.update'), ctrl.deleteAttachment);
+router.patch('/:id/paid',                blockOnImpersonation, requirePermission('expenses.update'), ctrl.markAsPaid);
+router.delete('/:id',                    blockOnImpersonation, requirePermission('expenses.delete'), ctrl.deleteExpense);
 
 module.exports = router;
