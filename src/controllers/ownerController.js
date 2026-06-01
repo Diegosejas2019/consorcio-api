@@ -29,11 +29,49 @@ const {
   normalizeDebtBalance,
   summarizeUnitDebts,
   calculateUnitFee,
+  getUnpaidPeriodsForUnit,
   isUnitChargeableForPeriod,
 } = require('../utils/ownerFinance');
 const XLSX    = require('xlsx');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+function argentinaParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+  };
+}
+
+function dayOrdinal({ year, month, day }) {
+  return Math.floor(Date.UTC(year, month - 1, day) / 86400000);
+}
+
+function nowForCalculations() {
+  const override = process.env.GESTIONAR_CURRENT_DATE_OVERRIDE;
+  if (override && !Number.isNaN(new Date(override).getTime())) return new Date(override);
+  return new Date();
+}
+
+function dueInfoForPeriod(period, org, now = nowForCalculations()) {
+  if (!PERIOD_RE.test(period || '') || !org?.dueDayOfMonth) {
+    return { daysOverdue: 0, isOverdue: false };
+  }
+  const [year, month] = period.split('-').map(Number);
+  const day = Math.min(Math.max(Number(org.dueDayOfMonth || 10), 1), 28);
+  const daysOverdue = Math.max(0, dayOrdinal(argentinaParts(now)) - dayOrdinal({ year, month, day }));
+  return { daysOverdue, isOverdue: daysOverdue > 0 };
+}
 
 function clampLimit(value, fallback, max) {
   const parsed = Number(value);
@@ -268,7 +306,7 @@ exports.getAllOwners = async (req, res, next) => {
       Unit.find({ organization: req.orgId, active: true })
         .select('owner name customFee coefficient balance isDebtor startBillingPeriod')
         .lean(),
-      Organization.findById(req.orgId).select('paymentPeriods monthlyFee'),
+      Organization.findById(req.orgId).select('paymentPeriods monthlyFee dueDayOfMonth'),
     ]);
 
     const unitsByOwner    = {};
@@ -354,12 +392,25 @@ exports.getAllOwners = async (req, res, next) => {
         .flatMap(({ debt }) => debt.extraordinaryItems || [])
         .reduce((sum, item) => sum + Number(item.amount || 0), 0);
       const totalOwed = Math.max(0, rawTotalOwed - Math.max(0, Number(planSummary.excludedDebtAmount || 0) - excludedExtraAmount));
+      const blockedMonths = new Set(planSummary.blockedMonths || []);
+      const overduePeriodDetails = ownerUnits.flatMap(unit => (
+        getUnpaidPeriodsForUnit(unit, m, paymentsByOwner[ownerId] || [], org || {}, ['approved'])
+          .filter(period => !blockedMonths.has(period))
+          .map(period => ({
+            period,
+            amount: calculateUnitFee(unit, org || {}),
+            ...dueInfoForPeriod(period, org),
+          }))
+      )).filter(item => item.isOverdue);
       const balance = computeUnitsBalance(ownerUnits);
+      const balanceOwed = computeUnitsBalanceOwed(ownerUnits);
+      const overdueOwed = overduePeriodDetails.reduce((sum, item) => sum + Number(item.amount || 0), 0) + balanceOwed;
+      const daysOverdue = Math.max(0, balanceOwed > 0 ? 1 : 0, ...overduePeriodDetails.map(item => Number(item.daysOverdue || 0)));
       return {
         ...m.user,
         balance,
-        balanceOwed:        computeUnitsBalanceOwed(ownerUnits),
-        isDebtor:           totalOwed > 0,
+        balanceOwed,
+        isDebtor:           overdueOwed > 0,
         storedIsDebtor:     m.isDebtor,
         percentage:         m.percentage,
         startBillingPeriod: m.startBillingPeriod,
@@ -370,6 +421,8 @@ exports.getAllOwners = async (req, res, next) => {
         lots:               summarizeUnitDebts(ownerUnits),
         unitDebts:          summarizeUnitDebts(ownerUnits),
         totalOwed,
+        overdueOwed,
+        daysOverdue,
         plannedDebtAmount:  Number(planSummary.plannedDebtAmount || 0),
         hasActivePlan:      activePlanOwnerSet.has(ownerId) || Boolean(planSummary.activePlanSummary),
         activePlanSummary:  planSummary.activePlanSummary || null,
@@ -1595,4 +1648,3 @@ exports.getStats = async (req, res, next) => {
     next(err);
   }
 };
-

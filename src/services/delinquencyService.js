@@ -294,17 +294,20 @@ async function buildDelinquencyRows(organizationId) {
       ...unpaidPeriods,
       ...extraordinaryOwed,
       ...ownerDebtItems,
-      ...balanceUnits.map(item => ({ ...item, daysOverdue: 0, period: null })),
+      ...balanceUnits.map(item => ({ ...item, daysOverdue: 1, isOverdue: true, period: null })),
     ];
+    const overdueConcepts = allDebtConcepts.filter(item => item.isOverdue);
+    const overdueOwed = overdueConcepts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     const daysOverdue = Math.max(0, ...allDebtConcepts.map(item => Number(item.daysOverdue || 0)));
     const oldestPeriod = unpaidPeriods[0]?.period
       || extraordinaryOwed.map(e => e.period).filter(Boolean).sort()[0]
       || null;
     const monthlyPeriodsCount = unpaidPeriods.length;
+    const overduePeriodsCount = unpaidPeriods.filter(item => item.isOverdue).length;
     const ownerBaseFee = ownerUnits.reduce((sum, unit) => sum + calculateUnitFee(unit, org || {}), 0);
     const status = getDelinquencyStatus({
-      totalOwed,
-      periodsCount: monthlyPeriodsCount,
+      totalOwed: overdueOwed,
+      periodsCount: overduePeriodsCount,
       daysOverdue,
       ownerBaseFee,
     });
@@ -314,9 +317,10 @@ async function buildDelinquencyRows(organizationId) {
     const remindersCount = remInfo.remindersCount || 0;
     const overdueInstallmentsCount = overdueByOwner[ownerId] || 0;
     const riskIntelligence = computeRiskIntelligence({
-      periodsCount: monthlyPeriodsCount,
+      periodsCount: overduePeriodsCount,
       daysOverdue,
       totalOwed,
+      overdueOwed,
       hasActivePlan: Boolean(planSummary.activePlanSummary),
       overdueInstallmentsCount,
       pendingPaymentsCount: pendingPayments.length,
@@ -336,6 +340,7 @@ async function buildDelinquencyRows(organizationId) {
       units: ownerUnits.map(unit => ({ id: oid(unit), _id: unit._id || unit.id, name: unit.name || 'Unidad' })),
       unitNames: ownerUnits.map(unit => unit.name || 'Unidad').sort((a, b) => a.localeCompare(b)),
       totalOwed,
+      overdueOwed,
       periodDebt,
       balanceOwed,
       extraordinaryDebt: extraordinaryTotal,
@@ -381,7 +386,7 @@ async function buildDelinquencyRows(organizationId) {
 }
 
 function getDelinquencyStatus({ totalOwed, periodsCount, daysOverdue, ownerBaseFee }) {
-  if (totalOwed <= 0) return 'al_dia';
+  if (totalOwed <= 0 || daysOverdue <= 0) return 'al_dia';
   if (daysOverdue >= 90 || (ownerBaseFee > 0 && totalOwed >= ownerBaseFee * 3)) return 'mora_critica';
   if (periodsCount >= 3) return 'deuda_alta';
   if (periodsCount === 2) return 'deuda_media';
@@ -390,8 +395,8 @@ function getDelinquencyStatus({ totalOwed, periodsCount, daysOverdue, ownerBaseF
 
 const REMINDER_COOLDOWN_DAYS = 14;
 
-function computeRiskIntelligence({ periodsCount, daysOverdue, totalOwed, hasActivePlan, overdueInstallmentsCount, pendingPaymentsCount, lastReminderAt, remindersCount }) {
-  if (totalOwed <= 0) return { riskLevel: 'sin_deuda', riskScore: 0, riskReasons: [], suggestedActions: [] };
+function computeRiskIntelligence({ periodsCount, daysOverdue, totalOwed, overdueOwed = totalOwed, hasActivePlan, overdueInstallmentsCount, pendingPaymentsCount, lastReminderAt, remindersCount }) {
+  if (overdueOwed <= 0) return { riskLevel: 'sin_deuda', riskScore: 0, riskReasons: [], suggestedActions: [] };
 
   const reasons = [];
   const now = nowForCalculations();
@@ -528,6 +533,7 @@ function publicOwnerRow(row) {
     units: row.unitNames,
     unitDetails: row.units,
     totalOwed: row.totalOwed,
+    overdueOwed: row.overdueOwed,
     periodDebt: row.periodDebt,
     balanceOwed: row.balanceOwed,
     extraordinaryDebt: row.extraordinaryDebt,
@@ -571,8 +577,8 @@ async function getDelinquentOwners(organizationId, filters = {}) {
 async function getOrganizationDelinquencySummary(organizationId, filters = {}) {
   const rows = applyFilters(await buildDelinquencyRows(organizationId), filters);
   const totalOwners = rows.length;
-  const debtors = rows.filter(row => row.totalOwed > 0);
-  const totalDebt = debtors.reduce((sum, row) => sum + row.totalOwed, 0);
+  const debtors = rows.filter(row => row.overdueOwed > 0);
+  const totalDebt = debtors.reduce((sum, row) => sum + row.overdueOwed, 0);
   const pendingPaymentsCount = rows.reduce((sum, row) => sum + row.pendingPaymentsCount, 0);
   const pendingPaymentsAmount = rows.reduce((sum, row) => sum + row.pendingPaymentsAmount, 0);
   const oldest = debtors
@@ -635,8 +641,8 @@ async function getOwnerDebtDetail(organizationId, ownerId) {
       originalAmount: item.amount,
       paid: 0,
       balance: item.amount,
-      status: 'pendiente',
-      daysOverdue: 0,
+      status: item.isOverdue ? 'vencido' : 'pendiente',
+      daysOverdue: item.daysOverdue || 0,
       unit: item,
     })),
     extraordinaryItems: row.extraordinaryOwed.map(item => ({
@@ -679,7 +685,7 @@ async function calculateDebtForOwner(organizationId, ownerId) {
 }
 
 async function getDebtAgingBuckets(organizationId, filters = {}) {
-  const rows = applyFilters(await buildDelinquencyRows(organizationId), filters).filter(row => row.totalOwed > 0);
+  const rows = applyFilters(await buildDelinquencyRows(organizationId), filters).filter(row => row.overdueOwed > 0);
   const buckets = [
     { key: '0-30', label: '0-30 días', min: 0, max: 30, owners: 0, amount: 0 },
     { key: '31-60', label: '31-60 días', min: 31, max: 60, owners: 0, amount: 0 },
@@ -689,7 +695,7 @@ async function getDebtAgingBuckets(organizationId, filters = {}) {
   rows.forEach(row => {
     const bucket = buckets.find(item => row.daysOverdue >= item.min && row.daysOverdue <= item.max) || buckets[0];
     bucket.owners += 1;
-    bucket.amount += row.totalOwed;
+    bucket.amount += row.overdueOwed;
   });
   return buckets.map(({ min, max, ...bucket }) => bucket);
 }
@@ -702,7 +708,7 @@ function defaultReminderMessage(ownerDebt) {
 async function createDebtReminder({ organizationId, ownerId, userId, channel = 'app', message }) {
   const ownerDebt = await calculateDebtForOwner(organizationId, ownerId);
   if (!ownerDebt) return null;
-  if (ownerDebt.totalOwed <= 0) {
+  if (ownerDebt.overdueOwed <= 0) {
     const err = new Error('El propietario no registra deuda exigible.');
     err.statusCode = 400;
     throw err;
@@ -741,7 +747,7 @@ async function createDebtReminder({ organizationId, ownerId, userId, channel = '
     organization: organizationId,
     owner: ownerId,
     unit: ownerDebt.unitDetails?.[0]?._id || ownerDebt.unitDetails?.[0]?.id,
-    debtAmount: ownerDebt.totalOwed,
+    debtAmount: ownerDebt.overdueOwed,
     periods: ownerDebt.unpaidPeriods || [],
     channel: cleanChannel,
     message: finalMessage,

@@ -134,6 +134,64 @@ describe('Morosidad avanzada', () => {
     expect(res.body.data.detail.payments.rejected).toHaveLength(1);
   });
 
+  test('no marca moroso si la unica expensa pendiente todavia no vencio', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-03';
+    process.env.GESTIONAR_CURRENT_DATE_OVERRIDE = '2026-03-05T12:00:00.000Z';
+    const { token, orgId } = await createAdminWithToken();
+    await Organization.findByIdAndUpdate(orgId, {
+      monthlyFee: 1500,
+      dueDayOfMonth: 10,
+      paymentPeriods: ['2026-03'],
+    });
+    const owner = await createOwnerInOrg(orgId, { name: 'Pendiente No Vencido', unitName: 'NV-01', startBillingPeriod: '2026-03' });
+
+    const detail = await request(app).get(`/api/delinquency/owners/${owner.user._id}`).set('Authorization', `Bearer ${token}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.detail.summary.totalOwed).toBe(1500);
+    expect(detail.body.data.detail.summary.overdueOwed).toBe(0);
+    expect(detail.body.data.detail.summary.daysOverdue).toBe(0);
+    expect(detail.body.data.detail.summary.status).toBe('al_dia');
+
+    const summary = await request(app).get('/api/delinquency/summary').set('Authorization', `Bearer ${token}`);
+    expect(summary.status).toBe(200);
+    expect(summary.body.data.summary.totalDebt).toBe(0);
+    expect(summary.body.data.summary.delinquentOwners).toBe(0);
+
+    const owners = await request(app).get('/api/owners').set('Authorization', `Bearer ${token}`);
+    expect(owners.status).toBe(200);
+    const gridOwner = owners.body.data.owners.find(o => o._id === owner.user._id.toString());
+    expect(gridOwner.totalOwed).toBe(1500);
+    expect(gridOwner.overdueOwed).toBe(0);
+    expect(gridOwner.daysOverdue).toBe(0);
+    expect(gridOwner.isDebtor).toBe(false);
+  });
+
+  test('marca moroso cuando la expensa pendiente esta vencida', async () => {
+    process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-03';
+    process.env.GESTIONAR_CURRENT_DATE_OVERRIDE = '2026-03-20T12:00:00.000Z';
+    const { token, orgId } = await createAdminWithToken();
+    await Organization.findByIdAndUpdate(orgId, {
+      monthlyFee: 1500,
+      dueDayOfMonth: 10,
+      paymentPeriods: ['2026-03'],
+    });
+    const owner = await createOwnerInOrg(orgId, { name: 'Pendiente Vencido', unitName: 'V-03', startBillingPeriod: '2026-03' });
+
+    const detail = await request(app).get(`/api/delinquency/owners/${owner.user._id}`).set('Authorization', `Bearer ${token}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.detail.summary.totalOwed).toBe(1500);
+    expect(detail.body.data.detail.summary.overdueOwed).toBe(1500);
+    expect(detail.body.data.detail.summary.daysOverdue).toBeGreaterThan(0);
+    expect(detail.body.data.detail.summary.status).not.toBe('al_dia');
+
+    const owners = await request(app).get('/api/owners').set('Authorization', `Bearer ${token}`);
+    expect(owners.status).toBe(200);
+    const gridOwner = owners.body.data.owners.find(o => o._id === owner.user._id.toString());
+    expect(gridOwner.overdueOwed).toBe(1500);
+    expect(gridOwner.daysOverdue).toBeGreaterThan(0);
+    expect(gridOwner.isDebtor).toBe(true);
+  });
+
   test('respeta startBillingPeriod futuro y calcula aging', async () => {
     process.env.GESTIONAR_CURRENT_PERIOD_OVERRIDE = '2026-03';
     process.env.GESTIONAR_CURRENT_DATE_OVERRIDE = '2026-03-20T12:00:00.000Z';
