@@ -2,6 +2,7 @@ const crypto   = require('crypto');
 const { Readable } = require('stream');
 const Employee = require('../models/Employee');
 const Salary   = require('../models/Salary');
+const PayrollLiquidation = require('../models/PayrollLiquidation');
 const User     = require('../models/User');
 const OrganizationMember = require('../models/OrganizationMember');
 const logger   = require('../config/logger');
@@ -114,6 +115,15 @@ exports.deleteEmployee = async (req, res, next) => {
     const pendingSalary = await Salary.findOne({ employee: employee._id, organization: req.orgId, status: { $in: ['pending', 'partially_paid'] } });
     if (pendingSalary) {
       return res.status(400).json({ success: false, message: 'No se puede dar de baja un empleado con sueldos pendientes de pago o parcialmente pagados.' });
+    }
+
+    const pendingLiquidation = await PayrollLiquidation.findOne({
+      employee: employee._id,
+      organization: req.orgId,
+      status: { $in: ['draft', 'calculated', 'approved'] },
+    });
+    if (pendingLiquidation) {
+      return res.status(400).json({ success: false, message: 'No se puede dar de baja al empleado. Tiene liquidaciones de haberes pendientes o aprobadas.' });
     }
 
     employee.isActive  = false;

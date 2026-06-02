@@ -130,6 +130,7 @@ app.use('/api/reservations',  require('./routes/reservations'));
 app.use('/api/support-tickets', require('./routes/supportTickets'));
 app.use('/api/employees',       require('./routes/employees'));
 app.use('/api/salaries',        require('./routes/salaries'));
+app.use('/api/payroll',         require('./routes/payrollRoutes'));
 app.use('/api/salary-payments', require('./routes/salaryPaymentRoutes'));
 app.use('/api/payment-plans',  require('./routes/paymentPlans'));
 app.use('/api/debt-items',     require('./routes/ownerDebtItems'));

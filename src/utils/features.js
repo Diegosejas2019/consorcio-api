@@ -7,9 +7,10 @@ const KNOWN_FEATURES = [
   'expenses',
   'providers',
   'documents',
+  'legalPayroll',
 ];
 
-const DEFAULT_DISABLED_FEATURES = new Set(['visits', 'reservations']);
+const DEFAULT_DISABLED_FEATURES = new Set(['visits', 'reservations', 'legalPayroll']);
 
 function buildDefaultFeatureMap(records = []) {
   const features = {};

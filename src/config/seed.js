@@ -4,12 +4,13 @@
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
 const mongoose     = require('mongoose');
-const Organization = require('../models/Organization');
-const User         = require('../models/User');
-const Notice       = require('../models/Notice');
-const Payment      = require('../models/Payment');
-const Claim        = require('../models/Claim');
-const logger       = require('./logger');
+const Organization       = require('../models/Organization');
+const User               = require('../models/User');
+const Notice             = require('../models/Notice');
+const Payment            = require('../models/Payment');
+const Claim              = require('../models/Claim');
+const PayrollRuleVersion = require('../models/PayrollRuleVersion');
+const logger             = require('./logger');
 
 const seed = async () => {
   try {
@@ -78,6 +79,33 @@ const seed = async () => {
       { organization: org._id, title: 'Mantenimiento de Pileta', body: 'Del 10 al 14 de abril se realizará el mantenimiento anual. La pileta estará inhabilitada durante ese período.', tag: 'warning', author: admin._id },
       { organization: org._id, title: 'Vencimiento de Expensas', body: 'Recordamos que el vencimiento del período Abril 2025 opera el día 10/04. Pasada esa fecha se aplicará un recargo del 5%.', tag: 'urgent', author: admin._id },
     ]);
+
+    // ── PayrollRuleVersion inicial (placeholder — requiere validación profesional) ──
+    await PayrollRuleVersion.findOneAndUpdate(
+      { version: 'AR-2025-01' },
+      {
+        version: 'AR-2025-01',
+        country: 'AR',
+        effectiveFrom: new Date('2025-01-01'),
+        rules: new Map([
+          ['jubilacion_empleado',    0.11],
+          ['obra_social_empleado',   0.03],
+          ['anssal',                 0.00045],
+          ['ley19032_empleado',      0.03],
+          ['sindical',               0],
+          ['jubilacion_empleador',   0.1087],
+          ['obra_social_empleador',  0.06],
+          ['ley19032_empleador',     0.02],
+          ['asignaciones_familiares', 0.059],
+          ['art',                    0],
+          ['overtime_regular_factor', 1.5],
+          ['overtime_holiday_factor', 2.0],
+        ]),
+        source: 'Valores de referencia — Ley 24241, Ley 23660, Ley 23661, Ley 19032, Ley 24714, LCT',
+        notes: 'PLACEHOLDER — Estos porcentajes son valores de referencia aproximados. DEBEN ser validados y actualizados por un contador o liquidador habilitado antes de usar en producción. Los porcentajes reales dependen del CCT aplicable y pueden variar por resoluciones y decretos posteriores.',
+      },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
 
     logger.info(`✓ Seed completado:
   - 1 organización (consorcio): ${org.name}
