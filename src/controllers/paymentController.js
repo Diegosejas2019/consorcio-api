@@ -58,6 +58,14 @@ const normalizeArray = (value) => {
 
 const uniqueValues = (values) => [...new Set(values.map(v => String(v).trim()).filter(Boolean))];
 
+const looksLikeBalancePaymentNote = (value) => {
+  const note = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return /\b(deuda\s+inicial|saldo\s+anterior)\b/.test(note);
+};
+
 const paymentUsageMetadata = (payment) => ({
   paymentId: payment._id?.toString(),
   paymentType: payment.type,
@@ -716,6 +724,13 @@ exports.createPayment = async (req, res, next) => {
 
     // Validar que el período no sea anterior al inicio de cobro del propietario
     const paymentMonths = requestedPeriods.length > 0 ? requestedPeriods : (month ? [month] : []);
+
+    if (paymentMonths.length > 0 && looksLikeBalancePaymentNote(ownerNote)) {
+      return res.status(400).json({
+        success: false,
+        message: 'La deuda inicial debe pagarse como saldo anterior, en un comprobante separado.',
+      });
+    }
 
     if (paymentMonths.length > 0) {
       const currentPeriod = currentYYYYMM();

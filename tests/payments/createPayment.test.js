@@ -83,6 +83,21 @@ describe('POST /api/payments — subida de comprobante', () => {
     expect(res.body.data.payment.month).toBe('2025-04');
   });
 
+  test('rechaza deuda inicial cargada como periodo mensual', async () => {
+    const { token } = await createOwnerWithToken();
+
+    const res = await request(app)
+      .post('/api/payments')
+      .set('Authorization', `Bearer ${token}`)
+      .field('month', '2025-04')
+      .field('amount', '15000')
+      .field('ownerNote', 'Pago de deuda inicial')
+      .attach('receipt', FAKE_PDF, { filename: 'comprobante.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('deuda inicial');
+    expect(res.body.message).toContain('saldo anterior');
+  });
   test('2. Duplicado con pago pendiente → 400', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
 
