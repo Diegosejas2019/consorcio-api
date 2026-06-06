@@ -1,4 +1,3 @@
-const puppeteer          = require('puppeteer');
 const Payment            = require('../models/Payment');
 const Expense            = require('../models/Expense');
 const Organization       = require('../models/Organization');
@@ -10,6 +9,7 @@ const {
   listExpenseCategories,
 } = require('../services/expenseCategoryService');
 const reportService      = require('../services/reportService');
+const { launchBrowser } = require('../utils/puppeteerLauncher');
 
 // ── GET /api/reports/monthly-summary?month=YYYY-MM ──────────────
 exports.getMonthlySummary = async (req, res, next) => {
@@ -452,10 +452,7 @@ exports.getExpensasPdf = async (req, res, next) => {
 
     const html = buildExpensasHTML(org, month, ordinary, extraordinary, owners, paymentsByOwner, categoryLabels);
 
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
+    const browser = await launchBrowser();
     let buffer;
     try {
       const page = await browser.newPage();
@@ -543,10 +540,7 @@ exports.ownerStatementPdfHandler = async (req, res, next) => {
     });
     const html = reportService.generateOwnerStatementHtml(data);
 
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
+    const browser = await launchBrowser();
     let buffer;
     try {
       const page = await browser.newPage();

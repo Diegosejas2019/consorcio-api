@@ -1,0 +1,7 @@
+[phases.setup]
+aptPkgs = ["chromium", "fonts-liberation"]
+
+[variables]
+PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium"
+PUPPETEER_SKIP_DOWNLOAD = "true"
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"

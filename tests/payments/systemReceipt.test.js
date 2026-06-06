@@ -160,6 +160,28 @@ describe('GET /api/payments/:id/system-receipt', () => {
     expect(receiptService.generateAndStoreReceipt).toHaveBeenCalledWith(payment._id);
   });
 
+  test('devuelve error amigable si no esta disponible el navegador para generar PDF', async () => {
+    const { user, token, orgId } = await createOwnerWithToken();
+    const payment = await Payment.create({
+      organization: orgId,
+      owner:        user._id,
+      month:        '2026-03',
+      amount:       15000,
+      status:       'approved',
+    });
+    const err = new Error('No se pudo generar el PDF porque el navegador del servidor no está disponible. Intentá nuevamente en unos minutos.');
+    err.statusCode = 503;
+    receiptService.generateAndStoreReceipt.mockRejectedValue(err);
+
+    const res = await request(app)
+      .get(`/api/payments/${payment._id}/system-receipt`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(503);
+    expect(res.body.message).toContain('navegador del servidor no está disponible');
+    expect(res.body.stack).toBeUndefined();
+  });
+
   test('rechaza recibos de pagos no aprobados', async () => {
     const { user, token, orgId } = await createOwnerWithToken();
     const payment = await Payment.create({

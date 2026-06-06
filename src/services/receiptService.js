@@ -1,9 +1,9 @@
-const puppeteer      = require('puppeteer');
 const Payment        = require('../models/Payment');
 const Organization   = require('../models/Organization');
 const User           = require('../models/User');
 const { cloudinary } = require('../config/cloudinary');
 const logger         = require('../config/logger');
+const { launchBrowser } = require('../utils/puppeteerLauncher');
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -278,10 +278,7 @@ const buildReceiptHTML = (payment, owner, org) => {
 // ── PDF con Puppeteer ─────────────────────────────────────────
 
 const generatePDF = async (html) => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  });
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
@@ -327,19 +324,22 @@ exports.generateAndStoreReceipt = async (paymentId) => {
 
   const [owner, org] = await Promise.all([
     User.findById(payment.owner).select('name unit email'),
-    Organization.findByIdAndUpdate(
-      payment.organization,
-      { $inc: { receiptCounter: 1 } },
-      { new: true }
-    ).select('name address feeLabel memberLabel unitLabel receiptCounter'),
+    Organization.findById(payment.organization).select('name address feeLabel memberLabel unitLabel receiptCounter'),
   ]);
 
   if (!owner || !org) throw new Error('Propietario u organización no encontrados');
 
-  const receiptNumber = `REC-${padNumber(org.receiptCounter)}`;
-
-  payment.receiptNumber   = receiptNumber;
-  payment.receiptIssuedAt = new Date();
+  let receiptNumber = payment.receiptNumber;
+  if (!receiptNumber) {
+    const updatedOrg = await Organization.findByIdAndUpdate(
+      payment.organization,
+      { $inc: { receiptCounter: 1 } },
+      { new: true }
+    ).select('receiptCounter');
+    receiptNumber = `REC-${padNumber(updatedOrg.receiptCounter)}`;
+    payment.receiptNumber = receiptNumber;
+  }
+  if (!payment.receiptIssuedAt) payment.receiptIssuedAt = new Date();
   await payment.save();
 
   const html   = buildReceiptHTML(payment, owner, org);

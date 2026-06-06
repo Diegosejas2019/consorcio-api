@@ -8,7 +8,6 @@ const OwnerDebtItem = require('../models/OwnerDebtItem');
 const Unit    = require('../models/Unit');
 const Notice  = require('../models/Notice');
 const logger    = require('../config/logger');
-const puppeteer = require('puppeteer');
 const { sendToUser } = require('../services/firebaseService');
 const { sendWelcome, sendEmailChangeConfirmation } = require('../services/emailService');
 const { formatYYYYMM, getNextMonth } = require('../utils/periods');
@@ -18,6 +17,7 @@ const {
   getOwnerDebtOptions,
   getPlanSummariesByOwner,
 } = require('../services/paymentPlanDebtService');
+const { launchBrowser } = require('../utils/puppeteerLauncher');
 const { trackUsageEvent } = require('../services/platformUsageService');
 const { calcUnitFee } = require('./unitController');
 const { withIsRead } = require('./noticeController');
@@ -773,10 +773,7 @@ exports.getMyInvoicePdf = async (req, res, next) => {
     }
     const data    = await buildOwnerInvoiceData(req.ownerId, req.orgId, period, membership);
     const html    = buildInvoiceHTML(data, owner?.name || 'Propietario');
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
+    const browser = await launchBrowser();
     let buffer;
     try {
       const page = await browser.newPage();

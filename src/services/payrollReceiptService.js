@@ -1,7 +1,7 @@
-const puppeteer      = require('puppeteer');
 const { cloudinary } = require('../config/cloudinary');
 const { Readable }   = require('stream');
 const logger         = require('../config/logger');
+const { launchBrowser } = require('../utils/puppeteerLauncher');
 
 const formatCurrency = (n) =>
   new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n ?? 0);
@@ -131,9 +131,9 @@ function buildReceiptHTML({ liquidation, employee, setting, isDraft }) {
 async function generateReceiptPdf({ liquidation, employee, setting, isDraft }) {
   const html = buildReceiptHTML({ liquidation, employee, setting, isDraft });
 
-  const browser = await puppeteer.launch({
+  const browser = await launchBrowser({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+    args: ['--disable-gpu'],
   });
 
   let pdfBuffer;

@@ -1,4 +1,4 @@
-const puppeteer          = require('puppeteer');
+const { launchBrowser } = require('../utils/puppeteerLauncher');
 const { cloudinary }     = require('./cloudinaryService');
 const Payment            = require('../models/Payment');
 const Expense            = require('../models/Expense');
@@ -468,10 +468,7 @@ ${obsSection}
 // ── GENERAR PDF Y GUARDAR ─────────────────────────────────────────────────────
 
 async function generatePDF(html) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  });
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
