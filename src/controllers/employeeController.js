@@ -292,7 +292,7 @@ exports.createAccess = async (req, res, next) => {
       message: isNewUser
         ? 'Acceso creado. Se envió el email con la contraseña temporal.'
         : 'Acceso vinculado correctamente.',
-      data: { userId: user._id, email: user.email, isNewUser },
+      data: { userId: user._id, email: user.email, isNewUser, tempPassword: isNewUser ? rawPassword : undefined },
     });
   } catch (err) {
     next(err);
