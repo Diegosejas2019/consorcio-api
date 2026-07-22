@@ -11,6 +11,7 @@ router.post('/',     requirePermission('employees.create'), uploadEmployee.array
 router.get('/:id/document/:index',    requirePermission('employees.read'), ctrl.getDocument);
 router.delete('/:id/document/:index', requirePermission('employees.update'), ctrl.deleteDocument);
 router.post('/:id/create-access',  requirePermission('employees.update'), ctrl.createAccess);
+router.post('/:id/reset-access-password', requirePermission('employees.update'), ctrl.resetAccessPassword);
 router.patch('/:id/link-user',     requirePermission('employees.update'), ctrl.linkUser);
 router.delete('/:id/unlink-user',  requirePermission('employees.update'), ctrl.unlinkUser);
 router.get('/:id',   requirePermission('employees.read'), ctrl.getEmployee);

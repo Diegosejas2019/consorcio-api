@@ -327,6 +327,35 @@ exports.linkUser = async (req, res, next) => {
   }
 };
 
+// ── POST /api/employees/:id/reset-access-password ──────────────
+exports.resetAccessPassword = async (req, res, next) => {
+  try {
+    const employee = await Employee.findOne({ _id: req.params.id, organization: req.orgId });
+    if (!employee) return res.status(404).json({ success: false, message: 'Empleado no encontrado.' });
+    if (!employee.userId) return res.status(400).json({ success: false, message: 'Este empleado no tiene acceso al portal.' });
+
+    const user = await User.findById(employee.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'Usuario vinculado no encontrado.' });
+
+    const rawPassword = tempPassword();
+    user.password = rawPassword;
+    user.mustChangePassword = true;
+    user.temporaryPasswordCreatedAt = new Date();
+    await user.save();
+
+    sendAdminWelcome({ name: employee.name, email: user.email }, rawPassword, req.org?.name || 'tu organización').catch(() => {});
+
+    logger.info(`Contraseña restablecida: ${employee.name} → ${user.email} [org: ${req.orgId}]`);
+    res.json({
+      success: true,
+      message: 'Contraseña restablecida. Se envió por email.',
+      data: { email: user.email, tempPassword: rawPassword },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ── DELETE /api/employees/:id/unlink-user ─────────────────────
 exports.unlinkUser = async (req, res, next) => {
   try {
