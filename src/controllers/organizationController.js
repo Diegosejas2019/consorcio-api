@@ -1,15 +1,99 @@
+const crypto              = require('crypto');
 const Organization        = require('../models/Organization');
 const OrganizationFeature = require('../models/OrganizationFeature');
 const User                = require('../models/User');
 const OrganizationMember  = require('../models/OrganizationMember');
 const Unit                = require('../models/Unit');
 const logger              = require('../config/logger');
+const { sendAdminWelcome } = require('../services/emailService');
 const { isSuperAdminRole } = require('../utils/roles');
 const { defaultFeatureRecords } = require('../utils/features');
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function currentYearPeriods() {
   const year = new Date().getFullYear();
   return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+}
+
+function tempPassword() {
+  return `Temp${crypto.randomBytes(4).toString('hex')}!`;
+}
+
+async function ensureOrganizationAdmin({ org, adminEmail, adminPhone, createdBy }) {
+  const normalizedEmail = adminEmail?.toLowerCase().trim();
+  if (!normalizedEmail) return null;
+  if (!EMAIL_RE.test(normalizedEmail)) {
+    const err = new Error('Ingresá un email de administrador válido.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let user = await User.findOne({ email: normalizedEmail }).select('+password');
+  let rawPassword = null;
+  let isNewUser = false;
+
+  if (user && isSuperAdminRole(user.role)) {
+    const err = new Error('No se puede usar un usuario superadmin como administrador de una organización.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (user && !user.isActive) {
+    const err = new Error('Ese usuario está desactivado. Contactá al soporte.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!user) {
+    rawPassword = tempPassword();
+    user = await User.create({
+      name: `Administrador ${org.name}`,
+      email: normalizedEmail,
+      password: rawPassword,
+      phone: adminPhone,
+      role: 'admin',
+      organization: org._id,
+      mustChangePassword: true,
+      temporaryPasswordCreatedAt: new Date(),
+      createdBy,
+    });
+    isNewUser = true;
+  } else if (!user.organization) {
+    user = await User.findByIdAndUpdate(
+      user._id,
+      { organization: org._id, ...(adminPhone && !user.phone ? { phone: adminPhone } : {}) },
+      { new: true }
+    ).select('+password');
+  }
+
+  const membership = await OrganizationMember.findOneAndUpdate(
+    { user: user._id, organization: org._id, role: 'admin' },
+    {
+      $set: {
+        adminRole: 'owner_admin',
+        isActive: true,
+        deactivatedByOrganization: false,
+        disabledAt: undefined,
+        disabledBy: undefined,
+        updatedBy: createdBy,
+      },
+      $setOnInsert: { createdBy },
+    },
+    { new: true, upsert: true, runValidators: true }
+  );
+
+  const adminData = user.toObject();
+  delete adminData.password;
+  delete adminData.fcmToken;
+
+  if (isNewUser) {
+    sendAdminWelcome(adminData, rawPassword, org.name).catch((err) =>
+      logger.error(`Error enviando email de bienvenida al admin ${normalizedEmail}: ${err.message}`)
+    );
+  }
+
+  return { admin: adminData, membership, isNewUser };
 }
 
 // ── GET /api/organizations — listar (superadmin: todas; admin: la propia) ─
@@ -80,6 +164,22 @@ exports.createOrganization = async (req, res, next) => {
 
     // Cargar preset del template; los campos del body tienen prioridad
     const preset = Organization.getTemplate(resolvedType);
+    const normalizedAdminEmail = adminEmail?.toLowerCase().trim();
+    if (normalizedAdminEmail && !EMAIL_RE.test(normalizedAdminEmail)) {
+      return res.status(400).json({ success: false, message: 'Ingresá un email de administrador válido.' });
+    }
+    if (normalizedAdminEmail) {
+      const existingAdminUser = await User.findOne({ email: normalizedAdminEmail }).select('role isActive');
+      if (existingAdminUser && isSuperAdminRole(existingAdminUser.role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'No se puede usar un usuario superadmin como administrador de una organización.',
+        });
+      }
+      if (existingAdminUser && !existingAdminUser.isActive) {
+        return res.status(400).json({ success: false, message: 'Ese usuario está desactivado. Contactá al soporte.' });
+      }
+    }
 
     const org = await Organization.create({
       name,
@@ -94,7 +194,7 @@ exports.createOrganization = async (req, res, next) => {
       memberLabel:    memberLabel    || preset.memberLabel,
       unitLabel:      unitLabel      || preset.unitLabel,
       address,
-      adminEmail,
+      adminEmail:     normalizedAdminEmail,
       adminPhone,
       mpPublicKey,
       mpAccessToken,
@@ -103,6 +203,12 @@ exports.createOrganization = async (req, res, next) => {
     });
 
     await OrganizationFeature.insertMany(defaultFeatureRecords(org._id));
+    const adminContext = await ensureOrganizationAdmin({
+      org,
+      adminEmail: normalizedAdminEmail,
+      adminPhone,
+      createdBy: req.user?._id,
+    });
 
     // Si el creador es admin, vincularlo a la nueva org automáticamente
     if (req.user.role === 'admin') {
@@ -111,7 +217,17 @@ exports.createOrganization = async (req, res, next) => {
     }
 
     logger.info(`Organización creada: "${org.name}" [${org.businessType}] (template: ${resolvedType}) por ${req.user.email}`);
-    res.status(201).json({ success: true, data: { organization: org } });
+    res.status(201).json({
+      success: true,
+      data: {
+        organization: org,
+        ...(adminContext ? {
+          admin: adminContext.admin,
+          adminMembershipId: adminContext.membership._id,
+          adminUserCreated: adminContext.isNewUser,
+        } : {}),
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -139,11 +255,38 @@ exports.updateOrganization = async (req, res, next) => {
 
     const update = {};
     allowed.forEach(f => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+    if (update.adminEmail !== undefined) {
+      update.adminEmail = update.adminEmail?.toLowerCase().trim();
+      if (update.adminEmail && !EMAIL_RE.test(update.adminEmail)) {
+        return res.status(400).json({ success: false, message: 'Ingresá un email de administrador válido.' });
+      }
+      if (update.adminEmail) {
+        const existingAdminUser = await User.findOne({ email: update.adminEmail }).select('role isActive');
+        if (existingAdminUser && isSuperAdminRole(existingAdminUser.role)) {
+          return res.status(400).json({
+            success: false,
+            message: 'No se puede usar un usuario superadmin como administrador de una organización.',
+          });
+        }
+        if (existingAdminUser && !existingAdminUser.isActive) {
+          return res.status(400).json({ success: false, message: 'Ese usuario está desactivado. Contactá al soporte.' });
+        }
+      }
+    }
 
     const org = await Organization.findByIdAndUpdate(req.params.id, update, {
       new: true, runValidators: true,
     });
     if (!org) return res.status(404).json({ success: false, message: 'Organización no encontrada.' });
+
+    const adminContext = update.adminEmail !== undefined
+      ? await ensureOrganizationAdmin({
+        org,
+        adminEmail: update.adminEmail,
+        adminPhone: update.adminPhone,
+        createdBy: req.user?._id,
+      })
+      : null;
 
     // No devolver credenciales sensibles
     const data = org.toObject();
@@ -151,7 +294,17 @@ exports.updateOrganization = async (req, res, next) => {
     delete data.mpWebhookSecret;
 
     logger.info(`Organización actualizada: "${org.name}" por ${req.user.email}`);
-    res.json({ success: true, data: { organization: data } });
+    res.json({
+      success: true,
+      data: {
+        organization: data,
+        ...(adminContext ? {
+          admin: adminContext.admin,
+          adminMembershipId: adminContext.membership._id,
+          adminUserCreated: adminContext.isNewUser,
+        } : {}),
+      },
+    });
   } catch (err) {
     next(err);
   }
