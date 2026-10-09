@@ -41,6 +41,9 @@ describe('Organization feature modules', () => {
       expenses: true,
       providers: true,
       documents: true,
+      legalPayroll: false,
+      paymentPlans: true,
+      'paymentPlans.allowOwnerRequests': true,
     });
   });
 
@@ -63,6 +66,9 @@ describe('Organization feature modules', () => {
         visits: true,
         claims: false,
         notices: false,
+        legalPayroll: true,
+        paymentPlans: false,
+        'paymentPlans.allowOwnerRequests': false,
         unknown: true,
       });
 
@@ -70,9 +76,16 @@ describe('Organization feature modules', () => {
     expect(updated.body.data.features.visits).toBe(true);
     expect(updated.body.data.features.claims).toBe(false);
     expect(updated.body.data.features.notices).toBe(false);
+    expect(updated.body.data.features.legalPayroll).toBe(true);
+    expect(updated.body.data.features.paymentPlans).toBe(false);
+    expect(updated.body.data.features['paymentPlans.allowOwnerRequests']).toBe(false);
     expect(updated.body.data.features.unknown).toBeUndefined();
 
     const storedUnknown = await OrganizationFeature.findOne({ organization: org._id, featureKey: 'unknown' });
     expect(storedUnknown).toBeNull();
+
+    const reloadedOrg = await Organization.findById(org._id).select('paymentPlansEnabled paymentPlansAllowOwnerRequests');
+    expect(reloadedOrg.paymentPlansEnabled).toBe(false);
+    expect(reloadedOrg.paymentPlansAllowOwnerRequests).toBe(false);
   });
 });

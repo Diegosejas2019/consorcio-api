@@ -15,6 +15,7 @@ describe('feature catalog contract', () => {
       'expenses',
       'providers',
       'documents',
+      'legalPayroll',
     ]);
   });
 
@@ -28,6 +29,7 @@ describe('feature catalog contract', () => {
       expenses: true,
       providers: true,
       documents: true,
+      legalPayroll: false,
     });
   });
 
